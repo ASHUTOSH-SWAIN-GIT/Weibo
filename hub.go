@@ -4,81 +4,61 @@ import (
 	"sync"
 )
 
-// This manages all the realtime subscription
-// channel -> connected clients
+type Handler func(Event)
+
 type Hub struct {
 	mu       sync.RWMutex
-	channels map[string]map[*Client]bool
+	handlers map[string]map[int]Handler
+	nextID   int
 }
 
 func NewHub() *Hub {
 	return &Hub{
-		channels: make(map[string]map[*Client]bool),
+		handlers: make(map[string]map[int]Handler),
 	}
 }
 
-// Subscribe adds a client to the channel and it will be received by the
-// client whenever that event is published
-func (h *Hub) Subscribe(channel string, client *Client) {
+func (h *Hub) Subscribe(channel string, handler Handler) int {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
-	if h.channels[channel] == nil {
-		h.channels[channel] = make(map[*Client]bool)
-	}
+	id := h.nextID
+	h.nextID++
 
-	h.channels[channel][client] = true
-	client.channels[channel] = true
+	if h.handlers[channel] == nil {
+		h.handlers[channel] = make(map[int]Handler)
+	}
+	h.handlers[channel][id] = handler
+
+	return id
 }
 
-func (h *Hub) Unsubscribe(channel string, client *Client) {
+func (h *Hub) Unsubscribe(channel string, id int) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
-	if h.channels[channel] != nil {
-		delete(h.channels[channel], client)
-
-		if len(h.channels[channel]) == 0 {
-			delete(h.channels, channel)
+	if h.handlers[channel] != nil {
+		delete(h.handlers[channel], id)
+		if len(h.handlers[channel]) == 0 {
+			delete(h.handlers, channel)
 		}
 	}
-
-	delete(client.channels, channel)
 }
 
-// this removes a disconnected client from all channels
-// unlike the unsubscribe it removes the client from a specific channel
-func (h *Hub) RemoveClient(client *Client) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-
-	for channel := range client.channels {
-		if h.channels[channel] != nil {
-			delete(h.channels[channel], client)
-
-			if len(h.channels[channel]) == 0 {
-				delete(h.channels, channel)
-			}
-		}
-	}
-
-	client.channels = make(map[string]bool)
-}
-
-// Broadcasts the event to all the subscibed clients
-// it returns how many clients were successfully queued for delivery
-func (h *Hub) Broadcast(event Event) int {
+func (h *Hub) Dispatch(event Event) int {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 
-	subscribers := h.channels[event.Channel]
-	delivered := 0
-
-	for client := range subscribers {
-		if client.Send(event) {
-			delivered++
-		}
+	dispatched := 0
+	for _, handler := range h.handlers[event.Channel] {
+		handler(event)
+		dispatched++
 	}
 
-	return delivered
+	for _, handler := range h.handlers["*"] {
+		handler(event)
+		dispatched++
+	}
+
+	return dispatched
 }

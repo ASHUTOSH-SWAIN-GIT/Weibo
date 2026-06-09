@@ -9,10 +9,18 @@ import (
 )
 
 func main() {
+	b, err := bus.NewNATS(bus.NATSConfig{
+		URL:     "nats://localhost:4222",
+		Subject: "mailer.>",
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+
 	m := mailer.New(
 		mailer.WithProjectID("dev_project"),
 		mailer.WithAuditLimit(10000),
-		mailer.WithBus(bus.NewInMem()),
+		mailer.WithBus(b),
 	)
 	defer m.Close()
 

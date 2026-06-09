@@ -10,7 +10,7 @@ type AuditLog struct {
 	EventID   string `json:"eventID,omitempty"`
 	Action    string `json:"action"`
 	Message   string `json:"message"`
-	Metadata  string `json:"metadata,omitemply"`
+	Metadata  string `json:"metadata,omitempty"`
 	CreatedAt string `json:"createdAt"`
 }
 

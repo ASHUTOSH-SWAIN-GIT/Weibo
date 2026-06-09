@@ -9,10 +9,15 @@ import (
 )
 
 func main() {
+	b := bus.NewRedis(bus.RedisConfig{
+		Addr:    "localhost:6379",
+		Channel: "mailer",
+	})
+
 	m := mailer.New(
 		mailer.WithProjectID("dev_project"),
 		mailer.WithAuditLimit(10000),
-		mailer.WithBus(bus.NewInMem()),
+		mailer.WithBus(b),
 	)
 	defer m.Close()
 

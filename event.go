@@ -18,7 +18,6 @@ type PublishEventRequest struct {
 }
 
 type PublishEventResponse struct {
-	EventID          string `json:"eventId"`
-	Broadcasted      bool   `json:"broadcasted"`
-	DeliveredClients int    `json:'deliveredClients`
+	EventID     string `json:"eventId"`
+	Broadcasted bool   `json:"broadcasted"`
 }
