@@ -99,6 +99,7 @@ if ! nc -z "$HOST" "$PORT"; then
     cleanup_and_exit 1
 fi
 command -v go >/dev/null || { echo "error: go toolchain not in PATH" >&2; cleanup_and_exit 1; }
+command -v python3 >/dev/null || { echo "error: python3 not in PATH (needed for JSON parsing)" >&2; cleanup_and_exit 1; }
 
 # --- build --------------------------------------------------------------------
 
@@ -214,34 +215,36 @@ sed 's/^/    /' "$RESULTS_FILE"
 
 # --- verify -------------------------------------------------------------------
 
-# Extract total for each customer from JSON: {"customer":"X","total":N,...}
-# Use python or awk for robust JSON parsing.
-extract_total() {
+# Since Reduce is a running aggregate, each customer will have multiple results
+# (one per record). We verify the FINAL value matches the expected total.
+# Extract LAST (highest) total per customer from JSON records.
+extract_final_total() {
     local customer="$1"
     python3 -c "
 import json, sys
+last = None
 for line in sys.stdin:
     line = line.strip()
     if not line: continue
     try:
         d = json.loads(line)
         if d.get('customer') == '$customer':
-            print(d.get('total'))
-            sys.exit(0)
+            last = d.get('total')
     except json.JSONDecodeError:
         pass
+print(last if last is not None else '')
 " 2>/dev/null
 }
 
-ALICE_TOTAL=$(extract_total "alice"   < "$RESULTS_FILE")
-BOB_TOTAL=$(extract_total "bob"      < "$RESULTS_FILE")
-CHARLIE_TOTAL=$(extract_total "charlie" < "$RESULTS_FILE")
+ALICE_TOTAL=$(extract_final_total "alice"   < "$RESULTS_FILE")
+BOB_TOTAL=$(extract_final_total "bob"      < "$RESULTS_FILE")
+CHARLIE_TOTAL=$(extract_final_total "charlie" < "$RESULTS_FILE")
 
 EXPECTED_ALICE=500    # 100 + 150 + 50 + 200
 EXPECTED_BOB=350      # 200 + 100 + 50
 EXPECTED_CHARLIE=300  # 300
 
-log "verifying aggregates:"
+log "verifying final aggregates:"
 FAIL=0
 check() {
     local name="$1" got="$2" want="$3"
@@ -249,9 +252,9 @@ check() {
         warn "  ✗ $name: no result found"
         FAIL=1
     elif [[ "$got" == "$want" ]]; then
-        log "  ✓ $name total = \$$got"
+        log "  ✓ $name final total = \$$got"
     else
-        warn "  ✗ $name total = \$$got (expected \$$want)"
+        warn "  ✗ $name final total = \$$got (expected \$$want)"
         FAIL=1
     fi
 }
