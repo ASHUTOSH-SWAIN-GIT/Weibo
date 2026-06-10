@@ -3,7 +3,7 @@ package sink
 import (
 	"context"
 
-	"mailer"
+	"mailer/types"
 )
 
 // BlackholeSink discards all records. Used for benchmarking pipeline throughput
@@ -18,7 +18,7 @@ func NewBlackholeSink() *BlackholeSink {
 }
 
 // Write drains the input channel, counting records but discarding them.
-func (s *BlackholeSink) Write(ctx context.Context, in <-chan mailer.Record) error {
+func (s *BlackholeSink) Write(ctx context.Context, in <-chan types.Record) error {
 	for {
 		select {
 		case <-ctx.Done():

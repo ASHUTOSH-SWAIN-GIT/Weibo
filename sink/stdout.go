@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"mailer"
+	"mailer/types"
 )
 
 // StdoutSink prints each record to stdout in a human-readable format.
@@ -18,8 +18,7 @@ func NewStdoutSink() *StdoutSink {
 }
 
 // Write reads records from the input channel and prints each one to stdout.
-// It blocks until the input channel is closed or the context is cancelled.
-func (s *StdoutSink) Write(ctx context.Context, in <-chan mailer.Record) error {
+func (s *StdoutSink) Write(ctx context.Context, in <-chan types.Record) error {
 	for {
 		select {
 		case <-ctx.Done():
