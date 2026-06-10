@@ -54,9 +54,7 @@ jobs:
         run: |
           KAFKA_VERSION=3.7.0
           SCALA_VERSION=2.13
-          # dlcdn is the actively-maintained mirror; archive.apache.org is slower
-          # and frequently times out from CI runners.
-          curl -fsSL "https://dlcdn.apache.org/kafka/${KAFKA_VERSION}/kafka_${SCALA_VERSION}-${KAFKA_VERSION}.tgz" -o /tmp/kafka.tgz
+          curl -fsSL "https://archive.apache.org/dist/kafka/${KAFKA_VERSION}/kafka_${SCALA_VERSION}-${KAFKA_VERSION}.tgz" -o /tmp/kafka.tgz
           mkdir -p /opt/kafka
           tar -xzf /tmp/kafka.tgz -C /opt/kafka --strip-components=1
           echo "/opt/kafka/bin" >> $GITHUB_PATH
