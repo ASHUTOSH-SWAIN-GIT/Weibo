@@ -46,6 +46,29 @@ func (s *Stream) KeyBy(fn func(types.Record) []byte) *Stream {
 	return s
 }
 
+// Reduce applies a stateful aggregation per key. Must be used after KeyBy.
+// The reduce function is called with the current accumulator (nil on first call)
+// and the incoming record, and returns the new accumulator.
+// The updated accumulator is emitted downstream after every record.
+//
+// Example (count per key):
+//
+//	stream.KeyBy(func(r types.Record) []byte { return r.Key }).
+//	    Reduce(func(accum []byte, curr types.Record) []byte {
+//	        count := 0
+//	        if accum != nil {
+//	            count = int(binary.BigEndian.Uint64(accum))
+//	        }
+//	        count++
+//	        buf := make([]byte, 8)
+//	        binary.BigEndian.PutUint64(buf, uint64(count))
+//	        return buf
+//	    })
+func (s *Stream) Reduce(fn operator.ReduceFn) *Stream {
+	s.env.operators = append(s.env.operators, operator.Reduce(fn))
+	return s
+}
+
 // ToSink connects the stream to a sink and returns the execution environment.
 // The pipeline is still lazy — call env.Execute() to start processing.
 func (st *Stream) ToSink(sk sink.Sink) *StreamExecutionEnv {
