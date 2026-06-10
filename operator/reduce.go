@@ -50,15 +50,22 @@ func Reduce(fn ReduceFn) *ReduceOperator {
 }
 
 // Process reads each record, applies the reduce function with per-key state,
-// and emits the new accumulator value downstream as a Record.
+// and emits the new accumulator value downstream. Watermarks are passed through.
+// When records have window_start/window_end headers (from Window), state is
+// scoped per-(key, window) so reduce is per-window.
 func (op *ReduceOperator) Process(in <-chan types.Record, out chan<- types.Record) {
 	defer close(out)
 
 	vs := op.backend.ValueState("reduce")
 
 	for record := range in {
-		key := string(record.Key)
-		vs.SetKey(key)
+		if record.IsWatermark {
+			out <- record
+			continue
+		}
+
+		stateKey := stateKey(record)
+		vs.SetKey(stateKey)
 
 		accum := vs.Get()
 		newAccum := op.Fn(accum, record)
@@ -72,4 +79,15 @@ func (op *ReduceOperator) Process(in <-chan types.Record, out chan<- types.Recor
 			Headers:   record.Headers,
 		}
 	}
+}
+
+// stateKey returns the key used for Reduce state lookup.
+// If the record has window metadata, the key includes window bounds
+// so reduce is scoped per-(key, window).
+func stateKey(r types.Record) string {
+	if ws, ok := r.Headers["window_start"]; ok {
+		we := r.Headers["window_end"]
+		return string(r.Key) + "/" + string(ws) + "/" + string(we)
+	}
+	return string(r.Key)
 }

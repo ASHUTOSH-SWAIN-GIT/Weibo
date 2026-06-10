@@ -33,9 +33,9 @@ func FromSlices(keys []string, values []string) *GeneratorSource {
 	return NewGeneratorSource(records)
 }
 
-// Run emits all records into the output channel and then closes it.
+// Run emits all records into the output channel and then returns.
+// The channel owner (StreamExecutionEnv) is responsible for closing it.
 func (s *GeneratorSource) Run(ctx context.Context, out chan<- types.Record) error {
-	defer close(out)
 	for _, record := range s.records {
 		select {
 		case <-ctx.Done():

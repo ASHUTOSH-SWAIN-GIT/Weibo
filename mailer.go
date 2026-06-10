@@ -49,6 +49,7 @@ func (env *StreamExecutionEnv) Execute(ctx context.Context) error {
 	// Source writes into the first channel.
 	sourceCh := make(chan types.Record, 256)
 	go func() {
+		defer close(sourceCh)
 		if err := env.source.Run(ctx, sourceCh); err != nil {
 			fmt.Printf("mailer: source error: %v\n", err)
 		}

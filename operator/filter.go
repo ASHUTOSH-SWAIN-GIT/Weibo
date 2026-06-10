@@ -14,10 +14,14 @@ func Filter(fn func(types.Record) bool) *FilterOperator {
 }
 
 // Process reads each record from in and writes it to out only if the
-// predicate returns true.
+// predicate returns true. Watermarks are always passed through.
 func (op *FilterOperator) Process(in <-chan types.Record, out chan<- types.Record) {
 	defer close(out)
 	for record := range in {
+		if record.IsWatermark {
+			out <- record
+			continue
+		}
 		if op.Fn(record) {
 			out <- record
 		}

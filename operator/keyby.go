@@ -3,6 +3,7 @@ package operator
 import (
 	"hash/fnv"
 	"sync"
+	"time"
 
 	"mailer/types"
 )
@@ -41,6 +42,11 @@ func (op *KeyByOperator) WithPartitions(n int) *KeyByOperator {
 // Process reads each record, hashes its key, routes it to the matching
 // partition goroutine, and merges all partition outputs into a single
 // output channel.
+//
+// Watermarks are held back until all data has been processed. This ensures
+// that downstream Window operators receive all data records before seeing
+// a watermark advance, which is necessary for correctness with fan-out/fan-in.
+// The final watermark is forwarded after all partitions drain.
 func (op *KeyByOperator) Process(in <-chan types.Record, out chan<- types.Record) {
 	defer close(out)
 
@@ -51,10 +57,6 @@ func (op *KeyByOperator) Process(in <-chan types.Record, out chan<- types.Record
 
 	var wg sync.WaitGroup
 
-	// Start one goroutine per partition. Each just forwards records
-	// to the merged output channel. This guarantees that records with
-	// the same key are always processed by the same goroutine — which
-	// means the same state, sequentially, no locking needed.
 	for i := range partChs {
 		wg.Add(1)
 		go func(ch <-chan types.Record) {
@@ -65,18 +67,28 @@ func (op *KeyByOperator) Process(in <-chan types.Record, out chan<- types.Record
 		}(partChs[i])
 	}
 
-	// Route incoming records to partitions by key hash.
+	var lastWatermark time.Time
+
 	for record := range in {
-		record.Key = op.Fn(record)
-		idx := partition(record.Key, op.Partitions)
-		partChs[idx] <- record
+		if record.IsWatermark {
+			if record.Timestamp.After(lastWatermark) {
+				lastWatermark = record.Timestamp
+			}
+		} else {
+			record.Key = op.Fn(record)
+			idx := partition(record.Key, op.Partitions)
+			partChs[idx] <- record
+		}
 	}
 
-	// Close all partition channels and wait for goroutines to drain.
 	for _, ch := range partChs {
 		close(ch)
 	}
 	wg.Wait()
+
+	if !lastWatermark.IsZero() {
+		out <- types.NewWatermark(lastWatermark)
+	}
 }
 
 // partition returns the partition index for a given key using FNV-1a hash.

@@ -4,6 +4,7 @@ import (
 	"mailer/operator"
 	"mailer/sink"
 	"mailer/types"
+	"mailer/window"
 )
 
 // Stream represents a pipeline stage. Method calls on Stream
@@ -66,6 +67,25 @@ func (s *Stream) KeyBy(fn func(types.Record) []byte) *Stream {
 //	    })
 func (s *Stream) Reduce(fn operator.ReduceFn) *Stream {
 	s.env.operators = append(s.env.operators, operator.Reduce(fn))
+	return s
+}
+
+// Window groups records into time-based windows. Must be used after KeyBy.
+// Records are buffered into windows, and when a watermark passes a window's
+// end time, the window fires — all its records are emitted as a single result.
+//
+// Supported window types:
+//   - window.Tumbling(size):   fixed-size, non-overlapping (e.g. 5-minute buckets)
+//   - window.Sliding(size, slide): overlapping windows (e.g. 5-min every 1-min)
+//   - window.Session(gap):     variable-size, closes after inactivity gap
+//
+// Example (5-minute tumbling window):
+//
+//	stream.KeyBy(func(r types.Record) []byte { return r.Key }).
+//	    Window(window.Tumbling(5 * time.Minute)).
+//	    Reduce(aggregateFn)
+func (s *Stream) Window(assigner window.WindowAssigner) *Stream {
+	s.env.operators = append(s.env.operators, operator.Window(assigner))
 	return s
 }
 

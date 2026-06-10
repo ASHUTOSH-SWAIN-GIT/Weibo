@@ -15,10 +15,14 @@ func FlatMap(fn func(types.Record) []types.Record) *FlatMapOperator {
 }
 
 // Process reads each record from in, applies the flat map function,
-// and writes each result record to out.
+// and writes each result record to out. Watermarks are passed through unchanged.
 func (op *FlatMapOperator) Process(in <-chan types.Record, out chan<- types.Record) {
 	defer close(out)
 	for record := range in {
+		if record.IsWatermark {
+			out <- record
+			continue
+		}
 		results := op.Fn(record)
 		for _, result := range results {
 			out <- result
