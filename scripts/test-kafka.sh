@@ -52,9 +52,22 @@ else
     exit 1
 fi
 
-KAFKA_TOPICS="$BIN/kafka-topics"
-KAFKA_CONSOLE_PRODUCER="$BIN/kafka-console-producer"
-KAFKA_CONSOLE_CONSUMER="$BIN/kafka-console-consumer"
+# Apache Kafka ships scripts with .sh suffix; Homebrew strips it.
+# Detect which convention is available.
+find_cli() {
+    local name="$1"
+    if [[ -x "$BIN/${name}.sh" ]]; then
+        echo "$BIN/${name}.sh"
+    elif [[ -x "$BIN/${name}" ]]; then
+        echo "$BIN/${name}"
+    else
+        echo "$BIN/${name}.sh"
+    fi
+}
+
+KAFKA_TOPICS="$(find_cli kafka-topics)"
+KAFKA_CONSOLE_PRODUCER="$(find_cli kafka-console-producer)"
+KAFKA_CONSOLE_CONSUMER="$(find_cli kafka-console-consumer)"
 
 log()  { printf '\033[1;34m[%s]\033[0m %s\n' "$(date +%H:%M:%S)" "$*"; }
 warn() { printf '\033[1;33m[%s]\033[0m %s\n' "$(date +%H:%M:%S)" "$*" >&2; }
@@ -159,14 +172,7 @@ RESULTS_FILE=$(mktemp -t mailer-results.XXXXXX.jsonl)
 #   total  = 8 results
 EXPECTED_RESULTS=8
 
-# Locate kafka-get-offsets
-if [[ -x /opt/homebrew/bin/kafka-get-offsets ]]; then
-    KAFKA_GET_OFFSETS=/opt/homebrew/bin/kafka-get-offsets
-elif command -v kafka-get-offsets >/dev/null 2>&1; then
-    KAFKA_GET_OFFSETS="$(command -v kafka-get-offsets)"
-else
-    KAFKA_GET_OFFSETS="$BIN/kafka-get-offsets"
-fi
+KAFKA_GET_OFFSETS="$(find_cli kafka-get-offsets)"
 
 # Parse from kafka-get-offsets which gives "topic:partition:high_watermark"
 get_offset_count() {
