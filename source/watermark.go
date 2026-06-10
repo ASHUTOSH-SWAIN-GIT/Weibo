@@ -30,6 +30,10 @@ func NewWatermarkSource(src Source, gen watermark.WatermarkGenerator, interval t
 // Run starts the underlying source, intercepts every record to update
 // the watermark generator, and periodically injects watermark records.
 // The channel owner is responsible for closing the output channel.
+//
+// On context cancellation or source completion, a max watermark is emitted
+// to flush all remaining windows. This guarantees correct end-of-stream
+// behavior for both batch and streaming sources.
 func (ws *WatermarkSource) Run(ctx context.Context, out chan<- types.Record) error {
 	records := make(chan types.Record, 256)
 	sourceErr := make(chan error, 1)
@@ -46,20 +50,30 @@ func (ws *WatermarkSource) Run(ctx context.Context, out chan<- types.Record) err
 	ticker := time.NewTicker(ws.Interval)
 	defer ticker.Stop()
 
+	// maxWatermark signals "no more data" so windows can fire.
+	maxWatermark := types.NewWatermark(time.Date(9999, 1, 1, 0, 0, 0, 0, time.UTC))
+
+	// emitMaxWatermark sends the max watermark using a fresh context with a
+	// short timeout, so it succeeds even when the original ctx is cancelled.
+	emitMaxWatermark := func() {
+		flushCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		select {
+		case out <- maxWatermark:
+		case <-flushCtx.Done():
+		}
+	}
+
 	for {
 		select {
 		case <-ctx.Done():
+			emitMaxWatermark()
 			return ctx.Err()
 
 		case record, ok := <-records:
 			if !ok {
-				// Source finished. Emit a max watermark to flush all remaining windows.
-				// This signals that no more records will arrive, so every window can close.
-				maxWatermark := types.NewWatermark(time.Date(9999, 1, 1, 0, 0, 0, 0, time.UTC))
-				select {
-				case out <- maxWatermark:
-				default:
-				}
+				// Source finished naturally.
+				emitMaxWatermark()
 				return <-sourceErr
 			}
 
@@ -72,7 +86,7 @@ func (ws *WatermarkSource) Run(ctx context.Context, out chan<- types.Record) err
 			if !wm.IsZero() {
 				select {
 				case out <- types.NewWatermark(wm):
-				default:
+				case <-ctx.Done():
 				}
 			}
 		}
