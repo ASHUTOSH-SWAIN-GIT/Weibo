@@ -27,13 +27,13 @@ type KafkaSource struct {
 
 // KafkaConfig configures a Kafka consumer.
 type KafkaConfig struct {
-	Brokers []string      // e.g. []string{"localhost:9092"}
-	Topic   string        // single-topic mode
-	Topics  []string      // multi-topic mode (takes precedence over Topic)
-	GroupID string        // consumer group; empty for unconsumed (no offset commits)
-	MinBytes int          // minimum bytes to fetch (default 1)
-	MaxBytes int          // maximum bytes to fetch (default 10MB)
-	StartOffset int64     // kafka.FirstOffset or kafka.LastOffset (default FirstOffset)
+	Brokers     []string // e.g. []string{"localhost:9092"}
+	Topic       string   // single-topic mode
+	Topics      []string // multi-topic mode (takes precedence over Topic)
+	GroupID     string   // consumer group; empty for unconsumed (no offset commits)
+	MinBytes    int      // minimum bytes to fetch (default 1)
+	MaxBytes    int      // maximum bytes to fetch (default 10MB)
+	StartOffset int64    // kafka.FirstOffset or kafka.LastOffset (default FirstOffset)
 }
 
 // NewKafkaSource creates a Source that reads from Kafka using a consumer group.

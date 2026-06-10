@@ -22,14 +22,14 @@ func main() {
 	// Key: customer ID, Value: order amount as big-endian uint64.
 	now := time.Now()
 	records := []types.Record{
-		newOrder("alice", 100, now.Add(0*time.Second)),      // t=0s
-		newOrder("bob", 200, now.Add(1*time.Second)),        // t=1s
-		newOrder("alice", 150, now.Add(2*time.Second)),      // t=2s
-		newOrder("charlie", 300, now.Add(3*time.Second)),     // t=3s
-		newOrder("alice", 50, now.Add(4*time.Second)),       // t=4s
-		newOrder("bob", 100, now.Add(5*time.Second)),        // t=5s (triggers window [0-5s))
-		newOrder("alice", 200, now.Add(10*time.Second)),     // t=10s (triggers window [5-10s))
-		newOrder("bob", 50, now.Add(11*time.Second)),        // t=11s
+		newOrder("alice", 100, now.Add(0*time.Second)),   // t=0s
+		newOrder("bob", 200, now.Add(1*time.Second)),     // t=1s
+		newOrder("alice", 150, now.Add(2*time.Second)),   // t=2s
+		newOrder("charlie", 300, now.Add(3*time.Second)), // t=3s
+		newOrder("alice", 50, now.Add(4*time.Second)),    // t=4s
+		newOrder("bob", 100, now.Add(5*time.Second)),     // t=5s (triggers window [0-5s))
+		newOrder("alice", 200, now.Add(10*time.Second)),  // t=10s (triggers window [5-10s))
+		newOrder("bob", 50, now.Add(11*time.Second)),     // t=11s
 	}
 
 	src := source.NewGeneratorSource(records)

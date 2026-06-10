@@ -6,10 +6,11 @@ import "time"
 // by a fixed interval. A single record can belong to multiple windows.
 //
 // Example with size=5min, slide=1min, aligned to :00:
-//   Window [00:00, 00:05) contains records from 00:00 to 00:04
-//   Window [00:01, 00:06) contains records from 00:01 to 00:05
-//   Window [00:02, 00:07) contains records from 00:02 to 00:06
-//   ...
+//
+//	Window [00:00, 00:05) contains records from 00:00 to 00:04
+//	Window [00:01, 00:06) contains records from 00:01 to 00:05
+//	Window [00:02, 00:07) contains records from 00:02 to 00:06
+//	...
 //
 // A record at 00:03 belongs to windows: [00:00-00:05], [00:01-00:06],
 // [00:02-00:07], [00:03-00:08], [00:04-00:09].

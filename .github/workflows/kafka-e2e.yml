@@ -1,0 +1,80 @@
+name: kafka-e2e
+
+# Run on every push to main, every PR, and on manual dispatch.
+# Triggering on push to feature branches can be enabled by adding them to the
+# branches list below.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  kafka-e2e:
+    name: kafka end-to-end
+    runs-on: ubuntu-latest
+
+    # Spin up a Kafka broker as a service container. We use the Bitnami image
+    # because it works out-of-the-box with KRaft (no Zookeeper) and is small.
+    services:
+      kafka:
+        image: bitnami/kafka:3.7
+        env:
+          # KRaft single-node config
+          KAFKA_CFG_NODE_ID: '1'
+          KAFKA_CFG_PROCESS_ROLES: 'broker,controller'
+          KAFKA_CFG_CONTROLLER_QUORUM_VOTERS: '1@kafka:9093'
+          KAFKA_CFG_LISTENERS: 'PLAINTEXT://:9092,CONTROLLER://:9093'
+          KAFKA_CFG_ADVERTISED_LISTENERS: 'PLAINTEXT://kafka:9092'
+          KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP: 'CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT'
+          KAFKA_CFG_CONTROLLER_LISTENER_NAMES: 'CONTROLLER'
+          KAFKA_CFG_INTER_BROKER_LISTENER_NAME: 'PLAINTEXT'
+          KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE: 'true'
+          KAFKA_CFG_OFFSETS_TOPIC_REPLICATION_FACTOR: '1'
+          KAFKA_CFG_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: '1'
+          KAFKA_CFG_TRANSACTION_STATE_LOG_MIN_ISR: '1'
+        ports:
+          - 9092:9092
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.2'
+          cache: true
+
+      - name: Install Kafka CLI tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y default-jre-headless
+          KAFKA_VERSION=3.7.0
+          SCALA_VERSION=2.13
+          curl -fsSL "https://archive.apache.org/dist/kafka/${KAFKA_VERSION}/kafka_${SCALA_VERSION}-${KAFKA_VERSION}.tgz" -o /tmp/kafka.tgz
+          mkdir -p /opt/kafka
+          tar -xzf /tmp/kafka.tgz -C /opt/kafka --strip-components=1
+          echo "/opt/kafka/bin" >> $GITHUB_PATH
+
+      - name: Wait for Kafka
+        run: |
+          for i in {1..30}; do
+            if /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list >/dev/null 2>&1; then
+              echo "kafka is up"
+              exit 0
+            fi
+            echo "waiting... ($i)"
+            sleep 2
+          done
+          echo "kafka failed to start"
+          exit 1
+
+      - name: Run kafka e2e test
+        env:
+          KAFKA_BROKERS: localhost:9092
+        run: ./scripts/test-kafka.sh

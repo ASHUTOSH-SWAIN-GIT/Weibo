@@ -6,12 +6,13 @@ import "time"
 // Each record belongs to exactly one window.
 //
 // Example with size=5min, aligned to :00:
-//   [00:00, 00:05), [00:05, 00:10), [00:10, 00:15), ...
+//
+//	[00:00, 00:05), [00:05, 00:10), [00:10, 00:15), ...
 //
 // A record with timestamp 00:07 goes into window [00:05, 00:10).
 type Tumbling struct {
-	size    time.Duration
-	offset  time.Duration
+	size   time.Duration
+	offset time.Duration
 }
 
 // NewTumbling creates a tumbling window assigner with the given window size.

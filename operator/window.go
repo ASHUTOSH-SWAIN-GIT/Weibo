@@ -46,7 +46,7 @@ type windowState struct {
 func Window(assigner window.WindowAssigner) *WindowOperator {
 	return &WindowOperator{
 		Assigner: assigner,
-		windows: make(map[windowKey]*windowState),
+		windows:  make(map[windowKey]*windowState),
 	}
 }
 

@@ -8,7 +8,7 @@ import (
 // Each key gets its own entry. State is lost when the process restarts.
 type MemoryBackend struct {
 	mu    sync.Mutex
-	value map[string]map[string][]byte  // name -> key -> value
+	value map[string]map[string][]byte   // name -> key -> value
 	list  map[string]map[string][][]byte // name -> key -> list of values
 }
 
@@ -49,7 +49,7 @@ func (m *MemoryBackend) ListState(name string) ListState {
 // memoryValueState implements ValueState backed by a map.
 // The current key is set via SetKey before Get/Set/Clear calls.
 type memoryValueState struct {
-	mu     sync.Mutex
+	mu      sync.Mutex
 	backend *MemoryBackend
 	name    string
 	key     string
@@ -102,7 +102,7 @@ func (vs *memoryValueState) Clear() {
 
 // memoryListState implements ListState backed by a map of slices.
 type memoryListState struct {
-	mu     sync.Mutex
+	mu      sync.Mutex
 	backend *MemoryBackend
 	name    string
 	key     string

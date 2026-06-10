@@ -10,9 +10,10 @@ import "time"
 // the gap, and merge when two sessions grow close enough to overlap.
 //
 // Example with gap=30s:
-//   Record at 00:00 → session window [00:00, 00:30)
-//   Record at 00:15 → session window expands to [00:00, 00:45)
-//   Record at 01:30 → new session window [01:30, 02:00)
+//
+//	Record at 00:00 → session window [00:00, 00:30)
+//	Record at 00:15 → session window expands to [00:00, 00:45)
+//	Record at 01:30 → new session window [01:30, 02:00)
 type Session struct {
 	gap time.Duration
 }
