@@ -100,6 +100,38 @@ func (vs *memoryValueState) Clear() {
 	}
 }
 
+func (vs *memoryValueState) SnapshotAll() map[string][]byte {
+	vs.mu.Lock()
+	defer vs.mu.Unlock()
+
+	vs.data = vs.backend.value[vs.name]
+	if vs.data == nil {
+		return make(map[string][]byte)
+	}
+	snapshot := make(map[string][]byte, len(vs.data))
+	for k, v := range vs.data {
+		cp := make([]byte, len(v))
+		copy(cp, v)
+		snapshot[k] = cp
+	}
+	return snapshot
+}
+
+func (vs *memoryValueState) RestoreAll(entries map[string][]byte) error {
+	vs.mu.Lock()
+	defer vs.mu.Unlock()
+
+	fresh := make(map[string][]byte, len(entries))
+	for k, v := range entries {
+		cp := make([]byte, len(v))
+		copy(cp, v)
+		fresh[k] = cp
+	}
+	vs.backend.value[vs.name] = fresh
+	vs.data = fresh
+	return nil
+}
+
 // memoryListState implements ListState backed by a map of slices.
 type memoryListState struct {
 	mu      sync.Mutex

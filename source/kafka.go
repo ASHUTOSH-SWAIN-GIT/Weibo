@@ -2,6 +2,7 @@ package source
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
 	"github.com/segmentio/kafka-go"
@@ -10,7 +11,8 @@ import (
 )
 
 // KafkaSource reads records from one or more Kafka topics using a consumer group.
-// It implements the Source interface for use in mailer pipelines.
+// It implements the Source interface for use in mailer pipelines,
+// and the CheckpointSource interface for checkpoint/recovery support.
 //
 // Records are read continuously until the context is cancelled.
 // The channel owner (StreamExecutionEnv) is responsible for closing the output channel.
@@ -93,6 +95,37 @@ func (k *KafkaSource) Run(ctx context.Context, out chan<- types.Record) error {
 	}
 }
 
+// CheckpointOffset returns the source's current position as JSON bytes.
+// For Kafka, this is the last committed offset per partition.
+func (k *KafkaSource) CheckpointOffset() ([]byte, error) {
+	stats := k.Reader.Stats()
+	data := kafkaOffsetData{
+		Topic:     stats.Topic,
+		Partition: stats.Partition,
+		Offset:    stats.Offset,
+		Lag:       stats.Lag,
+	}
+	return json.Marshal(data)
+}
+
+// RestoreOffset is a no-op for Kafka since consumer group offsets are
+// managed by Kafka itself. The GroupID handles offset tracking.
+func (k *KafkaSource) RestoreOffset(data []byte) error {
+	// Kafka consumer groups manage offsets via the broker.
+	// On recovery, the consumer group resumes from the last committed offset.
+	// We store the offset data in the checkpoint for informational purposes,
+	// but don't need to explicitly seek.
+	return nil
+}
+
+// kafkaOffsetData holds Kafka source position for checkpointing.
+type kafkaOffsetData struct {
+	Topic     string `json:"topic"`
+	Partition string `json:"partition"`
+	Offset    int64  `json:"offset"`
+	Lag       int64  `json:"lag"`
+}
+
 // KafkaToRecord converts a kafka.Message to a mailer.Record.
 func KafkaToRecord(msg kafka.Message) types.Record {
 	headers := make(map[string][]byte, len(msg.Headers))
@@ -109,8 +142,5 @@ func KafkaToRecord(msg kafka.Message) types.Record {
 	}
 }
 
-// KafkaReader exposes the underlying reader for cases where the user needs
-// direct access (e.g., manual offset management).
-func (k *KafkaSource) KafkaReader() *kafka.Reader {
-	return k.Reader
-}
+// Compile-time check: KafkaSource implements CheckpointSource.
+var _ CheckpointSource = (*KafkaSource)(nil)

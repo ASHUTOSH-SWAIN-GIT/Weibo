@@ -18,6 +18,9 @@ func TestNewRecord(t *testing.T) {
 	if r.IsWatermark {
 		t.Error("IsWatermark should be false for data records")
 	}
+	if r.IsBarrier {
+		t.Error("IsBarrier should be false for data records")
+	}
 	if r.Timestamp.IsZero() {
 		t.Error("Timestamp should be set to current time")
 	}
@@ -29,11 +32,27 @@ func TestNewWatermark(t *testing.T) {
 	if !r.IsWatermark {
 		t.Error("IsWatermark should be true")
 	}
+	if r.IsBarrier {
+		t.Error("IsBarrier should be false for watermarks")
+	}
 	if !r.Timestamp.Equal(ts) {
 		t.Errorf("Timestamp: got %v, want %v", r.Timestamp, ts)
 	}
 	if r.Key != nil || r.Value != nil {
 		t.Error("watermark should have nil Key and Value")
+	}
+}
+
+func TestNewBarrier(t *testing.T) {
+	r := types.NewBarrier("cp-1")
+	if !r.IsBarrier {
+		t.Error("IsBarrier should be true")
+	}
+	if r.IsWatermark {
+		t.Error("IsWatermark should be false for barriers")
+	}
+	if r.CheckpointID != "cp-1" {
+		t.Errorf("CheckpointID: got %q, want %q", r.CheckpointID, "cp-1")
 	}
 }
 

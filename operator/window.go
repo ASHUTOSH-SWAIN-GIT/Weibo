@@ -1,6 +1,7 @@
 package operator
 
 import (
+	"encoding/json"
 	"time"
 
 	"mailer/types"
@@ -16,6 +17,8 @@ import (
 //  3. When the watermark passes a window's end time, that window is
 //     "closed" — all its buffered records are emitted as a single result.
 //  4. Late records (timestamp < current watermark) are dropped.
+//  5. Checkpoint barriers are forwarded downstream (window buffers
+//     are captured as part of the pipeline checkpoint).
 //
 // Must be used after KeyBy in a keyed stream so each key gets its
 // own set of windows.
@@ -23,6 +26,9 @@ type WindowOperator struct {
 	Assigner         window.WindowAssigner
 	currentWatermark time.Time
 	windows          map[windowKey]*windowState
+	IdleTimeout      time.Duration
+	lastRecordTime   time.Time
+	timer            *time.Timer
 }
 
 // windowKey uniquely identifies a window by key + start + end times
@@ -37,8 +43,34 @@ type windowKey struct {
 
 // windowState holds the records buffered in a single window.
 type windowState struct {
-	win     window.Window
-	records []types.Record
+	Win     window.Window `json:"win"`
+	Records []recordJSON  `json:"records"`
+}
+
+// recordJSON is the JSON-serializable representation of a types.Record,
+// used for checkpointing window state.
+type recordJSON struct {
+	Key       []byte            `json:"key,omitempty"`
+	Value     []byte            `json:"value,omitempty"`
+	Timestamp int64             `json:"timestamp"` // UnixNano
+	Offset    int64             `json:"offset"`
+	Headers   map[string][]byte `json:"headers,omitempty"`
+}
+
+// windowOperatorSnapshotJSON is the JSON representation of WindowOperator's
+// state for checkpointing.
+type windowOperatorSnapshotJSON struct {
+	CurrentWatermark int64                  `json:"current_watermark"` // UnixNano
+	Windows          map[string]windowState `json:"windows"`
+}
+
+// WithIdleTimeout sets the idle timeout for the window operator.
+// If no records arrive for this duration after windowing, the operator
+// fires all pending windows and stops. Useful for infinite streams
+// that don't receive shutdown signals.
+func (op *WindowOperator) WithIdleTimeout(d time.Duration) *WindowOperator {
+	op.IdleTimeout = d
+	return op
 }
 
 // Window creates a WindowOperator with the given window assigner.
@@ -50,29 +82,72 @@ func Window(assigner window.WindowAssigner) *WindowOperator {
 	}
 }
 
+// CurrentWatermark returns the operator's current watermark timestamp.
+// Used for testing and checkpointing.
+func (op *WindowOperator) CurrentWatermark() time.Time {
+	return op.currentWatermark
+}
+
 // Process reads records and watermarks, buffers data records into windows,
 // and emits results when watermarks indicate windows are complete.
+// If IdleTimeout is set, the operator fires remaining windows and exits
+// when no records arrive within the timeout.
 func (op *WindowOperator) Process(in <-chan types.Record, out chan<- types.Record) {
 	defer close(out)
 
-	for record := range in {
-		if record.IsWatermark {
-			op.handleWatermark(record, out)
-			continue
-		}
-
-		// Drop late records (timestamp below current watermark).
-		if !op.currentWatermark.IsZero() && record.Timestamp.Before(op.currentWatermark) {
-			continue
-		}
-
-		op.handleDataRecord(record)
+	if op.IdleTimeout > 0 {
+		op.timer = time.NewTimer(op.IdleTimeout)
+		defer op.timer.Stop()
 	}
 
-	// When input closes, fire any remaining windows.
+	for {
+		select {
+		case record, ok := <-in:
+			if !ok {
+				op.flushRemaining(out)
+				return
+			}
+			if op.timer != nil {
+				op.timer.Reset(op.IdleTimeout)
+			}
+			if record.IsWatermark {
+				op.handleWatermark(record, out)
+				continue
+			}
+			if record.IsBarrier {
+				out <- record
+				continue
+			}
+
+			// Drop late records (timestamp below current watermark).
+			if !op.currentWatermark.IsZero() && record.Timestamp.Before(op.currentWatermark) {
+				continue
+			}
+
+			op.handleDataRecord(record)
+
+		case <-op.timerFire():
+			op.flushRemaining(out)
+			return
+		}
+	}
+}
+
+// timerFire returns a channel that fires when the idle timer expires,
+// or nil if no idle timeout is configured (in which case this case is
+// never selected).
+func (op *WindowOperator) timerFire() <-chan time.Time {
+	if op.timer != nil {
+		return op.timer.C
+	}
+	return nil
+}
+
+// flushRemaining fires all buffered windows and clears state.
+func (op *WindowOperator) flushRemaining(out chan<- types.Record) {
 	for key, ws := range op.windows {
-		for _, r := range ws.records {
-			out <- tagWithWindow(r, ws.win)
+		for _, r := range ws.Records {
+			out <- tagWithWindow(recordFromJSON(r), ws.Win)
 		}
 		delete(op.windows, key)
 	}
@@ -86,12 +161,12 @@ func (op *WindowOperator) handleDataRecord(record types.Record) {
 		ws, ok := op.windows[key]
 		if !ok {
 			ws = &windowState{
-				win:     win,
-				records: make([]types.Record, 0),
+				Win:     win,
+				Records: make([]recordJSON, 0),
 			}
 			op.windows[key] = ws
 		}
-		ws.records = append(ws.records, record)
+		ws.Records = append(ws.Records, recordToJSON(record))
 	}
 }
 
@@ -103,9 +178,9 @@ func (op *WindowOperator) handleWatermark(watermark types.Record, out chan<- typ
 	}
 
 	for key, ws := range op.windows {
-		if !ws.win.End.After(op.currentWatermark) {
-			for _, r := range ws.records {
-				out <- tagWithWindow(r, ws.win)
+		if !ws.Win.End.After(op.currentWatermark) {
+			for _, r := range ws.Records {
+				out <- tagWithWindow(recordFromJSON(r), ws.Win)
 			}
 			delete(op.windows, key)
 		}
@@ -135,5 +210,88 @@ func toWindowKey(key string, win window.Window) windowKey {
 		Key:   key,
 		Start: win.Start.UnixNano(),
 		End:   win.End.UnixNano(),
+	}
+}
+
+func recordToJSON(r types.Record) recordJSON {
+	return recordJSON{
+		Key:       r.Key,
+		Value:     r.Value,
+		Timestamp: r.Timestamp.UnixNano(),
+		Offset:    r.Offset,
+		Headers:   r.Headers,
+	}
+}
+
+func recordFromJSON(r recordJSON) types.Record {
+	ts := time.Unix(0, r.Timestamp).UTC()
+	return types.Record{
+		Key:       r.Key,
+		Value:     r.Value,
+		Timestamp: ts,
+		Offset:    r.Offset,
+		Headers:   r.Headers,
+	}
+}
+
+// Snapshot returns the operator's current window state as JSON bytes.
+func (op *WindowOperator) Snapshot() ([]byte, error) {
+	snapshot := windowOperatorSnapshotJSON{
+		CurrentWatermark: op.currentWatermark.UnixNano(),
+		Windows:          make(map[string]windowState),
+	}
+	for key, ws := range op.windows {
+		snapshot.Windows[key.String()] = *ws
+	}
+	return json.Marshal(snapshot)
+}
+
+// Restore replaces the operator's internal state from JSON bytes produced by Snapshot.
+func (op *WindowOperator) Restore(data []byte) error {
+	var snapshot windowOperatorSnapshotJSON
+	if err := json.Unmarshal(data, &snapshot); err != nil {
+		return err
+	}
+	op.currentWatermark = time.Unix(0, snapshot.CurrentWatermark).UTC()
+	op.windows = make(map[windowKey]*windowState)
+	for keyStr, ws := range snapshot.Windows {
+		wk := parseWindowKey(keyStr)
+		wsCopy := ws
+		op.windows[wk] = &wsCopy
+	}
+	return nil
+}
+
+func (k windowKey) String() string {
+	return k.Key + "/" + time.Unix(0, k.Start).UTC().Format(time.RFC3339Nano) + "/" + time.Unix(0, k.End).UTC().Format(time.RFC3339Nano)
+}
+
+func parseWindowKey(s string) windowKey {
+	// Format: "key/startRFC3339Nano/endRFC3339Nano"
+	// Find the last two "/" delimiters
+	lastSlash := -1
+	secondLastSlash := -1
+	for i := len(s) - 1; i >= 0; i-- {
+		if s[i] == '/' {
+			if lastSlash == -1 {
+				lastSlash = i
+			} else {
+				secondLastSlash = i
+				break
+			}
+		}
+	}
+	if secondLastSlash == -1 || lastSlash == -1 {
+		return windowKey{}
+	}
+	key := s[:secondLastSlash]
+	startStr := s[secondLastSlash+1 : lastSlash]
+	endStr := s[lastSlash+1:]
+	start, _ := time.Parse(time.RFC3339Nano, startStr)
+	end, _ := time.Parse(time.RFC3339Nano, endStr)
+	return windowKey{
+		Key:   key,
+		Start: start.UnixNano(),
+		End:   end.UnixNano(),
 	}
 }

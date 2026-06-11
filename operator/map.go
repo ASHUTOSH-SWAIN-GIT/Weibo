@@ -15,11 +15,11 @@ func Map(fn func(types.Record) types.Record) *MapOperator {
 }
 
 // Process reads each record from in, applies the map function, and
-// writes the result to out. Watermarks are passed through unchanged.
+// writes the result to out. Watermarks and barriers are passed through unchanged.
 func (op *MapOperator) Process(in <-chan types.Record, out chan<- types.Record) {
 	defer close(out)
 	for record := range in {
-		if record.IsWatermark {
+		if record.IsWatermark || record.IsBarrier {
 			out <- record
 			continue
 		}

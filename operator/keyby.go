@@ -3,7 +3,6 @@ package operator
 import (
 	"hash/fnv"
 	"sync"
-	"time"
 
 	"mailer/types"
 )
@@ -43,10 +42,11 @@ func (op *KeyByOperator) WithPartitions(n int) *KeyByOperator {
 // partition goroutine, and merges all partition outputs into a single
 // output channel.
 //
-// Watermarks are held back until all data has been processed. This ensures
-// that downstream Window operators receive all data records before seeing
-// a watermark advance, which is necessary for correctness with fan-out/fan-in.
-// The final watermark is forwarded after all partitions drain.
+// Watermarks and barriers are held back until all data has been processed.
+// This ensures that downstream Window/Reduce operators receive all data
+// records before seeing a watermark advance or a checkpoint barrier.
+// After all partitions drain, pending watermarks and barriers are forwarded
+// in the order they were received.
 func (op *KeyByOperator) Process(in <-chan types.Record, out chan<- types.Record) {
 	defer close(out)
 
@@ -67,14 +67,18 @@ func (op *KeyByOperator) Process(in <-chan types.Record, out chan<- types.Record
 		}(partChs[i])
 	}
 
-	var lastWatermark time.Time
+	// Hold back watermarks and barriers, forward them after all data drains.
+	var pending []types.Record
 
 	for record := range in {
-		if record.IsWatermark {
-			if record.Timestamp.After(lastWatermark) {
-				lastWatermark = record.Timestamp
-			}
+		if record.IsWatermark || record.IsBarrier {
+			pending = append(pending, record)
 		} else {
+			// Forward any held-back watermarks/barriers before new data
+			// that has a different ordering constraint — actually no,
+			// we keep them held back until input closes, same as before.
+			// The key insight: watermarks/barriers must not overtake data
+			// that was already sent to partitions.
 			record.Key = op.Fn(record)
 			idx := Partition(record.Key, op.Partitions)
 			partChs[idx] <- record
@@ -86,8 +90,9 @@ func (op *KeyByOperator) Process(in <-chan types.Record, out chan<- types.Record
 	}
 	wg.Wait()
 
-	if !lastWatermark.IsZero() {
-		out <- types.NewWatermark(lastWatermark)
+	// Forward held-back watermarks and barriers in order.
+	for _, p := range pending {
+		out <- p
 	}
 }
 

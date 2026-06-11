@@ -14,11 +14,11 @@ func Filter(fn func(types.Record) bool) *FilterOperator {
 }
 
 // Process reads each record from in and writes it to out only if the
-// predicate returns true. Watermarks are always passed through.
+// predicate returns true. Watermarks and barriers are always passed through.
 func (op *FilterOperator) Process(in <-chan types.Record, out chan<- types.Record) {
 	defer close(out)
 	for record := range in {
-		if record.IsWatermark {
+		if record.IsWatermark || record.IsBarrier {
 			out <- record
 			continue
 		}

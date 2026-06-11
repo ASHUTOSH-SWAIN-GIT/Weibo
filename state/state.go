@@ -37,6 +37,14 @@ type ValueState interface {
 
 	// Clear removes the value for the current key.
 	Clear()
+
+	// SnapshotAll returns a copy of all key-value pairs in this state namespace.
+	// Used for checkpointing.
+	SnapshotAll() map[string][]byte
+
+	// RestoreAll replaces all key-value pairs in this state namespace.
+	// Used for recovery from a checkpoint.
+	RestoreAll(entries map[string][]byte) error
 }
 
 // ListState holds an ordered list of values per key.

@@ -1,6 +1,8 @@
 package mailer
 
 import (
+	"time"
+
 	"mailer/operator"
 	"mailer/sink"
 	"mailer/types"
@@ -86,6 +88,16 @@ func (s *Stream) Reduce(fn operator.ReduceFn) *Stream {
 //	    Reduce(aggregateFn)
 func (s *Stream) Window(assigner window.WindowAssigner) *Stream {
 	s.env.operators = append(s.env.operators, operator.Window(assigner))
+	return s
+}
+
+// WindowWithIdleTimeout creates a window with an idle timeout.
+// If no records arrive within the timeout duration, all remaining
+// windows are fired and the pipeline stage completes. Useful for
+// infinite streams that don't receive shutdown signals.
+func (s *Stream) WindowWithIdleTimeout(assigner window.WindowAssigner, idleTimeout time.Duration) *Stream {
+	op := operator.Window(assigner).WithIdleTimeout(idleTimeout)
+	s.env.operators = append(s.env.operators, op)
 	return s
 }
 

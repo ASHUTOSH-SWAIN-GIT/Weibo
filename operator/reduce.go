@@ -1,6 +1,7 @@
 package operator
 
 import (
+	"encoding/json"
 	"mailer/state"
 	"mailer/types"
 )
@@ -24,6 +25,12 @@ import (
 //	    return buf
 //	})
 type ReduceFn func(accum []byte, curr types.Record) []byte
+
+// reduceStateJSON is the JSON representation of ReduceOperator's state,
+// used for checkpointing snapshot/restore.
+type reduceStateJSON struct {
+	Entries map[string][]byte `json:"entries"`
+}
 
 // ReduceOperator maintains per-key state and applies a reduce function
 // to merge each incoming record into the accumulator.
@@ -50,9 +57,12 @@ func Reduce(fn ReduceFn) *ReduceOperator {
 }
 
 // Process reads each record, applies the reduce function with per-key state,
-// and emits the new accumulator value downstream. Watermarks are passed through.
-// When records have window_start/window_end headers (from Window), state is
-// scoped per-(key, window) so reduce is per-window.
+// and emits the new accumulator value downstream. Watermarks and barriers are
+// passed through. When records have window_start/window_end headers (from
+// Window), state is scoped per-(key, window) so reduce is per-window.
+//
+// When a barrier arrives, the operator snapshots its state and forwards the
+// barrier downstream. This enables checkpointing.
 func (op *ReduceOperator) Process(in <-chan types.Record, out chan<- types.Record) {
 	defer close(out)
 
@@ -60,6 +70,13 @@ func (op *ReduceOperator) Process(in <-chan types.Record, out chan<- types.Recor
 
 	for record := range in {
 		if record.IsWatermark {
+			out <- record
+			continue
+		}
+
+		if record.IsBarrier {
+			// State is already in memory; barrier just flows through.
+			// The CheckpointCoordinator will call Snapshot() separately.
 			out <- record
 			continue
 		}
@@ -79,6 +96,26 @@ func (op *ReduceOperator) Process(in <-chan types.Record, out chan<- types.Recor
 			Headers:   record.Headers,
 		}
 	}
+}
+
+// Snapshot returns the operator's current per-key state as JSON bytes.
+func (op *ReduceOperator) Snapshot() ([]byte, error) {
+	vs := op.backend.ValueState("reduce")
+	entries := vs.SnapshotAll()
+
+	data := reduceStateJSON{Entries: entries}
+	return json.Marshal(data)
+}
+
+// Restore replaces the operator's internal state from JSON bytes produced by Snapshot.
+func (op *ReduceOperator) Restore(data []byte) error {
+	var stateData reduceStateJSON
+	if err := json.Unmarshal(data, &stateData); err != nil {
+		return err
+	}
+
+	vs := op.backend.ValueState("reduce")
+	return vs.RestoreAll(stateData.Entries)
 }
 
 // StateKey returns the key used for Reduce state lookup.

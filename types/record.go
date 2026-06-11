@@ -5,13 +5,14 @@ import "time"
 // Record is the fundamental data unit flowing through a stream pipeline.
 // Every source emits Records, every operator transforms them, every sink receives them.
 //
-// A Record can be either a data record or a watermark marker:
-//   - Data record: IsWatermark == false, carries key/value/timestamp
-//   - Watermark:   IsWatermark == true, carries only a Timestamp that says
+// A Record can be one of three types:
+//   - Data record: IsWatermark == false, IsBarrier == false — carries key/value/timestamp
+//   - Watermark:   IsWatermark == true — carries a Timestamp that says
 //     "no records with event time < this timestamp will arrive after this point"
+//   - Barrier:     IsBarrier == true — carries a CheckpointID that says
+//     "snapshot state for this checkpoint when the barrier passes"
 //
-// Watermarks drive window firing. When a watermark passes a window's end time,
-// that window is considered complete and its results are emitted downstream.
+// Watermarks drive window firing. Barriers drive checkpointing.
 type Record struct {
 	// Key is used for partitioning after KeyBy. Nil means unkeyed.
 	Key []byte
@@ -34,6 +35,17 @@ type Record struct {
 	// Watermarks have no Key or Value — they only carry a Timestamp.
 	// Operators use watermarks to know when windows can close.
 	IsWatermark bool
+
+	// IsBarrier marks this record as a checkpoint barrier.
+	// Barriers flow in-band through the pipeline (like watermarks).
+	// When a stateful operator sees a barrier, it snapshots its state,
+	// then forwards the barrier downstream. When the barrier reaches
+	// the sink, the checkpoint is complete.
+	IsBarrier bool
+
+	// CheckpointID identifies which checkpoint this barrier belongs to.
+	// Only valid when IsBarrier == true.
+	CheckpointID string
 }
 
 // NewRecord creates a data Record with the given key, value, and current timestamp.
@@ -51,6 +63,16 @@ func NewWatermark(ts time.Time) Record {
 	return Record{
 		Timestamp:   ts,
 		IsWatermark: true,
+	}
+}
+
+// NewBarrier creates a checkpoint barrier Record with the given checkpoint ID.
+// Barriers flow through the pipeline and trigger stateful operators to snapshot
+// their state. When the barrier reaches the sink, the checkpoint is complete.
+func NewBarrier(checkpointID string) Record {
+	return Record{
+		CheckpointID: checkpointID,
+		IsBarrier:    true,
 	}
 }
 
