@@ -30,7 +30,7 @@ func (t *Tumbling) WithOffset(offset time.Duration) *Tumbling {
 
 // AssignWindows returns exactly one window for the given timestamp.
 func (t *Tumbling) AssignWindows(timestamp time.Time) []Window {
-	start := windowStart(timestamp, t.size, t.offset)
+	start := WindowStart(timestamp, t.size, t.offset)
 	return []Window{{Start: start, End: start.Add(t.size)}}
 }
 
@@ -39,9 +39,9 @@ func (t *Tumbling) WindowSize() time.Duration {
 	return t.size
 }
 
-// windowStart calculates the start of the window that contains the given
+// WindowStart calculates the start of the window that contains the given
 // timestamp, accounting for offset alignment.
-func windowStart(ts time.Time, size, offset time.Duration) time.Time {
+func WindowStart(ts time.Time, size, offset time.Duration) time.Time {
 	// Convert to Unix nanoseconds for arithmetic.
 	tsUnix := ts.UnixNano()
 	offsetUnix := offset.Nanoseconds()

@@ -79,7 +79,7 @@ func (k *KafkaSource) Run(ctx context.Context, out chan<- types.Record) error {
 			return fmt.Errorf("kafka fetch: %w", err)
 		}
 
-		record := kafkaToRecord(msg)
+		record := KafkaToRecord(msg)
 
 		select {
 		case <-ctx.Done():
@@ -93,8 +93,8 @@ func (k *KafkaSource) Run(ctx context.Context, out chan<- types.Record) error {
 	}
 }
 
-// kafkaToRecord converts a kafka.Message to a mailer.Record.
-func kafkaToRecord(msg kafka.Message) types.Record {
+// KafkaToRecord converts a kafka.Message to a mailer.Record.
+func KafkaToRecord(msg kafka.Message) types.Record {
 	headers := make(map[string][]byte, len(msg.Headers))
 	for _, h := range msg.Headers {
 		headers[h.Key] = h.Value

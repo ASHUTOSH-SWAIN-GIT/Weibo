@@ -1,21 +1,17 @@
-package sink
+package sink_test
 
 import (
 	"testing"
 	"time"
 
-	"github.com/segmentio/kafka-go"
-
+	"mailer/sink"
 	"mailer/types"
 )
 
-// TestKafkaSink_ImplementsSink ensures KafkaSink satisfies the Sink interface
-// at compile time. If Write's signature changes incompatibly, this won't compile.
 func TestKafkaSink_ImplementsSink(t *testing.T) {
-	var _ Sink = (*KafkaSink)(nil)
+	var _ sink.Sink = (*sink.KafkaSink)(nil)
 }
 
-// TestRecordToKafka verifies the record-to-message mapping.
 func TestRecordToKafka(t *testing.T) {
 	ts := time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC)
 	r := types.Record{
@@ -28,7 +24,7 @@ func TestRecordToKafka(t *testing.T) {
 		},
 	}
 
-	msg := recordToKafka(r)
+	msg := sink.RecordToKafka(r)
 
 	if string(msg.Key) != "customer-42" {
 		t.Errorf("Key: got %q, want %q", msg.Key, "customer-42")
@@ -48,23 +44,18 @@ func TestRecordToKafka(t *testing.T) {
 	}
 }
 
-// TestRecordToKafka_ZeroTimestamp ensures zero timestamps don't break the producer.
 func TestRecordToKafka_ZeroTimestamp(t *testing.T) {
 	r := types.Record{Key: []byte("k"), Value: []byte("v")}
-	msg := recordToKafka(r)
+	msg := sink.RecordToKafka(r)
 	if !msg.Time.IsZero() {
 		t.Errorf("expected zero time, got %v", msg.Time)
 	}
 }
 
-// TestRecordToKafka_EmptyHeaders ensures no header allocation when input is empty.
 func TestRecordToKafka_EmptyHeaders(t *testing.T) {
 	r := types.Record{Key: []byte("k"), Value: []byte("v")}
-	msg := recordToKafka(r)
+	msg := sink.RecordToKafka(r)
 	if len(msg.Headers) != 0 {
 		t.Errorf("expected no headers, got %d", len(msg.Headers))
 	}
 }
-
-// Compile-time check: kafka-go types are used in this package.
-var _ = kafka.Message{}

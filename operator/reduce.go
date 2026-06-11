@@ -64,8 +64,8 @@ func (op *ReduceOperator) Process(in <-chan types.Record, out chan<- types.Recor
 			continue
 		}
 
-		stateKey := stateKey(record)
-		vs.SetKey(stateKey)
+		sk := StateKey(record)
+		vs.SetKey(sk)
 
 		accum := vs.Get()
 		newAccum := op.Fn(accum, record)
@@ -81,10 +81,10 @@ func (op *ReduceOperator) Process(in <-chan types.Record, out chan<- types.Recor
 	}
 }
 
-// stateKey returns the key used for Reduce state lookup.
+// StateKey returns the key used for Reduce state lookup.
 // If the record has window metadata, the key includes window bounds
 // so reduce is scoped per-(key, window).
-func stateKey(r types.Record) string {
+func StateKey(r types.Record) string {
 	if ws, ok := r.Headers["window_start"]; ok {
 		we := r.Headers["window_end"]
 		return string(r.Key) + "/" + string(ws) + "/" + string(we)

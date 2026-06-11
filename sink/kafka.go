@@ -109,7 +109,7 @@ func (k *KafkaSink) Write(ctx context.Context, in <-chan types.Record) error {
 					return
 				}
 				batchMu.Lock()
-				batch = append(batch, recordToKafka(record))
+				batch = append(batch, RecordToKafka(record))
 				batchMu.Unlock()
 			case <-deadline.C:
 				return
@@ -135,7 +135,7 @@ func (k *KafkaSink) Write(ctx context.Context, in <-chan types.Record) error {
 			}
 
 			batchMu.Lock()
-			batch = append(batch, recordToKafka(record))
+			batch = append(batch, RecordToKafka(record))
 			full := len(batch) >= 100
 			batchMu.Unlock()
 
@@ -146,8 +146,8 @@ func (k *KafkaSink) Write(ctx context.Context, in <-chan types.Record) error {
 	}
 }
 
-// recordToKafka converts a mailer.Record to a kafka.Message.
-func recordToKafka(r types.Record) kafka.Message {
+// RecordToKafka converts a mailer.Record to a kafka.Message.
+func RecordToKafka(r types.Record) kafka.Message {
 	var ts time.Time
 	if !r.Timestamp.IsZero() {
 		ts = r.Timestamp

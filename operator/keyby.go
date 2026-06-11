@@ -76,7 +76,7 @@ func (op *KeyByOperator) Process(in <-chan types.Record, out chan<- types.Record
 			}
 		} else {
 			record.Key = op.Fn(record)
-			idx := partition(record.Key, op.Partitions)
+			idx := Partition(record.Key, op.Partitions)
 			partChs[idx] <- record
 		}
 	}
@@ -91,10 +91,10 @@ func (op *KeyByOperator) Process(in <-chan types.Record, out chan<- types.Record
 	}
 }
 
-// partition returns the partition index for a given key using FNV-1a hash.
+// Partition returns the partition index for a given key using FNV-1a hash.
 // This is fast, has good distribution, and is deterministic — same key always
 // maps to the same partition.
-func partition(key []byte, numPartitions int) int {
+func Partition(key []byte, numPartitions int) int {
 	if len(key) == 0 || numPartitions <= 1 {
 		return 0
 	}

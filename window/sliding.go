@@ -37,7 +37,7 @@ func (s *Sliding) WithOffset(offset time.Duration) *Sliding {
 func (s *Sliding) AssignWindows(timestamp time.Time) []Window {
 	// Find the last window that could contain this timestamp,
 	// then walk backwards by slide intervals to find all overlapping windows.
-	lastStart := windowStart(timestamp, s.slide, s.offset)
+	lastStart := WindowStart(timestamp, s.slide, s.offset)
 
 	var windows []Window
 

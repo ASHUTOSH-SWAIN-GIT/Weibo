@@ -46,19 +46,19 @@ vet: ## Run go vet on all packages
 
 .PHONY: test
 test: ## Run all unit tests
-	$(GO) test $(PKG)
+	$(GO) test ./test/unit_tests/...
 
 .PHONY: test-race
 test-race: ## Run tests with the race detector
-	$(GO) test -race $(PKG)
+	$(GO) test -race ./test/unit_tests/...
 
 .PHONY: test-window
 test-window: ## Run tests for windowing/watermark packages
-	$(GO) test -race ./window/... ./watermark/...
+	$(GO) test -race ./test/unit_tests/window/... ./test/unit_tests/watermark/...
 
 .PHONY: test-coverage
 test-coverage: ## Run all tests with coverage profile
-	$(GO) test -coverprofile=$(COVER_FILE) $(PKG)
+	$(GO) test -coverpkg=./... -coverprofile=$(COVER_FILE) ./test/unit_tests/...
 	@$(GO) tool cover -func=$(COVER_FILE) | tail -1
 
 .PHONY: coverage-html
