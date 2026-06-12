@@ -154,20 +154,67 @@ func (op *WindowOperator) flushRemaining(out chan<- types.Record) {
 }
 
 // handleDataRecord assigns the record to one or more windows and buffers it.
+// For session windows, overlapping sessions for the same key are merged
+// (the window bounds expand and records are collected into one entry).
 func (op *WindowOperator) handleDataRecord(record types.Record) {
 	wins := op.Assigner.AssignWindows(record.Timestamp)
 	for _, win := range wins {
-		key := toWindowKey(string(record.Key), win)
-		ws, ok := op.windows[key]
-		if !ok {
-			ws = &windowState{
-				Win:     win,
-				Records: make([]recordJSON, 0),
-			}
-			op.windows[key] = ws
-		}
-		ws.Records = append(ws.Records, recordToJSON(record))
+		op.assignToWindow(string(record.Key), win, recordToJSON(record))
 	}
+}
+
+// assignToWindow places a record into the appropriate window, merging
+// overlapping session windows for the same key when bounds change.
+// For tumbling and sliding windows, records are assigned to pre-aligned
+// windows that always have the same key, so no merging is needed.
+// Session windows create a unique window per record that may overlap
+// with an existing session, in which case we merge by expanding the bounds.
+func (op *WindowOperator) assignToWindow(key string, win window.Window, rec recordJSON) {
+	wk := toWindowKey(key, win)
+
+	// Fast path: the exact window key exists, just append the record.
+	if ws, ok := op.windows[wk]; ok {
+		ws.Records = append(ws.Records, rec)
+		return
+	}
+
+	// For session windows, check if the new window overlaps with an existing
+	// session for the same key and merge them.
+	if op.Assigner.IsSession() {
+		for existingKey, existingWs := range op.windows {
+			if existingKey.Key != key {
+				continue
+			}
+			if win.Start.Before(existingWs.Win.End) && win.End.After(existingWs.Win.Start) {
+				newStart := existingWs.Win.Start
+				newEnd := existingWs.Win.End
+				if win.Start.Before(newStart) {
+					newStart = win.Start
+				}
+				if win.End.After(newEnd) {
+					newEnd = win.End
+				}
+
+				existingWs.Win = window.Window{Start: newStart, End: newEnd}
+				existingWs.Records = append(existingWs.Records, rec)
+
+				// Re-key since bounds changed.
+				newWk := toWindowKey(key, existingWs.Win)
+				if newWk != existingKey {
+					op.windows[newWk] = existingWs
+					delete(op.windows, existingKey)
+				}
+				return
+			}
+		}
+	}
+
+	// No existing window: create a new one.
+	ws := &windowState{
+		Win:     win,
+		Records: []recordJSON{rec},
+	}
+	op.windows[wk] = ws
 }
 
 // handleWatermark advances the watermark and fires all windows whose

@@ -40,6 +40,9 @@ func (s *Session) WindowSize() time.Duration {
 	return s.gap
 }
 
+// IsSession returns true — session windows merge when overlapping.
+func (s *Session) IsSession() bool { return true }
+
 // MergeSessions merges overlapping or adjacent session windows.
 // Two sessions overlap if sessionA.End > sessionB.Start (or vice versa).
 // Returns the merged window if they overlap, or both windows if they don't.

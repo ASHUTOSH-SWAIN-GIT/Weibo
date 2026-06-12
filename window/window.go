@@ -23,4 +23,9 @@ type WindowAssigner interface {
 
 	// WindowSize returns the duration of a single window.
 	WindowSize() time.Duration
+
+	// IsSession returns true if this assigner creates session windows.
+	// Session windows need merging when records arrive within the gap;
+	// other window types have fixed boundaries and don't merge.
+	IsSession() bool
 }

@@ -39,6 +39,9 @@ func (t *Tumbling) WindowSize() time.Duration {
 	return t.size
 }
 
+// IsSession returns false — tumbling windows have fixed boundaries.
+func (t *Tumbling) IsSession() bool { return false }
+
 // WindowStart calculates the start of the window that contains the given
 // timestamp, accounting for offset alignment.
 func WindowStart(ts time.Time, size, offset time.Duration) time.Time {

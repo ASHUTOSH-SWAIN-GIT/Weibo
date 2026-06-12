@@ -69,3 +69,6 @@ func (s *Sliding) AssignWindows(timestamp time.Time) []Window {
 func (s *Sliding) WindowSize() time.Duration {
 	return s.size
 }
+
+// IsSession returns false — sliding windows have fixed boundaries.
+func (s *Sliding) IsSession() bool { return false }
