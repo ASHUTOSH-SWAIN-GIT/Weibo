@@ -36,3 +36,11 @@ func (s *StdoutSink) Write(ctx context.Context, in <-chan types.Record) error {
 		}
 	}
 }
+
+// Describe returns metadata for the dashboard.
+func (s *StdoutSink) Describe() SinkInfo {
+	return SinkInfo{
+		Type:  "Stdout",
+		Props: map[string]string{},
+	}
+}
