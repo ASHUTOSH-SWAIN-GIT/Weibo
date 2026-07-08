@@ -40,6 +40,7 @@ func main() {
 		source.KafkaGroupID(groupID),
 		source.KafkaStartFrom(source.OffsetEarliest),
 		source.KafkaWithWatermarks(1*time.Second),
+		source.KafkaDeserialize(source.NewJSONDeserializer[Order]()),
 	)
 
 	kafkaSink := sink.NewKafkaSink(sink.KafkaSinkConfig{
@@ -50,7 +51,6 @@ func main() {
 	env.
 		FromSource(src).
 		Map(parseOrder).
-		Filter(isValidOrder).
 		KeyBy(func(r types.Record) []byte { return r.Key }).
 		Window(window.NewTumbling(windowSize)).
 		Reduce(sumAmount).
@@ -66,12 +66,12 @@ func main() {
 	}
 }
 
-// parseOrder decodes a JSON-encoded Order from record.Value and stores
+// parseOrder extracts the deserialized Order from record.Parsed and stores
 // the amount as big-endian uint64 in Value, with Customer as Key.
+// Invalid JSON is already dropped by the deserializer in the source.
 func parseOrder(r types.Record) types.Record {
-	var o Order
-	if err := json.Unmarshal(r.Value, &o); err != nil {
-		// Mark as invalid by clearing the value; isValidOrder will filter it out.
+	o, ok := r.Parsed.(*Order)
+	if !ok || o == nil {
 		return types.Record{Key: nil, Value: nil, Timestamp: r.Timestamp, Offset: r.Offset}
 	}
 	buf := make([]byte, 8)
@@ -82,11 +82,6 @@ func parseOrder(r types.Record) types.Record {
 		Timestamp: r.Timestamp,
 		Offset:    r.Offset,
 	}
-}
-
-// isValidOrder filters out records that failed to parse.
-func isValidOrder(r types.Record) bool {
-	return len(r.Key) > 0 && len(r.Value) == 8
 }
 
 // sumAmount sums order amounts per (customer, window).

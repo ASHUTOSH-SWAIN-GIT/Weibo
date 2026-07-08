@@ -91,15 +91,14 @@ func NewKafkaSource(opts ...KafkaSourceOption) *KafkaSource {
 // to a WatermarkSource wrapping this source — callers always get a
 // watermark-aware stream when the option is present.
 func (k *KafkaSource) Run(ctx context.Context, out chan<- types.Record) error {
-	// If watermarking is enabled, delegate to a WatermarkSource.
+	// If watermarking is enabled, delegate to a WatermarkSource that wraps
+	// the raw fetch loop (via kafkaSourceRunner) to avoid recursion.
 	if k.cfg.watermarkOutOfOrderness > 0 {
 		ws := &WatermarkSource{
-			Source:    k, // k.Run would recurse; use runOnce instead.
+			Source:    &kafkaSourceRunner{k},
 			Generator: watermark.NewBoundedOutOfOrderness(k.cfg.watermarkOutOfOrderness),
 			Interval:  k.cfg.watermarkInterval,
 		}
-		// Override Source.Run to use the inner fetch loop (avoid infinite recursion).
-		ws.Source = &kafkaSourceRunner{k}
 		return ws.Run(ctx, out)
 	}
 	return k.runOnce(ctx, out)
