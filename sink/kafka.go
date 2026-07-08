@@ -7,8 +7,8 @@ import (
 	"sync"
 	"time"
 
-	"mailer/auth"
-	"mailer/types"
+	"github.com/ASHUTOSH-SWAIN-GIT/mailer/auth"
+	"github.com/ASHUTOSH-SWAIN-GIT/mailer/types"
 
 	"github.com/segmentio/kafka-go"
 )

@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"mailer/operator"
-	"mailer/types"
+	"github.com/ASHUTOSH-SWAIN-GIT/mailer/operator"
+	"github.com/ASHUTOSH-SWAIN-GIT/mailer/types"
 )
 
 func TestMapOperator_BasicTransform(t *testing.T) {

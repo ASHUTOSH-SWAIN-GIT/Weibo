@@ -3,7 +3,7 @@ package sink
 import (
 	"context"
 
-	"mailer/types"
+	"github.com/ASHUTOSH-SWAIN-GIT/mailer/types"
 )
 
 // Sink is where processed data leaves the pipeline.

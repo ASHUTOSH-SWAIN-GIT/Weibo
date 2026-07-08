@@ -3,7 +3,7 @@ package source
 import (
 	"context"
 
-	"mailer/types"
+	"github.com/ASHUTOSH-SWAIN-GIT/mailer/types"
 )
 
 // Source is where data enters the pipeline.

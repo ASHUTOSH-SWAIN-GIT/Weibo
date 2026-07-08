@@ -11,7 +11,7 @@ import (
 
 	"github.com/gorilla/websocket"
 
-	"mailer"
+	"github.com/ASHUTOSH-SWAIN-GIT/mailer"
 )
 
 //go:embed static/*

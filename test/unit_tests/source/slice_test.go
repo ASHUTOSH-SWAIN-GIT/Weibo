@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"mailer/source"
-	"mailer/types"
+	"github.com/ASHUTOSH-SWAIN-GIT/mailer/source"
+	"github.com/ASHUTOSH-SWAIN-GIT/mailer/types"
 )
 
 func TestSliceSource_Empty(t *testing.T) {

@@ -8,8 +8,8 @@ import (
 
 	"github.com/segmentio/kafka-go"
 
-	"mailer/types"
-	"mailer/watermark"
+	"github.com/ASHUTOSH-SWAIN-GIT/mailer/types"
+	"github.com/ASHUTOSH-SWAIN-GIT/mailer/watermark"
 )
 
 // KafkaSource reads records from one or more Kafka topics using a consumer group.

@@ -5,11 +5,11 @@ import (
 	"fmt"
 	"time"
 
-	"mailer/checkpoint"
-	"mailer/operator"
-	"mailer/sink"
-	"mailer/source"
-	"mailer/types"
+	"github.com/ASHUTOSH-SWAIN-GIT/mailer/checkpoint"
+	"github.com/ASHUTOSH-SWAIN-GIT/mailer/operator"
+	"github.com/ASHUTOSH-SWAIN-GIT/mailer/sink"
+	"github.com/ASHUTOSH-SWAIN-GIT/mailer/source"
+	"github.com/ASHUTOSH-SWAIN-GIT/mailer/types"
 )
 
 // StreamExecutionEnv is the entry point for building and running stream pipelines.

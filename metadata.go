@@ -4,9 +4,9 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"mailer/operator"
-	"mailer/sink"
-	"mailer/source"
+	"github.com/ASHUTOSH-SWAIN-GIT/mailer/operator"
+	"github.com/ASHUTOSH-SWAIN-GIT/mailer/sink"
+	"github.com/ASHUTOSH-SWAIN-GIT/mailer/source"
 )
 
 // PipelineInfo is the JSON-serializable description of a pipeline.

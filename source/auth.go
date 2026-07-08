@@ -3,7 +3,7 @@ package source
 import (
 	"fmt"
 
-	"mailer/auth"
+	"github.com/ASHUTOSH-SWAIN-GIT/mailer/auth"
 
 	"github.com/segmentio/kafka-go"
 )

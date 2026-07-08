@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"time"
 
-	"mailer/types"
-	"mailer/window"
+	"github.com/ASHUTOSH-SWAIN-GIT/mailer/types"
+	"github.com/ASHUTOSH-SWAIN-GIT/mailer/window"
 )
 
 // WindowOperator buffers records into time-based windows and fires them

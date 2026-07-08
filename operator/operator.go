@@ -1,6 +1,6 @@
 package operator
 
-import "mailer/types"
+import "github.com/ASHUTOSH-SWAIN-GIT/mailer/types"
 
 // Operator transforms an input stream into an output stream.
 // Each operator reads from an input channel, applies a transformation,

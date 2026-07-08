@@ -10,11 +10,11 @@ import (
 	"syscall"
 	"time"
 
-	"mailer"
-	"mailer/sink"
-	"mailer/source"
-	"mailer/types"
-	"mailer/window"
+	"github.com/ASHUTOSH-SWAIN-GIT/mailer"
+	"github.com/ASHUTOSH-SWAIN-GIT/mailer/sink"
+	"github.com/ASHUTOSH-SWAIN-GIT/mailer/source"
+	"github.com/ASHUTOSH-SWAIN-GIT/mailer/types"
+	"github.com/ASHUTOSH-SWAIN-GIT/mailer/window"
 )
 
 type Order struct {

@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"mailer/types"
+	"github.com/ASHUTOSH-SWAIN-GIT/mailer/types"
 )
 
 // StdoutSink prints each record to stdout in a human-readable format.
