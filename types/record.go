@@ -31,6 +31,12 @@ type Record struct {
 	// Headers carry optional metadata (e.g. Kafka headers, trace IDs).
 	Headers map[string][]byte
 
+	// Parsed holds an optionally-deserialized view of Value.
+	// It is nil unless a Deserializer is configured on the source.
+	// Value always carries the raw bytes; Parsed is a convenience for
+	// operators that want to work with a typed payload.
+	Parsed any
+
 	// IsWatermark marks this record as a watermark marker instead of data.
 	// Watermarks have no Key or Value — they only carry a Timestamp.
 	// Operators use watermarks to know when windows can close.

@@ -11,13 +11,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/segmentio/kafka-go"
-
 	"mailer"
 	"mailer/sink"
 	"mailer/source"
 	"mailer/types"
-	"mailer/watermark"
 	"mailer/window"
 )
 
@@ -37,17 +34,12 @@ func main() {
 
 	env := mailer.NewEnv()
 
-	src := source.NewKafkaSource(source.KafkaConfig{
-		Brokers:     []string{brokers},
-		Topic:       inputTopic,
-		GroupID:     groupID,
-		StartOffset: kafka.FirstOffset,
-	})
-
-	wmSrc := source.NewWatermarkSource(
-		src,
-		watermark.NewBoundedOutOfOrderness(1*time.Second),
-		500*time.Millisecond,
+	src := source.NewKafkaSource(
+		source.KafkaBrokers(brokers),
+		source.KafkaTopic(inputTopic),
+		source.KafkaGroupID(groupID),
+		source.KafkaStartFrom(source.OffsetEarliest),
+		source.KafkaWithWatermarks(1*time.Second),
 	)
 
 	kafkaSink := sink.NewKafkaSink(sink.KafkaSinkConfig{
@@ -56,7 +48,7 @@ func main() {
 	})
 
 	env.
-		FromSource(wmSrc).
+		FromSource(src).
 		Map(parseOrder).
 		Filter(isValidOrder).
 		KeyBy(func(r types.Record) []byte { return r.Key }).
