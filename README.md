@@ -186,11 +186,13 @@ import (
 func main() {
     env := mailer.NewEnv()
 
-    kafkaSource := source.NewKafkaSource(source.KafkaConfig{
-        Brokers: []string{"localhost:9092"},
-        Topic:   "orders",
-        GroupID: "order-processor",
-    })
+    kafkaSource := source.NewKafkaSource(
+        source.KafkaBrokers("localhost:9092"),
+        source.KafkaTopic("orders"),
+        source.KafkaGroupID("order-processor"),
+        source.KafkaStartFrom(source.OffsetEarliest),
+        source.KafkaWithWatermarks(1 * time.Second),
+    )
 
     kafkaSink := sink.NewKafkaSink(sink.KafkaSinkConfig{
         Brokers: []string{"localhost:9092"},
