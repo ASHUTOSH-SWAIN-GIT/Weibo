@@ -57,7 +57,8 @@ Where results leave the pipeline. A Sink receives processed Records and writes t
 
 | Sink | Description |
 |--------|-------------|
-| `KafkaSink` | Produces to a Kafka topic |
+| `KafkaSink` | Produces to a Kafka topic (SASL/TLS, batch writes, serializer) |
+| `PostgresSink` | Batch inserts into Postgres tables (pgx, retry, full mapper) |
 | `StdoutSink` | Prints records to stdout (debugging) |
 | `BlackholeSink` | Discards everything (benchmarking) |
 
@@ -270,12 +271,21 @@ mailer/
 │   └── memory.go          # In-memory state backend
 ├── source/
 │   ├── source.go          # Source interface
-│   ├── kafka.go           # Kafka source (using confluent-kafka-go / sarama)
+│   ├── kafka.go           # Kafka source (using segmentio/kafka-go)
+│   ├── kafka_options.go   # Kafka source functional options
+│   ├── kafka_offset.go    # Mailer offset enum (no kafka-go leak)
+│   ├── deserialize.go     # Deserializer interface + JSON impl
+│   ├── watermark.go       # WatermarkSource wrapper
 │   └── generator.go       # Test data generator source
 ├── sink/
 │   ├── sink.go            # Sink interface
-│   ├── kafka.go           # Kafka sink
-│   └── stdout.go          # Stdout sink
+│   ├── kafka.go           # Kafka sink (options-based, SASL/TLS, serializer)
+│   ├── kafka_options.go   # Kafka sink functional options
+│   ├── serialize.go       # Serializer interface + JSON impl
+│   ├── postgres.go        # Postgres sink (pgx, batch insert, retry)
+│   ├── postgres_options.go # Postgres sink functional options
+│   ├── stdout.go          # Stdout sink
+│   └── blackhole.go       # Blackhole sink (benchmarking)
 ├── checkpoint/
 │   ├── checkpoint.go      # CheckpointManager, barrier injection
 │   └── store.go           # Checkpoint storage (file / memory)
