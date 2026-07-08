@@ -12,10 +12,10 @@ import (
 // PipelineInfo is the JSON-serializable description of a pipeline.
 // It is returned by Describe() and consumed by the dashboard.
 type PipelineInfo struct {
-	Source     source.SourceInfo   `json:"source"`
-	Operators  []OperatorInfo      `json:"operators"`
-	Sink       sink.SinkInfo       `json:"sink"`
-	Checkpoint *CheckpointInfo     `json:"checkpoint,omitempty"`
+	Source     source.SourceInfo `json:"source"`
+	Operators  []OperatorInfo    `json:"operators"`
+	Sink       sink.SinkInfo     `json:"sink"`
+	Checkpoint *CheckpointInfo   `json:"checkpoint,omitempty"`
 }
 
 // OperatorInfo describes a single operator in the pipeline chain.

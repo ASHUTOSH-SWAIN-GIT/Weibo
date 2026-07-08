@@ -22,8 +22,8 @@ type Describable interface {
 
 // SourceInfo holds display metadata about a source.
 type SourceInfo struct {
-	Type     string            `json:"type"`
-	Props    map[string]string `json:"props"`
+	Type  string            `json:"type"`
+	Props map[string]string `json:"props"`
 }
 
 // CheckpointSource is an optional interface that Sources can implement

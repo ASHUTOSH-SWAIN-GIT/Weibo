@@ -32,7 +32,7 @@ type WindowOperator struct {
 	Label            string
 }
 
-func (op *WindowOperator) Name() string    { return "Window" }
+func (op *WindowOperator) Name() string     { return "Window" }
 func (op *WindowOperator) GetLabel() string { return op.Label }
 
 // windowKey uniquely identifies a window by key + start + end times

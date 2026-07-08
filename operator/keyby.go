@@ -32,7 +32,7 @@ func KeyBy(fn func(types.Record) []byte) *KeyByOperator {
 	}
 }
 
-func (op *KeyByOperator) Name() string    { return "KeyBy" }
+func (op *KeyByOperator) Name() string     { return "KeyBy" }
 func (op *KeyByOperator) GetLabel() string { return op.Label }
 
 // WithPartitions sets the number of partitions and returns the operator

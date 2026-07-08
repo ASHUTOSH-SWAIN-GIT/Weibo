@@ -15,7 +15,7 @@ func FlatMap(fn func(types.Record) []types.Record) *FlatMapOperator {
 	return &FlatMapOperator{Fn: fn}
 }
 
-func (op *FlatMapOperator) Name() string    { return "FlatMap" }
+func (op *FlatMapOperator) Name() string     { return "FlatMap" }
 func (op *FlatMapOperator) GetLabel() string { return op.Label }
 
 // Process reads each record from in, applies the flat map function,

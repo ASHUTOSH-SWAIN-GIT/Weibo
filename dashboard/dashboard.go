@@ -2,8 +2,8 @@ package dashboard
 
 import (
 	"context"
-	"encoding/json"
 	"embed"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"sync"
@@ -42,11 +42,11 @@ type Server struct {
 
 // Status is pushed to the dashboard via WebSocket.
 type Status struct {
-	Running   bool   `json:"running"`
-	Uptime    string `json:"uptime"`
-	RecordsIn int64  `json:"records_in"`
-	RecordsOut int64 `json:"records_out"`
-	Error     string `json:"error,omitempty"`
+	Running    bool   `json:"running"`
+	Uptime     string `json:"uptime"`
+	RecordsIn  int64  `json:"records_in"`
+	RecordsOut int64  `json:"records_out"`
+	Error      string `json:"error,omitempty"`
 }
 
 // NewServer creates a dashboard server that serves the pipeline UI
@@ -57,8 +57,8 @@ type Status struct {
 // the server so the dashboard can display the full pipeline graph.
 func NewServer(env *mailer.StreamExecutionEnv, addr string) *Server {
 	return &Server{
-		env:    env,
-		addr:   addr,
+		env:     env,
+		addr:    addr,
 		started: time.Now(),
 	}
 }
