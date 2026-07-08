@@ -1,6 +1,10 @@
 package source
 
-import "time"
+import (
+	"time"
+
+	"mailer/auth"
+)
 
 // kafkaSourceConfig holds the resolved configuration for a KafkaSource.
 // It is populated by KafkaSourceOption functions and read by NewKafkaSource.
@@ -15,8 +19,8 @@ type kafkaSourceConfig struct {
 	commitBatch int // 0 = commit per message
 
 	// Phase 2 (SASL/TLS) — populated by auth options.
-	sasl *SASLConfig
-	tls  *TLSConfig
+	sasl *auth.SASLConfig
+	tls  *auth.TLSConfig
 
 	// Phase 3 (watermarks / deserialize).
 	watermarkOutOfOrderness time.Duration
@@ -78,12 +82,12 @@ func KafkaCommitBatch(n int) KafkaSourceOption {
 // --- Phase 2 options (forward declarations; bodies in auth.go) ---
 
 // KafkaSASL enables SASL authentication on the Kafka connection.
-func KafkaSASL(cfg SASLConfig) KafkaSourceOption {
+func KafkaSASL(cfg auth.SASLConfig) KafkaSourceOption {
 	return func(c *kafkaSourceConfig) { c.sasl = &cfg }
 }
 
 // KafkaTLS enables TLS on the Kafka connection.
-func KafkaTLS(cfg TLSConfig) KafkaSourceOption {
+func KafkaTLS(cfg auth.TLSConfig) KafkaSourceOption {
 	return func(c *kafkaSourceConfig) { c.tls = &cfg }
 }
 
