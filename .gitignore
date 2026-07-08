@@ -30,3 +30,12 @@ go.work.sum
 # Editor/IDE
 # .idea/
 # .vscode/
+
+# Playwright MCP artifacts
+.playwright-mcp/
+
+# Screenshots
+screenshots/
+
+# Demo binaries
+dashboard-demo
