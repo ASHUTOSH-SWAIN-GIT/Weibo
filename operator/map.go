@@ -15,7 +15,7 @@ func Map(fn func(types.Record) types.Record) *MapOperator {
 	return &MapOperator{Fn: fn}
 }
 
-func (op *MapOperator) Name() string { return "Map" }
+func (op *MapOperator) Name() string     { return "Map" }
 func (op *MapOperator) GetLabel() string { return op.Label }
 
 // Process reads each record from in, applies the map function, and

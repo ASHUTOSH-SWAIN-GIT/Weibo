@@ -57,7 +57,7 @@ func Reduce(fn ReduceFn) *ReduceOperator {
 	}
 }
 
-func (op *ReduceOperator) Name() string    { return "Reduce" }
+func (op *ReduceOperator) Name() string     { return "Reduce" }
 func (op *ReduceOperator) GetLabel() string { return op.Label }
 
 // Process reads each record, applies the reduce function with per-key state,
