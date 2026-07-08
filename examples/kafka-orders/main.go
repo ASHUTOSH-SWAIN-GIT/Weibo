@@ -43,10 +43,10 @@ func main() {
 		source.KafkaDeserialize(source.NewJSONDeserializer[Order]()),
 	)
 
-	kafkaSink := sink.NewKafkaSink(sink.KafkaSinkConfig{
-		Brokers: []string{brokers},
-		Topic:   outputTopic,
-	})
+	kafkaSink := sink.NewKafkaSink(
+		sink.KafkaSinkBrokers(brokers),
+		sink.KafkaSinkTopic(outputTopic),
+	)
 
 	env.
 		FromSource(src).
