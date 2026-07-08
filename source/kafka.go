@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/segmentio/kafka-go"
 
@@ -243,5 +244,33 @@ func (r *kafkaSourceRunner) Run(ctx context.Context, out chan<- types.Record) er
 var (
 	_ Source           = (*KafkaSource)(nil)
 	_ CheckpointSource = (*KafkaSource)(nil)
+	_ Describable      = (*KafkaSource)(nil)
 	_ Source           = (*kafkaSourceRunner)(nil)
 )
+
+// Describe returns metadata about this Kafka source for the dashboard.
+func (k *KafkaSource) Describe() SourceInfo {
+	props := map[string]string{
+		"brokers": strings.Join(k.cfg.brokers, ","),
+	}
+	if len(k.cfg.topics) > 0 {
+		props["topics"] = strings.Join(k.cfg.topics, ",")
+	}
+	if k.cfg.topic != "" {
+		props["topic"] = k.cfg.topic
+	}
+	if k.cfg.groupID != "" {
+		props["group_id"] = k.cfg.groupID
+	}
+	if k.cfg.watermarkOutOfOrderness > 0 {
+		props["watermarks"] = "enabled"
+	}
+	if k.cfg.deserializer != nil {
+		props["deserializer"] = "enabled"
+	}
+
+	return SourceInfo{
+		Type:  "Kafka",
+		Props: props,
+	}
+}

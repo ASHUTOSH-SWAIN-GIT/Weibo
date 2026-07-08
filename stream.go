@@ -23,29 +23,49 @@ type Stream struct {
 
 // Map applies a 1:1 transformation to each record in the stream.
 // If the function returns the zero value of Record, the record is dropped.
-func (s *Stream) Map(fn func(types.Record) types.Record) *Stream {
-	s.env.operators = append(s.env.operators, operator.Map(fn))
+// The optional label is shown in the dashboard.
+func (s *Stream) Map(fn func(types.Record) types.Record, label ...string) *Stream {
+	op := operator.Map(fn)
+	if len(label) > 0 {
+		op.Label = label[0]
+	}
+	s.env.operators = append(s.env.operators, op)
 	return s
 }
 
 // FlatMap applies a 1:many transformation to each record.
 // The function returns a slice; if empty, the record is dropped.
-func (s *Stream) FlatMap(fn func(types.Record) []types.Record) *Stream {
-	s.env.operators = append(s.env.operators, operator.FlatMap(fn))
+// The optional label is shown in the dashboard.
+func (s *Stream) FlatMap(fn func(types.Record) []types.Record, label ...string) *Stream {
+	op := operator.FlatMap(fn)
+	if len(label) > 0 {
+		op.Label = label[0]
+	}
+	s.env.operators = append(s.env.operators, op)
 	return s
 }
 
 // Filter keeps only records where fn returns true.
-func (s *Stream) Filter(fn func(types.Record) bool) *Stream {
-	s.env.operators = append(s.env.operators, operator.Filter(fn))
+// The optional label is shown in the dashboard.
+func (s *Stream) Filter(fn func(types.Record) bool, label ...string) *Stream {
+	op := operator.Filter(fn)
+	if len(label) > 0 {
+		op.Label = label[0]
+	}
+	s.env.operators = append(s.env.operators, op)
 	return s
 }
 
 // KeyBy partitions the stream by the given key selector function.
 // All records with the same key are routed together. Required before
 // stateful operations like Reduce.
-func (s *Stream) KeyBy(fn func(types.Record) []byte) *Stream {
-	s.env.operators = append(s.env.operators, operator.KeyBy(fn))
+// The optional label is shown in the dashboard.
+func (s *Stream) KeyBy(fn func(types.Record) []byte, label ...string) *Stream {
+	op := operator.KeyBy(fn)
+	if len(label) > 0 {
+		op.Label = label[0]
+	}
+	s.env.operators = append(s.env.operators, op)
 	return s
 }
 
@@ -67,8 +87,12 @@ func (s *Stream) KeyBy(fn func(types.Record) []byte) *Stream {
 //	        binary.BigEndian.PutUint64(buf, uint64(count))
 //	        return buf
 //	    })
-func (s *Stream) Reduce(fn operator.ReduceFn) *Stream {
-	s.env.operators = append(s.env.operators, operator.Reduce(fn))
+func (s *Stream) Reduce(fn operator.ReduceFn, label ...string) *Stream {
+	op := operator.Reduce(fn)
+	if len(label) > 0 {
+		op.Label = label[0]
+	}
+	s.env.operators = append(s.env.operators, op)
 	return s
 }
 
@@ -86,8 +110,12 @@ func (s *Stream) Reduce(fn operator.ReduceFn) *Stream {
 //	stream.KeyBy(func(r types.Record) []byte { return r.Key }).
 //	    Window(window.Tumbling(5 * time.Minute)).
 //	    Reduce(aggregateFn)
-func (s *Stream) Window(assigner window.WindowAssigner) *Stream {
-	s.env.operators = append(s.env.operators, operator.Window(assigner))
+func (s *Stream) Window(assigner window.WindowAssigner, label ...string) *Stream {
+	op := operator.Window(assigner)
+	if len(label) > 0 {
+		op.Label = label[0]
+	}
+	s.env.operators = append(s.env.operators, op)
 	return s
 }
 
@@ -95,8 +123,11 @@ func (s *Stream) Window(assigner window.WindowAssigner) *Stream {
 // If no records arrive within the timeout duration, all remaining
 // windows are fired and the pipeline stage completes. Useful for
 // infinite streams that don't receive shutdown signals.
-func (s *Stream) WindowWithIdleTimeout(assigner window.WindowAssigner, idleTimeout time.Duration) *Stream {
+func (s *Stream) WindowWithIdleTimeout(assigner window.WindowAssigner, idleTimeout time.Duration, label ...string) *Stream {
 	op := operator.Window(assigner).WithIdleTimeout(idleTimeout)
+	if len(label) > 0 {
+		op.Label = label[0]
+	}
 	s.env.operators = append(s.env.operators, op)
 	return s
 }

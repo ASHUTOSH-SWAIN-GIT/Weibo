@@ -20,6 +20,7 @@ const defaultPartitions = 16
 type KeyByOperator struct {
 	Fn         func(types.Record) []byte
 	Partitions int
+	Label      string
 }
 
 // KeyBy creates a KeyByOperator with the given key selector function
@@ -30,6 +31,9 @@ func KeyBy(fn func(types.Record) []byte) *KeyByOperator {
 		Partitions: defaultPartitions,
 	}
 }
+
+func (op *KeyByOperator) Name() string    { return "KeyBy" }
+func (op *KeyByOperator) GetLabel() string { return op.Label }
 
 // WithPartitions sets the number of partitions and returns the operator
 // for chaining. More partitions = more parallelism.

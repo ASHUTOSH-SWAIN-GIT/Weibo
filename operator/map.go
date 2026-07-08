@@ -6,13 +6,17 @@ import "mailer/types"
 // Every input record produces exactly one output record.
 // To conditionally drop records, use Filter before or after Map.
 type MapOperator struct {
-	Fn func(types.Record) types.Record
+	Fn    func(types.Record) types.Record
+	Label string
 }
 
 // Map creates a MapOperator with the given transformation function.
 func Map(fn func(types.Record) types.Record) *MapOperator {
 	return &MapOperator{Fn: fn}
 }
+
+func (op *MapOperator) Name() string { return "Map" }
+func (op *MapOperator) GetLabel() string { return op.Label }
 
 // Process reads each record from in, applies the map function, and
 // writes the result to out. Watermarks and barriers are passed through unchanged.

@@ -45,6 +45,7 @@ type reduceStateJSON struct {
 type ReduceOperator struct {
 	Fn      ReduceFn
 	backend state.StateBackend
+	Label   string
 }
 
 // Reduce creates a ReduceOperator with the given reduce function.
@@ -55,6 +56,9 @@ func Reduce(fn ReduceFn) *ReduceOperator {
 		backend: state.NewMemoryBackend(),
 	}
 }
+
+func (op *ReduceOperator) Name() string    { return "Reduce" }
+func (op *ReduceOperator) GetLabel() string { return op.Label }
 
 // Process reads each record, applies the reduce function with per-key state,
 // and emits the new accumulator value downstream. Watermarks and barriers are
