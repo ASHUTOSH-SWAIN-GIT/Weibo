@@ -3,7 +3,7 @@ package sink
 import (
 	"time"
 
-	"mailer/auth"
+	"github.com/ASHUTOSH-SWAIN-GIT/mailer/auth"
 )
 
 // AcksLevel controls how many broker acknowledgements the Kafka sink waits

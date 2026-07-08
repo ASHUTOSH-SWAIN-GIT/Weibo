@@ -4,8 +4,8 @@ import (
 	"testing"
 	"time"
 
-	"mailer/sink"
-	"mailer/types"
+	"github.com/ASHUTOSH-SWAIN-GIT/mailer/sink"
+	"github.com/ASHUTOSH-SWAIN-GIT/mailer/types"
 )
 
 func TestKafkaSink_ImplementsSink(t *testing.T) {

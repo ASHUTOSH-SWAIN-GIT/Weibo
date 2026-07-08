@@ -4,9 +4,9 @@ import (
 	"testing"
 	"time"
 
-	"mailer/operator"
-	"mailer/types"
-	"mailer/window"
+	"github.com/ASHUTOSH-SWAIN-GIT/mailer/operator"
+	"github.com/ASHUTOSH-SWAIN-GIT/mailer/types"
+	"github.com/ASHUTOSH-SWAIN-GIT/mailer/window"
 )
 
 func TestKeyBy_SetsKeyAndRoutes(t *testing.T) {

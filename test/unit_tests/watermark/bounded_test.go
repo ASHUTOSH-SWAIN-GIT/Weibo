@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"mailer/watermark"
+	"github.com/ASHUTOSH-SWAIN-GIT/mailer/watermark"
 )
 
 func TestBoundedOutOfOrderness_OnRecord_UpdatesMaxTimestamp(t *testing.T) {

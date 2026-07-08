@@ -3,10 +3,10 @@ package mailer
 import (
 	"time"
 
-	"mailer/operator"
-	"mailer/sink"
-	"mailer/types"
-	"mailer/window"
+	"github.com/ASHUTOSH-SWAIN-GIT/mailer/operator"
+	"github.com/ASHUTOSH-SWAIN-GIT/mailer/sink"
+	"github.com/ASHUTOSH-SWAIN-GIT/mailer/types"
+	"github.com/ASHUTOSH-SWAIN-GIT/mailer/window"
 )
 
 // Stream represents a pipeline stage. Method calls on Stream

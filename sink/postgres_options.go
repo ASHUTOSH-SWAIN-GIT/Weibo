@@ -3,7 +3,7 @@ package sink
 import (
 	"time"
 
-	"mailer/types"
+	"github.com/ASHUTOSH-SWAIN-GIT/mailer/types"
 )
 
 // RecordMapper extracts the table name, column names, and values from a Record.

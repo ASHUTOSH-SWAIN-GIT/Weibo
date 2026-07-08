@@ -1,4 +1,4 @@
-module mailer
+module github.com/ASHUTOSH-SWAIN-GIT/mailer
 
 go 1.26.2
 

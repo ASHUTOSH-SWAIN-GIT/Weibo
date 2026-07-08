@@ -9,7 +9,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"mailer/types"
+	"github.com/ASHUTOSH-SWAIN-GIT/mailer/types"
 )
 
 // PostgresSink writes records to a Postgres database in batches.

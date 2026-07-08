@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"mailer/types"
+	"github.com/ASHUTOSH-SWAIN-GIT/mailer/types"
 )
 
 // SliceSource reads records from an in-memory slice. Unlike GeneratorSource,

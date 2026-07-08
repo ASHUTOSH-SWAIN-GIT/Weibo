@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"mailer/source"
+	"github.com/ASHUTOSH-SWAIN-GIT/mailer/source"
 
 	"github.com/segmentio/kafka-go"
 )

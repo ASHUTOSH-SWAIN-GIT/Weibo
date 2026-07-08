@@ -6,12 +6,12 @@ import (
 	"fmt"
 	"time"
 
-	"mailer"
-	"mailer/sink"
-	"mailer/source"
-	"mailer/types"
-	"mailer/watermark"
-	"mailer/window"
+	"github.com/ASHUTOSH-SWAIN-GIT/mailer"
+	"github.com/ASHUTOSH-SWAIN-GIT/mailer/sink"
+	"github.com/ASHUTOSH-SWAIN-GIT/mailer/source"
+	"github.com/ASHUTOSH-SWAIN-GIT/mailer/types"
+	"github.com/ASHUTOSH-SWAIN-GIT/mailer/watermark"
+	"github.com/ASHUTOSH-SWAIN-GIT/mailer/window"
 )
 
 func main() {

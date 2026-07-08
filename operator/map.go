@@ -1,6 +1,6 @@
 package operator
 
-import "mailer/types"
+import "github.com/ASHUTOSH-SWAIN-GIT/mailer/types"
 
 // MapOperator applies a 1:1 transformation to each record.
 // Every input record produces exactly one output record.

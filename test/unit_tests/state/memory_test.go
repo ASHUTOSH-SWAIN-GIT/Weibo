@@ -3,7 +3,7 @@ package state_test
 import (
 	"testing"
 
-	"mailer/state"
+	"github.com/ASHUTOSH-SWAIN-GIT/mailer/state"
 )
 
 func TestMemoryBackend_ValueState_GetSet(t *testing.T) {

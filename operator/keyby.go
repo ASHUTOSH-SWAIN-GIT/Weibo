@@ -4,7 +4,7 @@ import (
 	"hash/fnv"
 	"sync"
 
-	"mailer/types"
+	"github.com/ASHUTOSH-SWAIN-GIT/mailer/types"
 )
 
 const defaultPartitions = 16

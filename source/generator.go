@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"mailer/types"
+	"github.com/ASHUTOSH-SWAIN-GIT/mailer/types"
 )
 
 // GeneratorSource produces a fixed slice of records and then closes.

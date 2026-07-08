@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"mailer/types"
+	"github.com/ASHUTOSH-SWAIN-GIT/mailer/types"
 )
 
 func TestNewRecord(t *testing.T) {

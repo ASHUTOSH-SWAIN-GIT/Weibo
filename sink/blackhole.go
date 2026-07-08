@@ -3,7 +3,7 @@ package sink
 import (
 	"context"
 
-	"mailer/types"
+	"github.com/ASHUTOSH-SWAIN-GIT/mailer/types"
 )
 
 // BlackholeSink discards all records. Used for benchmarking pipeline throughput
