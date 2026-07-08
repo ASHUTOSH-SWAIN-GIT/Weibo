@@ -3,6 +3,7 @@ package sink
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -248,3 +249,22 @@ func RecordToKafka(r types.Record) kafka.Message {
 
 // Compile-time check.
 var _ Sink = (*KafkaSink)(nil)
+
+// Describe returns metadata about this Kafka sink for the dashboard.
+func (k *KafkaSink) Describe() SinkInfo {
+	props := map[string]string{
+		"brokers": strings.Join(k.cfg.brokers, ","),
+		"topic":   k.cfg.topic,
+	}
+	if k.cfg.serializer != nil {
+		props["serializer"] = "enabled"
+	}
+	if k.cfg.async {
+		props["async"] = "true"
+	}
+
+	return SinkInfo{
+		Type:  "Kafka",
+		Props: props,
+	}
+}

@@ -6,13 +6,17 @@ import "mailer/types"
 // The function returns a slice of records. If the slice is empty,
 // the input record is effectively filtered out.
 type FlatMapOperator struct {
-	Fn func(types.Record) []types.Record
+	Fn    func(types.Record) []types.Record
+	Label string
 }
 
 // FlatMap creates a FlatMapOperator with the given transformation function.
 func FlatMap(fn func(types.Record) []types.Record) *FlatMapOperator {
 	return &FlatMapOperator{Fn: fn}
 }
+
+func (op *FlatMapOperator) Name() string    { return "FlatMap" }
+func (op *FlatMapOperator) GetLabel() string { return op.Label }
 
 // Process reads each record from in, applies the flat map function,
 // and writes each result record to out. Watermarks and barriers are passed through unchanged.

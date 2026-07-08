@@ -14,6 +14,18 @@ type Source interface {
 	Run(ctx context.Context, out chan<- types.Record) error
 }
 
+// Describable is an optional interface that Sources can implement
+// to expose metadata for the dashboard.
+type Describable interface {
+	Describe() SourceInfo
+}
+
+// SourceInfo holds display metadata about a source.
+type SourceInfo struct {
+	Type     string            `json:"type"`
+	Props    map[string]string `json:"props"`
+}
+
 // CheckpointSource is an optional interface that Sources can implement
 // to support checkpointing. When the CheckpointCoordinator needs to
 // create a checkpoint, it asks the source to save its current offset

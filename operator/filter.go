@@ -4,7 +4,8 @@ import "mailer/types"
 
 // FilterOperator keeps records that match the predicate and drops the rest.
 type FilterOperator struct {
-	Fn func(types.Record) bool
+	Fn    func(types.Record) bool
+	Label string
 }
 
 // Filter creates a FilterOperator with the given predicate.
@@ -12,6 +13,9 @@ type FilterOperator struct {
 func Filter(fn func(types.Record) bool) *FilterOperator {
 	return &FilterOperator{Fn: fn}
 }
+
+func (op *FilterOperator) Name() string    { return "Filter" }
+func (op *FilterOperator) GetLabel() string { return op.Label }
 
 // Process reads each record from in and writes it to out only if the
 // predicate returns true. Watermarks and barriers are always passed through.

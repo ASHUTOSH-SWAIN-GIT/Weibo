@@ -7,7 +7,17 @@ import "mailer/types"
 // and writes to an output channel. The output channel must be closed
 // when the operator is done processing.
 type Operator interface {
+	// Name returns the operator type name (e.g. "Map", "Filter", "Window").
+	// Used by the dashboard to display the pipeline graph.
+	Name() string
+
 	Process(in <-chan types.Record, out chan<- types.Record)
+}
+
+// Labeled operators carry a user-provided label for display in the dashboard.
+// If no label is set, the dashboard falls back to Name().
+type Labeled interface {
+	GetLabel() string
 }
 
 // Snapshotable operators can snapshot and restore their internal state.
