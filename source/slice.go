@@ -2,6 +2,7 @@ package source
 
 import (
 	"context"
+	"fmt"
 
 	"mailer/types"
 )
@@ -32,4 +33,14 @@ func (s *SliceSource) Run(ctx context.Context, out chan<- types.Record) error {
 		}
 	}
 	return nil
+}
+
+// Describe returns metadata for the dashboard.
+func (s *SliceSource) Describe() SourceInfo {
+	return SourceInfo{
+		Type: "Slice",
+		Props: map[string]string{
+			"records": fmt.Sprintf("%d", len(s.records)),
+		},
+	}
 }
