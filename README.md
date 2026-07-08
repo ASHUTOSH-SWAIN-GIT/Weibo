@@ -194,10 +194,10 @@ func main() {
         source.KafkaWithWatermarks(1 * time.Second),
     )
 
-    kafkaSink := sink.NewKafkaSink(sink.KafkaSinkConfig{
-        Brokers: []string{"localhost:9092"},
-        Topic:   "order-summary",
-    })
+    kafkaSink := sink.NewKafkaSink(
+        sink.KafkaSinkBrokers("localhost:9092"),
+        sink.KafkaSinkTopic("order-summary"),
+    )
 
     env.
         FromSource(kafkaSource).

@@ -6,66 +6,118 @@ import (
 	"sync"
 	"time"
 
-	"github.com/segmentio/kafka-go"
-
+	"mailer/auth"
 	"mailer/types"
+
+	"github.com/segmentio/kafka-go"
 )
 
 // KafkaSink writes records to a single Kafka topic.
 // It implements the Sink interface for use in mailer pipelines.
 //
-// Records are read from the input channel and written to Kafka in batches
-// for efficiency. The sink respects context cancellation.
+// Configure a KafkaSink with functional options via NewKafkaSink:
+//
+//	sink := sink.NewKafkaSink(
+//	    sink.KafkaSinkBrokers("localhost:9092"),
+//	    sink.KafkaSinkTopic("order-summary"),
+//	    sink.KafkaSinkBatchSize(200),
+//	    sink.KafkaSinkRequiredAcks(sink.AcksAll),
+//	    sink.KafkaSinkSASL(auth.SASLConfig{Mechanism: auth.SASLPlain, Username: "u", Password: "p"}),
+//	    sink.KafkaSinkSerialize(sink.NewJSONSerializer()),
+//	)
+//
+// Records are written in batches for efficiency. On context cancellation,
+// the sink drains remaining records for up to 5 seconds before flushing.
 //
 // mailer.Record fields are mapped to kafka.Message as follows:
-//   - Key     → Message.Key
-//   - Value   → Message.Value
-//   - Timestamp → Message.Time
-//   - Headers → Message.Headers
+//   - Key       -> Message.Key
+//   - Value     -> Message.Value (or serializer output if configured)
+//   - Timestamp -> Message.Time
+//   - Headers   -> Message.Headers
 type KafkaSink struct {
-	Writer *kafka.Writer
-}
-
-// KafkaConfig configures a Kafka producer.
-type KafkaSinkConfig struct {
-	Brokers      []string      // e.g. []string{"localhost:9092"}
-	Topic        string        // destination topic
-	BatchSize    int           // max messages per batch (default 100)
-	BatchTimeout time.Duration // max time to wait before flushing partial batch (default 1s)
+	cfg    kafkaSinkConfig
+	writer *kafka.Writer
 }
 
 // NewKafkaSink creates a Sink that writes to a Kafka topic.
-func NewKafkaSink(cfg KafkaSinkConfig) *KafkaSink {
-	if cfg.BatchSize == 0 {
-		cfg.BatchSize = 100
+// Brokers and Topic are required; if missing, NewKafkaSink panics.
+func NewKafkaSink(opts ...KafkaSinkOption) *KafkaSink {
+	cfg := kafkaSinkConfig{}
+	for _, opt := range opts {
+		opt(&cfg)
 	}
-	if cfg.BatchTimeout == 0 {
-		cfg.BatchTimeout = time.Second
+	cfg.applyDefaults()
+
+	if len(cfg.brokers) == 0 {
+		panic("mailer/sink: KafkaSink requires KafkaSinkBrokers(...)")
+	}
+	if cfg.topic == "" {
+		panic("mailer/sink: KafkaSink requires KafkaSinkTopic(...)")
 	}
 
 	w := &kafka.Writer{
-		Addr:         kafka.TCP(cfg.Brokers...),
-		Topic:        cfg.Topic,
-		Balancer:     &kafka.Hash{}, // route by key for partition affinity
-		BatchSize:    cfg.BatchSize,
-		BatchTimeout: cfg.BatchTimeout,
-		RequiredAcks: kafka.RequireOne,
-		Async:        false,
+		Addr:         kafka.TCP(cfg.brokers...),
+		Topic:        cfg.topic,
+		Balancer:     &kafka.Hash{},
+		BatchSize:    cfg.batchSize,
+		BatchTimeout: cfg.batchTimeout,
+		RequiredAcks: toKafkaAcks(cfg.acks),
+		Async:        cfg.async,
 	}
 
-	return &KafkaSink{Writer: w}
+	// Wire SASL/TLS via Transport (kafka-go Writer uses Transport, not Dialer).
+	if cfg.sasl != nil || cfg.tls != nil {
+		w.Transport = buildTransport(cfg.sasl, cfg.tls)
+	}
+
+	return &KafkaSink{cfg: cfg, writer: w}
+}
+
+// toKafkaAcks maps the mailer AcksLevel enum to kafka-go's RequiredAcks value.
+func toKafkaAcks(level AcksLevel) kafka.RequiredAcks {
+	switch level {
+	case AcksNone:
+		return kafka.RequireNone
+	case AcksAll:
+		return kafka.RequireAll
+	default:
+		return kafka.RequireOne
+	}
+}
+
+// buildTransport constructs a kafka-go Transport with SASL and/or TLS.
+// This is the sink-side equivalent of the source's buildDialer.
+func buildTransport(saslCfg *auth.SASLConfig, tlsCfg *auth.TLSConfig) *kafka.Transport {
+	t := &kafka.Transport{}
+
+	if saslCfg != nil {
+		mechanism, err := auth.BuildSASLMechanism(*saslCfg)
+		if err != nil {
+			panic(fmt.Sprintf("mailer/sink: %v", err))
+		}
+		t.SASL = mechanism
+	}
+
+	if tlsCfg != nil {
+		tlsConf, err := auth.BuildTLSConfig(*tlsCfg)
+		if err != nil {
+			panic(fmt.Sprintf("mailer/sink: %v", err))
+		}
+		t.TLS = tlsConf
+	}
+
+	return t
 }
 
 // Write reads records from the input channel and writes them to Kafka.
-// It uses a streaming batch writer to avoid materializing all records in memory.
-//
-// On context cancellation, the sink waits up to shutdownTimeout for the
-// upstream chain to drain (so windowed/aggregated records can still be
-// written) before performing a best-effort flush and returning.
+// It batches records for efficiency. On context cancellation, the sink
+// waits up to shutdownTimeout for the upstream chain to drain so that
+// windowed/aggregated records can still be written.
 func (k *KafkaSink) Write(ctx context.Context, in <-chan types.Record) error {
-	defer k.Writer.Close()
+	defer k.writer.Close()
 
 	const shutdownTimeout = 5 * time.Second
+	const flushThreshold = 100
 
 	var (
 		batch   []kafka.Message
@@ -73,9 +125,6 @@ func (k *KafkaSink) Write(ctx context.Context, in <-chan types.Record) error {
 		wg      sync.WaitGroup
 	)
 
-	// flush writes the current batch using the given context.
-	// Caller may pass a fresh context (e.g. on shutdown) to avoid
-	// the write failing because ctx is already cancelled.
 	flush := func(flushCtx context.Context) {
 		batchMu.Lock()
 		if len(batch) == 0 {
@@ -89,16 +138,12 @@ func (k *KafkaSink) Write(ctx context.Context, in <-chan types.Record) error {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if err := k.Writer.WriteMessages(flushCtx, toWrite...); err != nil {
+			if err := k.writer.WriteMessages(flushCtx, toWrite...); err != nil {
 				fmt.Printf("mailer/sink: kafka write error: %v\n", err)
 			}
 		}()
 	}
 
-	// drain keeps reading from `in` until either:
-	//   - the channel closes (clean shutdown), or
-	//   - shutdownTimeout elapses (forced shutdown).
-	// It batches everything it reads so the subsequent flush writes it.
 	drain := func() {
 		deadline := time.NewTimer(shutdownTimeout)
 		defer deadline.Stop()
@@ -109,7 +154,7 @@ func (k *KafkaSink) Write(ctx context.Context, in <-chan types.Record) error {
 					return
 				}
 				batchMu.Lock()
-				batch = append(batch, RecordToKafka(record))
+				batch = append(batch, k.recordToKafka(record))
 				batchMu.Unlock()
 			case <-deadline.C:
 				return
@@ -135,8 +180,8 @@ func (k *KafkaSink) Write(ctx context.Context, in <-chan types.Record) error {
 			}
 
 			batchMu.Lock()
-			batch = append(batch, RecordToKafka(record))
-			full := len(batch) >= 100
+			batch = append(batch, k.recordToKafka(record))
+			full := len(batch) >= flushThreshold
 			batchMu.Unlock()
 
 			if full {
@@ -146,7 +191,42 @@ func (k *KafkaSink) Write(ctx context.Context, in <-chan types.Record) error {
 	}
 }
 
+// recordToKafka converts a mailer.Record to a kafka.Message.
+// If a serializer is configured, it runs on the record to produce the
+// message value; otherwise Record.Value is used directly.
+func (k *KafkaSink) recordToKafka(r types.Record) kafka.Message {
+	var value []byte = r.Value
+
+	if k.cfg.serializer != nil {
+		out, err := k.cfg.serializer.Serialize(r)
+		if err != nil {
+			fmt.Printf("mailer/sink: serialize error: %v\n", err)
+		} else {
+			value = out
+		}
+	}
+
+	var ts time.Time
+	if !r.Timestamp.IsZero() {
+		ts = r.Timestamp
+	}
+
+	var headers []kafka.Header
+	for k, v := range r.Headers {
+		headers = append(headers, kafka.Header{Key: k, Value: v})
+	}
+
+	return kafka.Message{
+		Key:     r.Key,
+		Value:   value,
+		Time:    ts,
+		Headers: headers,
+	}
+}
+
 // RecordToKafka converts a mailer.Record to a kafka.Message.
+// Exported for backwards compatibility and testing. Does not run any
+// configured serializer — use the sink's internal recordToKafka for that.
 func RecordToKafka(r types.Record) kafka.Message {
 	var ts time.Time
 	if !r.Timestamp.IsZero() {
@@ -165,3 +245,6 @@ func RecordToKafka(r types.Record) kafka.Message {
 		Headers: headers,
 	}
 }
+
+// Compile-time check.
+var _ Sink = (*KafkaSink)(nil)
