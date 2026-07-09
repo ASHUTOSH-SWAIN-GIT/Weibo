@@ -34,6 +34,15 @@ type WindowOperator struct {
 
 func (op *WindowOperator) Name() string     { return "Window" }
 func (op *WindowOperator) GetLabel() string { return op.Label }
+func (op *WindowOperator) DescribeOp() OperatorMeta {
+	cfg := map[string]string{
+		"type": op.Assigner.Name(),
+	}
+	if op.IdleTimeout > 0 {
+		cfg["idle_timeout"] = op.IdleTimeout.String()
+	}
+	return OperatorMeta{Type: "Window", Label: op.Label, Config: cfg}
+}
 
 // windowKey uniquely identifies a window by key + start + end times
 // as Unix nanoseconds (so it's comparable and hashable as a map key).

@@ -256,11 +256,20 @@ func (k *KafkaSink) Describe() SinkInfo {
 		"brokers": strings.Join(k.cfg.brokers, ","),
 		"topic":   k.cfg.topic,
 	}
-	if k.cfg.serializer != nil {
-		props["serializer"] = "enabled"
-	}
+	props["batch_size"] = fmt.Sprintf("%d", k.cfg.batchSize)
+	props["batch_timeout"] = k.cfg.batchTimeout.String()
+	props["acks"] = k.cfg.acks.Display()
 	if k.cfg.async {
 		props["async"] = "true"
+	}
+	if k.cfg.serializer != nil {
+		props["serializer"] = fmt.Sprintf("%T", k.cfg.serializer)
+	}
+	if k.cfg.sasl != nil {
+		props["sasl"] = string(k.cfg.sasl.Mechanism)
+	}
+	if k.cfg.tls != nil {
+		props["tls"] = "enabled"
 	}
 
 	return SinkInfo{

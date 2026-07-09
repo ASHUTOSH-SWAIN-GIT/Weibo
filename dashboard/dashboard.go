@@ -46,6 +46,7 @@ type Status struct {
 	Uptime     string `json:"uptime"`
 	RecordsIn  int64  `json:"records_in"`
 	RecordsOut int64  `json:"records_out"`
+	Lag        int64  `json:"lag,omitempty"`
 	Error      string `json:"error,omitempty"`
 }
 
@@ -112,6 +113,14 @@ func (s *Server) UpdateCounts(in, out int64) {
 	defer s.mu.Unlock()
 	s.status.RecordsIn = in
 	s.status.RecordsOut = out
+}
+
+// SetLag updates the consumer lag metric. Called by Kafka sources
+// to report how far behind the consumer is.
+func (s *Server) SetLag(lag int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.status.Lag = lag
 }
 
 // serveIndex serves the embedded index.html at the root path.

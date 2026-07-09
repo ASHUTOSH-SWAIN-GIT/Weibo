@@ -19,6 +19,18 @@ const (
 	AcksAll AcksLevel = -1
 )
 
+// Display returns a human-readable acks description for the dashboard.
+func (a AcksLevel) Display() string {
+	switch a {
+	case AcksNone:
+		return "none"
+	case AcksAll:
+		return "all"
+	default:
+		return "leader"
+	}
+}
+
 // kafkaSinkConfig holds the resolved configuration for a KafkaSink.
 // It is populated by KafkaSinkOption functions and read by NewKafkaSink.
 type kafkaSinkConfig struct {
@@ -27,6 +39,7 @@ type kafkaSinkConfig struct {
 	batchSize    int
 	batchTimeout time.Duration
 	acks         AcksLevel
+	acksSet      bool
 	async        bool
 
 	sasl       *auth.SASLConfig
@@ -64,7 +77,7 @@ func KafkaSinkBatchTimeout(d time.Duration) KafkaSinkOption {
 
 // KafkaSinkRequiredAcks sets the acknowledgement level (default AcksLeader).
 func KafkaSinkRequiredAcks(level AcksLevel) KafkaSinkOption {
-	return func(c *kafkaSinkConfig) { c.acks = level }
+	return func(c *kafkaSinkConfig) { c.acks = level; c.acksSet = true }
 }
 
 // KafkaSinkAsync enables asynchronous writes — WriteMessages returns
@@ -100,7 +113,7 @@ func (c *kafkaSinkConfig) applyDefaults() {
 	if c.batchTimeout == 0 {
 		c.batchTimeout = time.Second
 	}
-	// acks defaults to AcksLeader (value 1) — we can't distinguish "unset"
-	// from AcksNone (value 0) here, so we only default when the value is 0
-	// and leave AcksNone as an explicit choice via KafkaSinkRequiredAcks(AcksNone).
+	if !c.acksSet {
+		c.acks = AcksLeader
+	}
 }

@@ -1,43 +1,43 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Mailer Dashboard</title>
-    <link rel="stylesheet" href="/static/style.css">
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mailer Dashboard</title>
+<link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
-    <header>
+<header>
+    <div>
         <h1>Mailer Dashboard</h1>
-        <div id="status-bar" class="status-bar">
-            <span id="status-indicator" class="status-dot stopped"></span>
-            <span id="status-text">Stopped</span>
-            <span id="uptime" class="uptime"></span>
-        </div>
-    </header>
+        <span class="subtitle">Pipeline Overview</span>
+    </div>
+    <div id="status-bar">
+        <span id="status-ind" class="dot"></span>
+        <span id="status-text">-</span>
+        <span id="uptime"></span>
+    </div>
+</header>
 
-    <main>
-        <section id="counts" class="counts">
-            <div class="counter">
-                <span class="counter-label">Records In</span>
-                <span id="records-in" class="counter-value">0</span>
-            </div>
-            <div class="counter">
-                <span class="counter-label">Records Out</span>
-                <span id="records-out" class="counter-value">0</span>
-            </div>
-        </section>
+<main>
+    <div id="metrics" class="metrics-row">
+        <div class="metric"><span class="metric-label">Records In</span><span id="m-in" class="metric-val">0</span></div>
+        <div class="metric"><span class="metric-label">Records Out</span><span id="m-out" class="metric-val">0</span></div>
+        <div class="metric"><span class="metric-label">Throughput</span><span id="m-rate" class="metric-val">0/s</span></div>
+        <div class="metric"><span class="metric-label">Consumer Lag</span><span id="m-lag" class="metric-val">-</span></div>
+    </div>
 
-        <section id="pipeline-graph" class="pipeline-graph">
-            <p class="loading">Loading pipeline...</p>
-        </section>
+    <section id="flow" class="card"><p class="loading">Loading pipeline...</p></section>
 
-        <section id="error-display" class="error-display hidden">
-            <h3>Error</h3>
-            <pre id="error-text"></pre>
-        </section>
-    </main>
+    <div id="details" class="details-grid">
+        <section id="source-card" class="card"><h3>Source</h3><div class="card-body"><p class="loading">-</p></div></section>
+        <section id="ops-card" class="card"><h3>Operators</h3><div class="card-body"><p class="loading">-</p></div></section>
+        <section id="sink-card" class="card"><h3>Sink</h3><div class="card-body"><p class="loading">-</p></div></section>
+    </div>
+    <section id="cp-section" class="card hidden"><h3>Checkpoint</h3><div id="cp-body" class="card-body"></div></section>
+    <section id="err-section" class="card hidden error-card"><h3>Error</h3><pre id="err-text"></pre></section>
+</main>
 
-    <script src="/static/app.js"></script>
+<script src="/static/app.js"></script>
 </body>
 </html>

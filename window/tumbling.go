@@ -1,6 +1,9 @@
 package window
 
-import "time"
+import (
+	"fmt"
+	"time"
+)
 
 // Tumbling assigns records to fixed-size, non-overlapping windows.
 // Each record belongs to exactly one window.
@@ -41,6 +44,14 @@ func (t *Tumbling) WindowSize() time.Duration {
 
 // IsSession returns false — tumbling windows have fixed boundaries.
 func (t *Tumbling) IsSession() bool { return false }
+
+// Name returns the window type for the dashboard.
+func (t *Tumbling) Name() string {
+	if t.offset != 0 {
+		return fmt.Sprintf("Tumbling(%s offset=%s)", t.size, t.offset)
+	}
+	return fmt.Sprintf("Tumbling(%s)", t.size)
+}
 
 // WindowStart calculates the start of the window that contains the given
 // timestamp, accounting for offset alignment.

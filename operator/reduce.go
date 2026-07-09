@@ -59,6 +59,9 @@ func Reduce(fn ReduceFn) *ReduceOperator {
 
 func (op *ReduceOperator) Name() string     { return "Reduce" }
 func (op *ReduceOperator) GetLabel() string { return op.Label }
+func (op *ReduceOperator) DescribeOp() OperatorMeta {
+	return OperatorMeta{Type: "Reduce", Label: op.Label}
+}
 
 // Process reads each record, applies the reduce function with per-key state,
 // and emits the new accumulator value downstream. Watermarks and barriers are
