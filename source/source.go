@@ -32,11 +32,14 @@ type SourceInfo struct {
 // so it can resume from that point on recovery.
 type CheckpointSource interface {
 	// CheckpointOffset returns the source's current position as opaque bytes.
-	// This is called when a checkpoint barrier passes the source.
-	// On recovery, RestoreOffset will be called with these bytes.
 	CheckpointOffset() ([]byte, error)
 
 	// RestoreOffset seeks the source to the position saved by CheckpointOffset.
-	// This is called during recovery before Run() starts.
 	RestoreOffset(data []byte) error
+}
+
+// Drainable is an optional interface that sources implement to flush
+// pending state (e.g. uncommitted Kafka offsets) during graceful shutdown.
+type Drainable interface {
+	Drain(ctx context.Context) error
 }

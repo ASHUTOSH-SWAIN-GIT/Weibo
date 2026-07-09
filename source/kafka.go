@@ -316,9 +316,19 @@ func (r *kafkaSourceRunner) Run(ctx context.Context, out chan<- types.Record) er
 var (
 	_ Source           = (*KafkaSource)(nil)
 	_ CheckpointSource = (*KafkaSource)(nil)
+	_ Drainable        = (*KafkaSource)(nil)
 	_ Describable      = (*KafkaSource)(nil)
 	_ Source           = (*kafkaSourceRunner)(nil)
 )
+
+// Drain flushes pending offset commits. Called during graceful shutdown
+// to commit offsets for records that were read but not yet committed.
+func (k *KafkaSource) Drain(ctx context.Context) error {
+	if len(k.pending) == 0 {
+		return nil
+	}
+	return k.commitWithRetry(ctx, k.pending...)
+}
 
 // Describe returns metadata about this Kafka source for the dashboard.
 func (k *KafkaSource) Describe() SourceInfo {
