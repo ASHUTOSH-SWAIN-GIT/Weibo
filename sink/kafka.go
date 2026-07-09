@@ -110,10 +110,21 @@ func buildTransport(saslCfg *auth.SASLConfig, tlsCfg *auth.TLSConfig) *kafka.Tra
 	return t
 }
 
+// kafkaBatchEntry holds a converted kafka.Message and the original Record
+// so that failed writes can apply the failure policy to the original data.
+type kafkaBatchEntry struct {
+	msg    kafka.Message
+	record types.Record
+}
+
 // Write reads records from the input channel and writes them to Kafka.
-// It batches records for efficiency. On context cancellation, the sink
-// waits up to shutdownTimeout for the upstream chain to drain so that
-// windowed/aggregated records can still be written.
+// It batches records for efficiency. On write failure, the batch is
+// retried up to cfg.maxRetries times with exponential backoff.  After
+// all retries are exhausted, the failure policy is applied to each
+// record in the batch.
+//
+// On context cancellation, the sink drains remaining records for up to
+// shutdownTimeout before performing a final flush.
 func (k *KafkaSink) Write(ctx context.Context, in <-chan types.Record) error {
 	defer k.writer.Close()
 
@@ -121,9 +132,10 @@ func (k *KafkaSink) Write(ctx context.Context, in <-chan types.Record) error {
 	const flushThreshold = 100
 
 	var (
-		batch   []kafka.Message
+		batch   []kafkaBatchEntry
 		batchMu sync.Mutex
 		wg      sync.WaitGroup
+		errCh   = make(chan error, 1)
 	)
 
 	flush := func(flushCtx context.Context) {
@@ -139,8 +151,20 @@ func (k *KafkaSink) Write(ctx context.Context, in <-chan types.Record) error {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if err := k.writer.WriteMessages(flushCtx, toWrite...); err != nil {
-				fmt.Printf("mailer/sink: kafka write error: %v\n", err)
+			msgs := make([]kafka.Message, len(toWrite))
+			for i, e := range toWrite {
+				msgs[i] = e.msg
+			}
+			if err := k.writeWithRetry(flushCtx, msgs); err != nil {
+				for _, e := range toWrite {
+					if ferr := applyFailurePolicy(flushCtx, k.cfg.failurePolicy, k.cfg.dlq, e.record); ferr != nil {
+						select {
+						case errCh <- ferr:
+						default:
+						}
+						return
+					}
+				}
 			}
 		}()
 	}
@@ -154,8 +178,9 @@ func (k *KafkaSink) Write(ctx context.Context, in <-chan types.Record) error {
 				if !ok {
 					return
 				}
+				msg, rec := k.recordToKafka(record), record
 				batchMu.Lock()
-				batch = append(batch, k.recordToKafka(record))
+				batch = append(batch, kafkaBatchEntry{msg: msg, record: rec})
 				batchMu.Unlock()
 			case <-deadline.C:
 				return
@@ -165,6 +190,10 @@ func (k *KafkaSink) Write(ctx context.Context, in <-chan types.Record) error {
 
 	for {
 		select {
+		case err := <-errCh:
+			wg.Wait()
+			return err
+
 		case <-ctx.Done():
 			shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 			drain()
@@ -180,8 +209,9 @@ func (k *KafkaSink) Write(ctx context.Context, in <-chan types.Record) error {
 				return nil
 			}
 
+			msg, rec := k.recordToKafka(record), record
 			batchMu.Lock()
-			batch = append(batch, k.recordToKafka(record))
+			batch = append(batch, kafkaBatchEntry{msg: msg, record: rec})
 			full := len(batch) >= flushThreshold
 			batchMu.Unlock()
 
@@ -190,6 +220,28 @@ func (k *KafkaSink) Write(ctx context.Context, in <-chan types.Record) error {
 			}
 		}
 	}
+}
+
+// writeWithRetry attempts to write the batch, retrying up to maxRetries
+// times with exponential backoff. Returns nil on success.
+func (k *KafkaSink) writeWithRetry(ctx context.Context, msgs []kafka.Message) error {
+	var lastErr error
+	for attempt := 0; attempt <= k.cfg.maxRetries; attempt++ {
+		err := k.writer.WriteMessages(ctx, msgs...)
+		if err == nil {
+			return nil
+		}
+		lastErr = err
+		if attempt < k.cfg.maxRetries {
+			backoff := time.Duration(1<<uint(attempt)) * time.Second
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(backoff):
+			}
+		}
+	}
+	return lastErr
 }
 
 // recordToKafka converts a mailer.Record to a kafka.Message.
