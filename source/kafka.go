@@ -9,6 +9,7 @@ import (
 
 	"github.com/segmentio/kafka-go"
 
+	"github.com/ASHUTOSH-SWAIN-GIT/mailer/observability/metrics"
 	"github.com/ASHUTOSH-SWAIN-GIT/mailer/types"
 	"github.com/ASHUTOSH-SWAIN-GIT/mailer/watermark"
 )
@@ -130,6 +131,21 @@ func (k *KafkaSource) runOnce(ctx context.Context, out chan<- types.Record) erro
 		if k.cfg.deserializer != nil {
 			parsed, err := k.cfg.deserializer.Deserialize(record.Value, record.Headers)
 			if err != nil {
+				metrics.RecordsFailedTotal.Inc()
+				switch k.cfg.deserFailPolicy {
+				case DeserFailureDLQ:
+					if k.cfg.deserDLQ != nil {
+						failRecord := record
+						failRecord = failRecord.WithHeader("_deser_error", []byte(err.Error()))
+						if werr := k.cfg.deserDLQ.Write(ctx, failRecord); werr != nil {
+							fmt.Printf("mailer/source: deserialization DLQ write error: %v\n", werr)
+						}
+					}
+				case DeserFailureFail:
+					return fmt.Errorf("deserialization failed: %w", err)
+				default:
+					// DeserFailureDrop — silently skip.
+				}
 				continue
 			}
 			record.Parsed = parsed
@@ -157,10 +173,14 @@ func (k *KafkaSource) runOnce(ctx context.Context, out chan<- types.Record) erro
 }
 
 // fetchWithRetry retries FetchMessage up to fetchMaxRetries times
-// with exponential backoff. Returns an error on final failure.
+// with exponential backoff. If fetchMaxRetries is -1, retries forever.
+// Returns an error on final failure.
 func (k *KafkaSource) fetchWithRetry(ctx context.Context) (kafka.Message, error) {
 	var lastErr error
-	for attempt := 0; attempt <= k.cfg.fetchMaxRetries; attempt++ {
+	maxAttempts := k.cfg.fetchMaxRetries
+	retryForever := maxAttempts < 0
+
+	for attempt := 0; retryForever || attempt <= maxAttempts; attempt++ {
 		msg, err := k.reader.FetchMessage(ctx)
 		if err == nil {
 			return msg, nil
@@ -169,8 +189,11 @@ func (k *KafkaSource) fetchWithRetry(ctx context.Context) (kafka.Message, error)
 			return kafka.Message{}, ctx.Err()
 		}
 		lastErr = err
-		if attempt < k.cfg.fetchMaxRetries {
+		if retryForever || attempt < maxAttempts {
 			backoff := time.Duration(1<<uint(attempt)) * time.Second
+			if backoff > 30*time.Second {
+				backoff = 30 * time.Second
+			}
 			select {
 			case <-ctx.Done():
 				return kafka.Message{}, ctx.Err()
