@@ -45,6 +45,22 @@ func (s *Stream) FlatMap(fn func(types.Record) []types.Record, label ...string) 
 	return s
 }
 
+// Process applies a user function that may return an error.  On error
+// the failure policy (Drop / DLQ / Fail) is applied.  Use the
+// operator.WithProcessFailurePolicy and operator.WithProcessDLQ options
+// to configure failure handling.
+//
+//	stream.Process(func(r types.Record) (types.Record, error) {
+//	    if !isValid(r) { return r, fmt.Errorf("invalid") }
+//	    return enrich(r), nil
+//	}, operator.WithProcessFailurePolicy(operator.ProcFailureDLQ)).
+//	    ToSink(s)
+func (s *Stream) Process(fn func(types.Record) (types.Record, error), opts ...operator.ProcessOption) *Stream {
+	op := operator.NewProcess(fn, opts...)
+	s.env.operators = append(s.env.operators, op)
+	return s
+}
+
 // Filter keeps only records where fn returns true.
 // The optional label is shown in the dashboard.
 func (s *Stream) Filter(fn func(types.Record) bool, label ...string) *Stream {
