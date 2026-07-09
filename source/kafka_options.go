@@ -26,6 +26,10 @@ type kafkaSourceConfig struct {
 	watermarkOutOfOrderness time.Duration
 	watermarkInterval       time.Duration
 	deserializer            Deserializer
+
+	fetchMaxRetries  int
+	commitMaxRetries int
+	commitFailPolicy CommitPolicy
 }
 
 // KafkaSourceOption configures a KafkaSource. Pass one or more to
@@ -117,6 +121,24 @@ func KafkaWatermarkInterval(d time.Duration) KafkaSourceOption {
 	return func(c *kafkaSourceConfig) { c.watermarkInterval = d }
 }
 
+// KafkaFetchMaxRetries sets how many times FetchMessage is retried
+// before failing the pipeline (default 5).
+func KafkaFetchMaxRetries(n int) KafkaSourceOption {
+	return func(c *kafkaSourceConfig) { c.fetchMaxRetries = n }
+}
+
+// KafkaCommitMaxRetries sets how many times CommitMessages is retried
+// before the commit failure policy is applied (default 3).
+func KafkaCommitMaxRetries(n int) KafkaSourceOption {
+	return func(c *kafkaSourceConfig) { c.commitMaxRetries = n }
+}
+
+// KafkaCommitPolicy sets what happens when offset commits fail after
+// all retries. Default is CommitPolicySkip (log and continue).
+func KafkaCommitPolicy(p CommitPolicy) KafkaSourceOption {
+	return func(c *kafkaSourceConfig) { c.commitFailPolicy = p }
+}
+
 // applyDefaults fills in zero-value config fields with sensible defaults.
 func (c *kafkaSourceConfig) applyDefaults() {
 	if c.minBytes == 0 {
@@ -130,5 +152,11 @@ func (c *kafkaSourceConfig) applyDefaults() {
 	}
 	if c.watermarkInterval == 0 {
 		c.watermarkInterval = 500 * time.Millisecond
+	}
+	if c.fetchMaxRetries == 0 {
+		c.fetchMaxRetries = 5
+	}
+	if c.commitMaxRetries == 0 {
+		c.commitMaxRetries = 3
 	}
 }

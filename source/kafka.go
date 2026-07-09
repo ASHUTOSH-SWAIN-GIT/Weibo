@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/segmentio/kafka-go"
 
@@ -110,7 +111,6 @@ func (k *KafkaSource) Run(ctx context.Context, out chan<- types.Record) error {
 func (k *KafkaSource) runOnce(ctx context.Context, out chan<- types.Record) error {
 	defer k.reader.Close()
 
-	// Apply restored offsets from a checkpoint, if any.
 	if len(k.restoredOffsets) > 0 {
 		for partition, offset := range k.restoredOffsets {
 			if err := k.reader.SetOffset(offset); err != nil {
@@ -120,17 +120,13 @@ func (k *KafkaSource) runOnce(ctx context.Context, out chan<- types.Record) erro
 	}
 
 	for {
-		msg, err := k.reader.FetchMessage(ctx)
+		msg, err := k.fetchWithRetry(ctx)
 		if err != nil {
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-			return fmt.Errorf("kafka fetch: %w", err)
+			return err
 		}
 
 		record := KafkaToRecord(msg)
 
-		// Run deserializer if configured; on error drop the record.
 		if k.cfg.deserializer != nil {
 			parsed, err := k.cfg.deserializer.Deserialize(record.Value, record.Headers)
 			if err != nil {
@@ -145,32 +141,85 @@ func (k *KafkaSource) runOnce(ctx context.Context, out chan<- types.Record) erro
 		case out <- record:
 		}
 
-		// Commit offsets.
 		if k.cfg.commitBatch > 0 {
 			k.pending = append(k.pending, msg)
 			if len(k.pending) >= k.cfg.commitBatch {
-				if err := k.flushCommits(ctx); err != nil {
+				if err := k.commitBatchWithRetry(ctx); err != nil {
 					return err
 				}
 			}
 		} else {
-			if err := k.reader.CommitMessages(ctx, msg); err != nil {
-				return fmt.Errorf("kafka commit: %w", err)
+			if err := k.commitWithRetry(ctx, msg); err != nil {
+				return err
 			}
 		}
 	}
 }
 
-// flushCommits commits all pending messages and clears the buffer.
-func (k *KafkaSource) flushCommits(ctx context.Context) error {
+// fetchWithRetry retries FetchMessage up to fetchMaxRetries times
+// with exponential backoff. Returns an error on final failure.
+func (k *KafkaSource) fetchWithRetry(ctx context.Context) (kafka.Message, error) {
+	var lastErr error
+	for attempt := 0; attempt <= k.cfg.fetchMaxRetries; attempt++ {
+		msg, err := k.reader.FetchMessage(ctx)
+		if err == nil {
+			return msg, nil
+		}
+		if ctx.Err() != nil {
+			return kafka.Message{}, ctx.Err()
+		}
+		lastErr = err
+		if attempt < k.cfg.fetchMaxRetries {
+			backoff := time.Duration(1<<uint(attempt)) * time.Second
+			select {
+			case <-ctx.Done():
+				return kafka.Message{}, ctx.Err()
+			case <-time.After(backoff):
+			}
+		}
+	}
+	return kafka.Message{}, fmt.Errorf("kafka fetch failed after %d retries: %w", k.cfg.fetchMaxRetries, lastErr)
+}
+
+// commitWithRetry retries CommitMessages for a single message up to
+// commitMaxRetries times. On final failure, the commit policy is applied.
+func (k *KafkaSource) commitWithRetry(ctx context.Context, msgs ...kafka.Message) error {
+	var lastErr error
+	for attempt := 0; attempt <= k.cfg.commitMaxRetries; attempt++ {
+		err := k.reader.CommitMessages(ctx, msgs...)
+		if err == nil {
+			return nil
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		lastErr = err
+		if attempt < k.cfg.commitMaxRetries {
+			backoff := time.Duration(1<<uint(attempt)) * time.Second
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(backoff):
+			}
+		}
+	}
+
+	if k.cfg.commitFailPolicy == CommitPolicyFail {
+		return fmt.Errorf("kafka commit failed after %d retries: %w", k.cfg.commitMaxRetries, lastErr)
+	}
+	fmt.Printf("mailer/source: kafka commit failed after %d retries (skipping): %v\n", k.cfg.commitMaxRetries, lastErr)
+	return nil
+}
+
+// commitBatchWithRetry flushes and commits pending messages with retry.
+// On final failure, the commit policy is applied (per-record).
+func (k *KafkaSource) commitBatchWithRetry(ctx context.Context) error {
 	if len(k.pending) == 0 {
 		return nil
 	}
-	if err := k.reader.CommitMessages(ctx, k.pending...); err != nil {
-		return fmt.Errorf("kafka batch commit: %w", err)
-	}
+	msgs := k.pending
 	k.pending = k.pending[:0]
-	return nil
+	return k.commitWithRetry(ctx, msgs...)
 }
 
 // CheckpointOffset returns the source's current position as JSON bytes.
