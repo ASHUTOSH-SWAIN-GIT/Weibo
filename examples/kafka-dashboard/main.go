@@ -11,7 +11,7 @@ import (
 	"time"
 
 	mailer "github.com/ASHUTOSH-SWAIN-GIT/mailer"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/dashboard"
+	"github.com/ASHUTOSH-SWAIN-GIT/mailer/observability/dashboard"
 	"github.com/ASHUTOSH-SWAIN-GIT/mailer/sink"
 	"github.com/ASHUTOSH-SWAIN-GIT/mailer/source"
 	"github.com/ASHUTOSH-SWAIN-GIT/mailer/types"
