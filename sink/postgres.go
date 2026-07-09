@@ -68,6 +68,7 @@ type pendingRow struct {
 	table   string
 	columns []string
 	values  []any
+	record  types.Record
 }
 
 // Write reads records from the input channel and writes them to Postgres
@@ -171,7 +172,7 @@ func (p *PostgresSink) mapRecord(r types.Record) *pendingRow {
 	if table == "" || len(columns) == 0 || len(columns) != len(values) {
 		return nil
 	}
-	return &pendingRow{table: table, columns: columns, values: values}
+	return &pendingRow{table: table, columns: columns, values: values, record: r}
 }
 
 // insertBatch groups rows by table+columns and inserts each group with
@@ -205,11 +206,11 @@ func (p *PostgresSink) insertBatch(ctx context.Context, rows []pendingRow) error
 }
 
 // insertGroupWithRetry inserts a group of rows with the same table+columns
-// using a single multi-value INSERT, retrying on failure.
+// using a single multi-value INSERT, retrying on failure. After all retries
+// are exhausted, the failure policy is applied to each row.
 func (p *PostgresSink) insertGroupWithRetry(ctx context.Context, table string, columns []string, rows []pendingRow) error {
 	query := buildInsertQuery(table, columns, len(rows))
 
-	// Flatten all values into a single slice for the query.
 	args := make([]any, 0, len(rows)*len(columns))
 	for _, row := range rows {
 		args = append(args, row.values...)
@@ -231,7 +232,14 @@ func (p *PostgresSink) insertGroupWithRetry(ctx context.Context, table string, c
 			}
 		}
 	}
-	return lastErr
+
+	// All retries exhausted — apply failure policy per row.
+	for _, row := range rows {
+		if ferr := applyFailurePolicy(ctx, p.cfg.failurePolicy, p.cfg.dlq, row.record); ferr != nil {
+			return fmt.Errorf("postgres insert into %s: %w (failure policy: %w)", table, lastErr, ferr)
+		}
+	}
+	return nil
 }
 
 // buildInsertQuery constructs a multi-value INSERT statement.

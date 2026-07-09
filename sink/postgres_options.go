@@ -29,6 +29,9 @@ type postgresSinkConfig struct {
 	batchSize     int
 	flushInterval time.Duration
 	maxRetries    int
+
+	failurePolicy FailurePolicy
+	dlq           DLQ
 }
 
 // PostgresSinkOption configures a PostgresSink. Pass one or more to
@@ -63,6 +66,18 @@ func PostgresFlushInterval(d time.Duration) PostgresSinkOption {
 // retried before giving up (default 3).
 func PostgresMaxRetries(n int) PostgresSinkOption {
 	return func(c *postgresSinkConfig) { c.maxRetries = n }
+}
+
+// PostgresFailurePolicy sets what happens when a row fails after all retries.
+// Default is FailurePolicyDrop (row is silently discarded).
+func PostgresFailurePolicy(p FailurePolicy) PostgresSinkOption {
+	return func(c *postgresSinkConfig) { c.failurePolicy = p }
+}
+
+// PostgresDLQ sets the dead-letter-queue for failed records.
+// Only used when PostgresFailurePolicy is set to FailurePolicyDLQ.
+func PostgresDLQ(dlq DLQ) PostgresSinkOption {
+	return func(c *postgresSinkConfig) { c.dlq = dlq }
 }
 
 // applyDefaults fills in zero-value config fields with sensible defaults.

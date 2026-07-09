@@ -45,6 +45,10 @@ type kafkaSinkConfig struct {
 	sasl       *auth.SASLConfig
 	tls        *auth.TLSConfig
 	serializer Serializer
+
+	failurePolicy FailurePolicy
+	dlq           DLQ
+	maxRetries    int
 }
 
 // KafkaSinkOption configures a KafkaSink. Pass one or more to NewKafkaSink.
@@ -105,6 +109,24 @@ func KafkaSinkSerialize(s Serializer) KafkaSinkOption {
 	return func(c *kafkaSinkConfig) { c.serializer = s }
 }
 
+// KafkaSinkMaxRetries sets the number of times a failed write is retried
+// before the failure policy is applied (default 3).
+func KafkaSinkMaxRetries(n int) KafkaSinkOption {
+	return func(c *kafkaSinkConfig) { c.maxRetries = n }
+}
+
+// KafkaSinkFailurePolicy sets what happens when a record fails after all retries.
+// Default is FailurePolicyDrop (record is silently discarded).
+func KafkaSinkFailurePolicy(p FailurePolicy) KafkaSinkOption {
+	return func(c *kafkaSinkConfig) { c.failurePolicy = p }
+}
+
+// KafkaSinkDLQ sets the dead-letter-queue for failed records.
+// Only used when KafkaSinkFailurePolicy is set to FailurePolicyDLQ.
+func KafkaSinkDLQ(dlq DLQ) KafkaSinkOption {
+	return func(c *kafkaSinkConfig) { c.dlq = dlq }
+}
+
 // applyDefaults fills in zero-value config fields with sensible defaults.
 func (c *kafkaSinkConfig) applyDefaults() {
 	if c.batchSize == 0 {
@@ -115,5 +137,8 @@ func (c *kafkaSinkConfig) applyDefaults() {
 	}
 	if !c.acksSet {
 		c.acks = AcksLeader
+	}
+	if c.maxRetries == 0 {
+		c.maxRetries = 3
 	}
 }
