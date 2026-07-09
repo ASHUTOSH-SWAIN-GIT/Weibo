@@ -1,6 +1,7 @@
 package operator
 
 import (
+	"fmt"
 	"hash/fnv"
 	"sync"
 
@@ -34,6 +35,15 @@ func KeyBy(fn func(types.Record) []byte) *KeyByOperator {
 
 func (op *KeyByOperator) Name() string     { return "KeyBy" }
 func (op *KeyByOperator) GetLabel() string { return op.Label }
+func (op *KeyByOperator) DescribeOp() OperatorMeta {
+	return OperatorMeta{
+		Type:  "KeyBy",
+		Label: op.Label,
+		Config: map[string]string{
+			"partitions": fmt.Sprintf("%d", op.Partitions),
+		},
+	}
+}
 
 // WithPartitions sets the number of partitions and returns the operator
 // for chaining. More partitions = more parallelism.

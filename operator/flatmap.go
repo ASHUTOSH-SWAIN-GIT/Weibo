@@ -17,6 +17,9 @@ func FlatMap(fn func(types.Record) []types.Record) *FlatMapOperator {
 
 func (op *FlatMapOperator) Name() string     { return "FlatMap" }
 func (op *FlatMapOperator) GetLabel() string { return op.Label }
+func (op *FlatMapOperator) DescribeOp() OperatorMeta {
+	return OperatorMeta{Type: "FlatMap", Label: op.Label}
+}
 
 // Process reads each record from in, applies the flat map function,
 // and writes each result record to out. Watermarks and barriers are passed through unchanged.

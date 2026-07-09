@@ -20,8 +20,9 @@ type PipelineInfo struct {
 
 // OperatorInfo describes a single operator in the pipeline chain.
 type OperatorInfo struct {
-	Type  string `json:"type"`
-	Label string `json:"label,omitempty"`
+	Type   string            `json:"type"`
+	Label  string            `json:"label,omitempty"`
+	Config map[string]string `json:"config,omitempty"`
 }
 
 // CheckpointInfo describes the checkpointing configuration.
@@ -36,30 +37,30 @@ type CheckpointInfo struct {
 func (env *StreamExecutionEnv) Describe() PipelineInfo {
 	info := PipelineInfo{}
 
-	// Source
 	if d, ok := env.source.(source.Describable); ok {
 		info.Source = d.Describe()
 	} else {
 		info.Source = source.SourceInfo{Type: "Unknown", Props: map[string]string{}}
 	}
 
-	// Operators
 	for _, op := range env.operators {
 		oi := OperatorInfo{Type: op.Name()}
 		if labeled, ok := op.(operator.Labeled); ok {
 			oi.Label = labeled.GetLabel()
 		}
+		if describable, ok := op.(operator.DescribableOperator); ok {
+			meta := describable.DescribeOp()
+			oi.Config = meta.Config
+		}
 		info.Operators = append(info.Operators, oi)
 	}
 
-	// Sink
 	if d, ok := env.sink.(sink.Describable); ok {
 		info.Sink = d.Describe()
 	} else {
 		info.Sink = sink.SinkInfo{Type: "Unknown", Props: map[string]string{}}
 	}
 
-	// Checkpoint
 	if env.checkpointInterval > 0 {
 		info.Checkpoint = &CheckpointInfo{
 			Interval: fmt.Sprintf("%v", env.checkpointInterval),
@@ -71,7 +72,6 @@ func (env *StreamExecutionEnv) Describe() PipelineInfo {
 }
 
 // DescribeJSON returns the pipeline description as indented JSON.
-// Convenience method for debugging or logging.
 func (env *StreamExecutionEnv) DescribeJSON() string {
 	info := env.Describe()
 	data, _ := json.MarshalIndent(info, "", "  ")

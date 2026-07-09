@@ -16,6 +16,9 @@ func Filter(fn func(types.Record) bool) *FilterOperator {
 
 func (op *FilterOperator) Name() string     { return "Filter" }
 func (op *FilterOperator) GetLabel() string { return op.Label }
+func (op *FilterOperator) DescribeOp() OperatorMeta {
+	return OperatorMeta{Type: "Filter", Label: op.Label}
+}
 
 // Process reads each record from in and writes it to out only if the
 // predicate returns true. Watermarks and barriers are always passed through.

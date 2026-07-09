@@ -17,6 +17,9 @@ type Window struct {
 // WindowAssigner determines which window(s) a record belongs to
 // based on its timestamp. Different window types implement this interface.
 type WindowAssigner interface {
+	// Name returns the window type name (e.g. "Tumbling", "Sliding", "Session").
+	Name() string
+
 	// AssignWindows returns one or more windows that the given timestamp falls into.
 	// A timestamp can belong to multiple windows in the case of sliding windows.
 	AssignWindows(timestamp time.Time) []Window

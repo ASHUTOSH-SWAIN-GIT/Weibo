@@ -1,6 +1,9 @@
 package window
 
-import "time"
+import (
+	"fmt"
+	"time"
+)
 
 // Session assigns records to variable-size windows that close after a gap
 // of inactivity (the gap duration). Records that arrive within the gap
@@ -42,6 +45,11 @@ func (s *Session) WindowSize() time.Duration {
 
 // IsSession returns true — session windows merge when overlapping.
 func (s *Session) IsSession() bool { return true }
+
+// Name returns the window type for the dashboard.
+func (s *Session) Name() string {
+	return fmt.Sprintf("Session(%s gap)", s.gap)
+}
 
 // MergeSessions merges overlapping or adjacent session windows.
 // Two sessions overlap if sessionA.End > sessionB.Start (or vice versa).

@@ -270,9 +270,10 @@ var _ Sink = (*PostgresSink)(nil)
 // Describe returns metadata about this Postgres sink for the dashboard.
 func (p *PostgresSink) Describe() SinkInfo {
 	props := map[string]string{
-		"batch_size": fmt.Sprintf("%d", p.cfg.batchSize),
+		"batch_size":     fmt.Sprintf("%d", p.cfg.batchSize),
+		"flush_interval": p.cfg.flushInterval.String(),
+		"max_retries":    fmt.Sprintf("%d", p.cfg.maxRetries),
 	}
-	// Don't expose the full DSN (may contain credentials) — just the host/db.
 	if u, err := parseDSNHost(p.cfg.dsn); err == nil {
 		props["host"] = u
 	}

@@ -34,3 +34,16 @@ type Snapshotable interface {
 	// same operator type. Restore is called before the pipeline starts.
 	Restore(data []byte) error
 }
+
+// OperatorMeta describes the configuration of an operator for the dashboard.
+type OperatorMeta struct {
+	Type   string            `json:"type"`
+	Label  string            `json:"label,omitempty"`
+	Config map[string]string `json:"config,omitempty"`
+}
+
+// DescribableOperator is an optional interface that operators implement
+// to expose their configuration for the dashboard.
+type DescribableOperator interface {
+	DescribeOp() OperatorMeta
+}

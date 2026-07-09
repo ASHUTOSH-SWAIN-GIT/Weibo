@@ -262,11 +262,21 @@ func (k *KafkaSource) Describe() SourceInfo {
 	if k.cfg.groupID != "" {
 		props["group_id"] = k.cfg.groupID
 	}
+	props["offset"] = k.cfg.offsetSpec.Display()
 	if k.cfg.watermarkOutOfOrderness > 0 {
-		props["watermarks"] = "enabled"
+		props["watermark_out_of_orderness"] = k.cfg.watermarkOutOfOrderness.String()
 	}
 	if k.cfg.deserializer != nil {
-		props["deserializer"] = "enabled"
+		props["deserializer"] = fmt.Sprintf("%T", k.cfg.deserializer)
+	}
+	if k.cfg.commitBatch > 0 {
+		props["commit_batch"] = fmt.Sprintf("%d", k.cfg.commitBatch)
+	}
+	if k.cfg.sasl != nil {
+		props["sasl"] = string(k.cfg.sasl.Mechanism)
+	}
+	if k.cfg.tls != nil {
+		props["tls"] = "enabled"
 	}
 
 	return SourceInfo{

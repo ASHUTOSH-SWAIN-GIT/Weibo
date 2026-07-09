@@ -1,6 +1,9 @@
 package window
 
-import "time"
+import (
+	"fmt"
+	"time"
+)
 
 // Sliding assigns records to overlapping fixed-size windows that slide
 // by a fixed interval. A single record can belong to multiple windows.
@@ -72,3 +75,8 @@ func (s *Sliding) WindowSize() time.Duration {
 
 // IsSession returns false — sliding windows have fixed boundaries.
 func (s *Sliding) IsSession() bool { return false }
+
+// Name returns the window type for the dashboard.
+func (s *Sliding) Name() string {
+	return fmt.Sprintf("Sliding(%s slide=%s)", s.size, s.slide)
+}

@@ -1,6 +1,10 @@
 package source
 
-import "github.com/segmentio/kafka-go"
+import (
+	"fmt"
+
+	"github.com/segmentio/kafka-go"
+)
 
 // Offset is a mailer-agnostic Kafka offset position.
 // It replaces direct use of kafka-go's offset constants so users
@@ -36,5 +40,17 @@ func (s OffsetSpec) toKafka() int64 {
 		return kafka.LastOffset
 	default:
 		return int64(s.Mode)
+	}
+}
+
+// Display returns a human-readable offset description for the dashboard.
+func (s OffsetSpec) Display() string {
+	switch s.Mode {
+	case OffsetEarliest:
+		return "earliest"
+	case OffsetLatest:
+		return "latest"
+	default:
+		return fmt.Sprintf("%d", s.Mode)
 	}
 }
