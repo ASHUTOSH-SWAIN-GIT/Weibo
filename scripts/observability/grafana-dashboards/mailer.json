@@ -1,0 +1,98 @@
+{
+  "title": "Mailer Pipeline",
+  "uid": "mailer",
+  "refresh": "5s",
+  "panels": [
+    {
+      "title": "Pipeline Status",
+      "type": "stat",
+      "gridPos": {"x": 0, "y": 0, "w": 4, "h": 3},
+      "targets": [
+        {"expr": "mailer_pipeline_running", "legendFormat": "running"}
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            {"type": "value", "value": "0", "text": "STOPPED"},
+            {"type": "value", "value": "1", "text": "RUNNING"}
+          ],
+          "thresholds": {"steps": [{"color": "red", "value": null}, {"color": "green", "value": 1}]}
+        }
+      }
+    },
+    {
+      "title": "Records / sec",
+      "type": "timeseries",
+      "gridPos": {"x": 4, "y": 0, "w": 20, "h": 3},
+      "targets": [
+        {"expr": "rate(mailer_records_read_total[15s])", "legendFormat": "read"},
+        {"expr": "rate(mailer_records_processed_total[15s])", "legendFormat": "{{operator}}"},
+        {"expr": "rate(mailer_records_written_total[15s])", "legendFormat": "written"}
+      ],
+      "fieldConfig": {
+        "defaults": {"custom": {"fillOpacity": 15, "lineWidth": 2}}
+      }
+    },
+    {
+      "title": "Operator Latency (p50 / p95 / p99)",
+      "type": "timeseries",
+      "gridPos": {"x": 0, "y": 3, "w": 12, "h": 8},
+      "targets": [
+        {"expr": "histogram_quantile(0.50, rate(mailer_operator_latency_seconds_bucket[30s]))", "legendFormat": "{{operator}} p50"},
+        {"expr": "histogram_quantile(0.95, rate(mailer_operator_latency_seconds_bucket[30s]))", "legendFormat": "{{operator}} p95"},
+        {"expr": "histogram_quantile(0.99, rate(mailer_operator_latency_seconds_bucket[30s]))", "legendFormat": "{{operator}} p99"}
+      ],
+      "fieldConfig": {
+        "defaults": {"unit": "s", "custom": {"lineWidth": 2}}
+      }
+    },
+    {
+      "title": "Sink Write Latency (p50 / p95 / p99)",
+      "type": "timeseries",
+      "gridPos": {"x": 12, "y": 3, "w": 12, "h": 8},
+      "targets": [
+        {"expr": "histogram_quantile(0.50, rate(mailer_sink_write_latency_seconds_bucket[30s]))", "legendFormat": "p50"},
+        {"expr": "histogram_quantile(0.95, rate(mailer_sink_write_latency_seconds_bucket[30s]))", "legendFormat": "p95"},
+        {"expr": "histogram_quantile(0.99, rate(mailer_sink_write_latency_seconds_bucket[30s]))", "legendFormat": "p99"}
+      ],
+      "fieldConfig": {
+        "defaults": {"unit": "s", "custom": {"lineWidth": 2}}
+      }
+    },
+    {
+      "title": "Total Records",
+      "type": "stat",
+      "gridPos": {"x": 0, "y": 11, "w": 4, "h": 3},
+      "targets": [{"expr": "mailer_records_read_total"}]
+    },
+    {
+      "title": "Total Written",
+      "type": "stat",
+      "gridPos": {"x": 4, "y": 11, "w": 4, "h": 3},
+      "targets": [{"expr": "mailer_records_written_total"}]
+    },
+    {
+      "title": "Total Failed",
+      "type": "stat",
+      "gridPos": {"x": 8, "y": 11, "w": 4, "h": 3},
+      "targets": [{"expr": "mailer_records_failed_total"}],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {"steps": [{"color": "green", "value": null}, {"color": "red", "value": 1}]}
+        }
+      }
+    },
+    {
+      "title": "Errors",
+      "type": "timeseries",
+      "gridPos": {"x": 12, "y": 11, "w": 12, "h": 3},
+      "targets": [
+        {"expr": "rate(mailer_source_errors_total[15s])", "legendFormat": "source errors"},
+        {"expr": "rate(mailer_sink_errors_total[15s])", "legendFormat": "sink errors"}
+      ],
+      "fieldConfig": {
+        "defaults": {"custom": {"fillOpacity": 15, "lineWidth": 2}}
+      }
+    }
+  ]
+}
