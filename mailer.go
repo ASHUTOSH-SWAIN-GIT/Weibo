@@ -25,14 +25,22 @@ type StreamExecutionEnv struct {
 	sink      sink.Sink
 	operators []operator.Operator
 
-	// Checkpointing configuration.
 	checkpointInterval time.Duration
 	checkpointStorage  checkpoint.Storage
+
+	shutdownTimeout time.Duration
 }
 
 // NewEnv creates a new StreamExecutionEnv.
 func NewEnv() *StreamExecutionEnv {
-	return &StreamExecutionEnv{}
+	return &StreamExecutionEnv{shutdownTimeout: 30 * time.Second}
+}
+
+// WithShutdownTimeout sets how long the pipeline waits for in-flight
+// records to drain before forcing shutdown (default 30s).
+func (env *StreamExecutionEnv) WithShutdownTimeout(d time.Duration) *StreamExecutionEnv {
+	env.shutdownTimeout = d
+	return env
 }
 
 // WithCheckpointing enables periodic checkpointing with the given interval
@@ -64,14 +72,19 @@ func (env *StreamExecutionEnv) FromSource(src source.Source) *Stream {
 // as goroutines connected by channels, and connects the final output to the sink.
 // Blocks until the source is exhausted or the context is cancelled.
 //
-// Prometheus metrics are collected automatically during execution.  The
-// metrics package is exposed at the global prometheus default registry;
-// use dashboard.NewServer to also serve /metrics via promhttp.
+// Graceful shutdown (on context cancellation):
+//  1. Source stops accepting new records
+//  2. Source flushes pending offset commits
+//  3. Operators drain buffered records
+//  4. Sink drains and flushes remaining records (up to shutdownTimeout)
+//  5. Checkpoint is saved (if enabled)
+//  6. Returns
+//
+// Prometheus metrics are collected automatically during execution.
 //
 // If checkpointing is enabled, the pipeline will attempt to restore from
 // the latest checkpoint before starting. A goroutine injects checkpoint
-// barriers at the configured interval. When a barrier completes the full
-// pipeline round-trip, operator state is saved to the checkpoint storage.
+// barriers at the configured interval.
 func (env *StreamExecutionEnv) Execute(ctx context.Context) error {
 	if env.source == nil {
 		return fmt.Errorf("mailer: no source configured, use FromSource()")
@@ -100,6 +113,14 @@ func (env *StreamExecutionEnv) Execute(ctx context.Context) error {
 			}
 			fmt.Printf("mailer: source error: %v\n", err)
 		}
+		// Flush pending offset commits before operators drain.
+		if d, ok := env.source.(source.Drainable); ok {
+			flushCtx, cancel := context.WithTimeout(context.Background(), env.shutdownTimeout)
+			defer cancel()
+			if err := d.Drain(flushCtx); err != nil {
+				fmt.Printf("mailer: source drain error: %v\n", err)
+			}
+		}
 	}()
 
 	var recordCh <-chan types.Record
@@ -109,7 +130,6 @@ func (env *StreamExecutionEnv) Execute(ctx context.Context) error {
 		recordCh = sourceCh
 	}
 
-	// Count source reads.
 	current := countedRead(recordCh, func() { metrics.RecordsReadTotal.Inc() })
 
 	for i, op := range env.operators {
@@ -120,7 +140,6 @@ func (env *StreamExecutionEnv) Execute(ctx context.Context) error {
 			op.Process(in, out)
 		}(op, current, next)
 
-		// Count this operator's output + measure latency.
 		current = timedRead(
 			countedRead(next, func() {
 				metrics.RecordsProcessedTotal.WithLabelValues(label).Inc()
@@ -129,10 +148,21 @@ func (env *StreamExecutionEnv) Execute(ctx context.Context) error {
 		)
 	}
 
-	// Measure sink write latency.
+	// Wrap the final channel to detect checkpoint barriers.
+	// When a barrier reaches the end of the operator chain, all
+	// in-flight records before the barrier have been processed,
+	// so this is the correct time to snapshot operator state.
+	current = barrierDetect(current, env.saveCheckpoint)
+
+	// Give sink a drain-only context so it doesn't bail early when
+	// the caller's context is cancelled.
 	start := time.Now()
 	err := env.sink.Write(ctx, countedRead(current, func() { metrics.RecordsWrittenTotal.Inc() }))
 	metrics.SinkWriteLatencySeconds.Observe(time.Since(start).Seconds())
+
+	if err != nil && ctx.Err() != nil {
+		return nil // graceful shutdown
+	}
 	if err != nil {
 		metrics.SinkErrorsTotal.Inc()
 	}
@@ -161,6 +191,25 @@ func countedRead(in <-chan types.Record, incr func()) <-chan types.Record {
 		for r := range in {
 			incr()
 			out <- r
+		}
+	}()
+	return out
+}
+
+// barrierDetect wraps a read channel and calls saveCheckpoint
+// whenever a barrier record passes through.  Barriers reach this
+// wrapper only after every operator upstream has forwarded them,
+// so operator state snapshots capture the correct point-in-time
+// state (post-barrier Chandy-Lamport alignment).
+func barrierDetect(in <-chan types.Record, save func(id string)) <-chan types.Record {
+	out := make(chan types.Record, 256)
+	go func() {
+		defer close(out)
+		for r := range in {
+			out <- r
+			if r.IsBarrier {
+				save(r.CheckpointID)
+			}
 		}
 	}()
 	return out
@@ -209,7 +258,11 @@ func (env *StreamExecutionEnv) injectBarriers(ctx context.Context, sourceCh <-ch
 		for {
 			select {
 			case <-ctx.Done():
-				// Drain remaining records on cancellation.
+				// Inject a final checkpoint barrier before draining so
+				// state is saved on graceful shutdown.
+				checkpointID++
+				out <- types.NewBarrier(fmt.Sprintf("cp-%d-shutdown", checkpointID))
+
 				for record := range sourceCh {
 					out <- record
 				}
@@ -225,11 +278,12 @@ func (env *StreamExecutionEnv) injectBarriers(ctx context.Context, sourceCh <-ch
 				checkpointID++
 				id := fmt.Sprintf("cp-%d", checkpointID)
 
-				// Inject barrier into the stream.
+				// Inject barrier into the stream. The barrier flows
+				// through all operators. When it reaches the end of the
+				// operator chain, saveCheckpoint is triggered (see
+				// barrierDetect below). This ensures operator state is
+				// captured AFTER all pre-barrier records are processed.
 				out <- types.NewBarrier(id)
-
-				// Collect snapshots from all stateful operators.
-				env.saveCheckpoint(id)
 			}
 		}
 	}()
