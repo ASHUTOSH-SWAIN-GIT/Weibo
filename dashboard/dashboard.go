@@ -10,8 +10,10 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"github.com/ASHUTOSH-SWAIN-GIT/mailer"
+	"github.com/ASHUTOSH-SWAIN-GIT/mailer/metrics"
 )
 
 //go:embed static/*
@@ -75,6 +77,7 @@ func (s *Server) Start() error {
 	// API endpoints.
 	mux.HandleFunc("/api/pipeline", s.handlePipeline)
 	mux.HandleFunc("/ws", s.handleWebSocket)
+	mux.Handle("/metrics", promhttp.HandlerFor(metrics.Registry, promhttp.HandlerOpts{}))
 
 	s.server = &http.Server{Addr: s.addr, Handler: mux}
 
