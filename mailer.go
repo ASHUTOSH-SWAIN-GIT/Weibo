@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/ASHUTOSH-SWAIN-GIT/mailer/checkpoint"
+	"github.com/ASHUTOSH-SWAIN-GIT/mailer/metrics"
 	"github.com/ASHUTOSH-SWAIN-GIT/mailer/operator"
 	"github.com/ASHUTOSH-SWAIN-GIT/mailer/sink"
 	"github.com/ASHUTOSH-SWAIN-GIT/mailer/source"
@@ -63,6 +64,10 @@ func (env *StreamExecutionEnv) FromSource(src source.Source) *Stream {
 // as goroutines connected by channels, and connects the final output to the sink.
 // Blocks until the source is exhausted or the context is cancelled.
 //
+// Prometheus metrics are collected automatically during execution.  The
+// metrics package is exposed at the global prometheus default registry;
+// use dashboard.NewServer to also serve /metrics via promhttp.
+//
 // If checkpointing is enabled, the pipeline will attempt to restore from
 // the latest checkpoint before starting. A goroutine injects checkpoint
 // barriers at the configured interval. When a barrier completes the full
@@ -75,23 +80,28 @@ func (env *StreamExecutionEnv) Execute(ctx context.Context) error {
 		return fmt.Errorf("mailer: no sink configured, use ToSink()")
 	}
 
-	// Attempt recovery from checkpoint.
+	metrics.PipelineRunning.Set(1)
+	defer metrics.PipelineRunning.Set(0)
+
 	if env.checkpointStorage != nil {
 		if err := env.restoreFromCheckpoint(); err != nil {
 			fmt.Printf("mailer: checkpoint restore failed (starting fresh): %v\n", err)
 		}
 	}
 
-	// Source writes into the first channel.
+	labels := env.operatorLabels()
+
 	sourceCh := make(chan types.Record, 256)
 	go func() {
 		defer close(sourceCh)
 		if err := env.source.Run(ctx, sourceCh); err != nil {
+			if ctx.Err() == nil {
+				metrics.SourceErrorsTotal.Inc()
+			}
 			fmt.Printf("mailer: source error: %v\n", err)
 		}
 	}()
 
-	// If checkpointing is enabled, wrap the source channel to inject barriers.
 	var recordCh <-chan types.Record
 	if env.checkpointInterval > 0 {
 		recordCh = env.injectBarriers(ctx, sourceCh)
@@ -99,19 +109,88 @@ func (env *StreamExecutionEnv) Execute(ctx context.Context) error {
 		recordCh = sourceCh
 	}
 
-	// Wire operators: each reads from current, writes to next.
-	current := recordCh
+	// Count source reads.
+	current := countedRead(recordCh, func() { metrics.RecordsReadTotal.Inc() })
 
-	for _, op := range env.operators {
+	for i, op := range env.operators {
 		next := make(chan types.Record, 256)
+		label := labels[i]
+
 		go func(op operator.Operator, in <-chan types.Record, out chan<- types.Record) {
 			op.Process(in, out)
 		}(op, current, next)
-		current = next
+
+		// Count this operator's output + measure latency.
+		current = timedRead(
+			countedRead(next, func() {
+				metrics.RecordsProcessedTotal.WithLabelValues(label).Inc()
+			}),
+			label,
+		)
 	}
 
-	// Final stage: sink reads from the last channel.
-	return env.sink.Write(ctx, current)
+	// Measure sink write latency.
+	start := time.Now()
+	err := env.sink.Write(ctx, countedRead(current, func() { metrics.RecordsWrittenTotal.Inc() }))
+	metrics.SinkWriteLatencySeconds.Observe(time.Since(start).Seconds())
+	if err != nil {
+		metrics.SinkErrorsTotal.Inc()
+	}
+	return err
+}
+
+// operatorLabels returns a label string for each operator in the chain.
+// Uses the user-provided label if set, otherwise the operator type name.
+func (env *StreamExecutionEnv) operatorLabels() []string {
+	labels := make([]string, len(env.operators))
+	for i, op := range env.operators {
+		if lab, ok := op.(operator.Labeled); ok && lab.GetLabel() != "" {
+			labels[i] = lab.GetLabel()
+		} else {
+			labels[i] = op.Name()
+		}
+	}
+	return labels
+}
+
+// countedRead wraps a read channel so every record triggers incr.
+func countedRead(in <-chan types.Record, incr func()) <-chan types.Record {
+	out := make(chan types.Record, 256)
+	go func() {
+		defer close(out)
+		for r := range in {
+			incr()
+			out <- r
+		}
+	}()
+	return out
+}
+
+// timedRead measures per-record latency through an operator by batching
+// 100 records and recording the average time per record.
+func timedRead(in <-chan types.Record, label string) <-chan types.Record {
+	out := make(chan types.Record, 256)
+	go func() {
+		defer close(out)
+		const batchSize = 100
+		var n int
+		start := time.Now()
+		for r := range in {
+			n++
+			out <- r
+			if n >= batchSize {
+				avg := time.Since(start).Seconds() / float64(n)
+				metrics.OperatorLatencySeconds.WithLabelValues(label).Observe(avg)
+				n = 0
+				start = time.Now()
+			}
+		}
+		if n > 0 {
+			avg := time.Since(start).Seconds() / float64(n)
+			metrics.OperatorLatencySeconds.WithLabelValues(label).Observe(avg)
+		}
+	}()
+	return out
 }
 
 // injectBarriers wraps a source channel and periodically injects checkpoint
