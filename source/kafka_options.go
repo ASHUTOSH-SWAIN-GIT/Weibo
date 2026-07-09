@@ -26,6 +26,8 @@ type kafkaSourceConfig struct {
 	watermarkOutOfOrderness time.Duration
 	watermarkInterval       time.Duration
 	deserializer            Deserializer
+	deserFailPolicy         DeserFailurePolicy
+	deserDLQ                RecordSink
 
 	fetchMaxRetries  int
 	commitMaxRetries int
@@ -99,9 +101,22 @@ func KafkaTLS(cfg auth.TLSConfig) KafkaSourceOption {
 
 // KafkaDeserialize sets a Deserializer that runs on every record before it
 // is emitted. The deserialized value is stored in Record.Parsed.
-// If the deserializer returns an error, the record is dropped.
+// If the deserializer returns an error, the record is dropped by default.
+// Use KafkaDeserializeFailurePolicy to control this behavior.
 func KafkaDeserialize(d Deserializer) KafkaSourceOption {
 	return func(c *kafkaSourceConfig) { c.deserializer = d }
+}
+
+// KafkaDeserializeFailurePolicy sets what happens when deserialization
+// fails. Default is DeserFailureDrop (record is silently discarded).
+func KafkaDeserializeFailurePolicy(p DeserFailurePolicy) KafkaSourceOption {
+	return func(c *kafkaSourceConfig) { c.deserFailPolicy = p }
+}
+
+// KafkaDeserializeDLQ sets the dead-letter-queue for records that fail
+// deserialization. Only used with DeserFailureDLQ.
+func KafkaDeserializeDLQ(dlq RecordSink) KafkaSourceOption {
+	return func(c *kafkaSourceConfig) { c.deserDLQ = dlq }
 }
 
 // KafkaWithWatermarks enables automatic watermark injection so that
@@ -122,7 +137,7 @@ func KafkaWatermarkInterval(d time.Duration) KafkaSourceOption {
 }
 
 // KafkaFetchMaxRetries sets how many times FetchMessage is retried
-// before failing the pipeline (default 5).
+// before failing the pipeline (default 5). Pass -1 to retry forever.
 func KafkaFetchMaxRetries(n int) KafkaSourceOption {
 	return func(c *kafkaSourceConfig) { c.fetchMaxRetries = n }
 }
