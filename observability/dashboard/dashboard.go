@@ -13,7 +13,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"github.com/ASHUTOSH-SWAIN-GIT/mailer"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/metrics"
+	"github.com/ASHUTOSH-SWAIN-GIT/mailer/observability/metrics"
 )
 
 //go:embed static/*

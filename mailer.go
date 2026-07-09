@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/ASHUTOSH-SWAIN-GIT/mailer/checkpoint"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/metrics"
+	"github.com/ASHUTOSH-SWAIN-GIT/mailer/observability/metrics"
 	"github.com/ASHUTOSH-SWAIN-GIT/mailer/operator"
 	"github.com/ASHUTOSH-SWAIN-GIT/mailer/sink"
 	"github.com/ASHUTOSH-SWAIN-GIT/mailer/source"
