@@ -32,6 +32,8 @@ type kafkaSourceConfig struct {
 	fetchMaxRetries  int
 	commitMaxRetries int
 	commitFailPolicy CommitPolicy
+
+	parallel bool
 }
 
 // KafkaSourceOption configures a KafkaSource. Pass one or more to
@@ -152,6 +154,17 @@ func KafkaCommitMaxRetries(n int) KafkaSourceOption {
 // all retries. Default is CommitPolicySkip (log and continue).
 func KafkaCommitPolicy(p CommitPolicy) KafkaSourceOption {
 	return func(c *kafkaSourceConfig) { c.commitFailPolicy = p }
+}
+
+// KafkaParallel enables per-partition parallel reading.  Each
+// partition gets its own goroutine and kafka.Reader, so records from
+// different partitions are fetched concurrently.  This improves
+// throughput for multi-partition topics.
+//
+// Note: enabling parallel disables consumer-group auto-balancing.
+// Offsets are managed per partition.
+func KafkaParallel() KafkaSourceOption {
+	return func(c *kafkaSourceConfig) { c.parallel = true }
 }
 
 // applyDefaults fills in zero-value config fields with sensible defaults.
