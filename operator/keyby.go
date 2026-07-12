@@ -3,38 +3,44 @@ package operator
 import (
 	"fmt"
 	"hash/fnv"
-	"sync"
 
 	"github.com/ASHUTOSH-SWAIN-GIT/mailer/types"
 )
 
 const defaultPartitions = 16
 
-// KeyByOperator partitions the stream by key. Records with the same key
-// are always routed to the same partition (goroutine). This is required before
-// stateful operations like Reduce, because each partition has its own state
-// and processes records sequentially — no concurrent access to the same key.
+// KeyByOperator marks the start of a keyed stage.  Records flow
+// through a router that hash-dispatches each record to one of N
+// worker channels.  Each worker runs its own copy of the downstream
+// stateful operators (Window, Reduce) with isolated state.
 //
-// After KeyBy, the record's Key field is set to the result of the key function.
-// The stream is physically split into N partitions, each consuming from its
-// own channel. Downstream operators (Reduce) receive the merged output.
+// KeyBy is not a processing operator — Execute() detects it and
+// builds the worker topology. Process() is a no-op.
 type KeyByOperator struct {
-	Fn         func(types.Record) []byte
-	Partitions int
-	Label      string
+	KeySelector KeySelector
+	Partitions  int
+	Label       string
 }
 
-// KeyBy creates a KeyByOperator with the given key selector function
-// and the default number of partitions (16).
-func KeyBy(fn func(types.Record) []byte) *KeyByOperator {
+// KeyBy creates a KeyByOperator with the given key selector.
+// Default partition count is 16. Use WithPartitions to change it.
+func KeyBy(fn KeySelector) *KeyByOperator {
 	return &KeyByOperator{
-		Fn:         fn,
-		Partitions: defaultPartitions,
+		KeySelector: fn,
+		Partitions:  defaultPartitions,
 	}
+}
+
+// WithPartitions sets the number of keyed workers and returns
+// the operator. More workers = more parallelism for stateful processing.
+func (op *KeyByOperator) WithPartitions(n int) *KeyByOperator {
+	op.Partitions = n
+	return op
 }
 
 func (op *KeyByOperator) Name() string     { return "KeyBy" }
 func (op *KeyByOperator) GetLabel() string { return op.Label }
+
 func (op *KeyByOperator) DescribeOp() OperatorMeta {
 	return OperatorMeta{
 		Type:  "KeyBy",
@@ -45,79 +51,25 @@ func (op *KeyByOperator) DescribeOp() OperatorMeta {
 	}
 }
 
-// WithPartitions sets the number of partitions and returns the operator
-// for chaining. More partitions = more parallelism.
-func (op *KeyByOperator) WithPartitions(n int) *KeyByOperator {
-	op.Partitions = n
-	return op
-}
+// IsRouter returns true — KeyBy is handled by Execute() as a
+// worker topology builder, not a regular channel operator.
+func (op *KeyByOperator) IsRouter() bool { return true }
 
-// Process reads each record, hashes its key, routes it to the matching
-// partition goroutine, and merges all partition outputs into a single
-// output channel.
-//
-// Watermarks and barriers are held back until all data has been processed.
-// This ensures that downstream Window/Reduce operators receive all data
-// records before seeing a watermark advance or a checkpoint barrier.
-// After all partitions drain, pending watermarks and barriers are forwarded
-// in the order they were received.
+// Process is never called by Execute() when IsRouter() is true.
 func (op *KeyByOperator) Process(in <-chan types.Record, out chan<- types.Record) {
 	defer close(out)
-
-	partChs := make([]chan types.Record, op.Partitions)
-	for i := range partChs {
-		partChs[i] = make(chan types.Record, 256)
-	}
-
-	var wg sync.WaitGroup
-
-	for i := range partChs {
-		wg.Add(1)
-		go func(ch <-chan types.Record) {
-			defer wg.Done()
-			for record := range ch {
-				out <- record
-			}
-		}(partChs[i])
-	}
-
-	// Hold back watermarks and barriers, forward them after all data drains.
-	var pending []types.Record
-
-	for record := range in {
-		if record.IsWatermark || record.IsBarrier {
-			pending = append(pending, record)
-		} else {
-			// Forward any held-back watermarks/barriers before new data
-			// that has a different ordering constraint — actually no,
-			// we keep them held back until input closes, same as before.
-			// The key insight: watermarks/barriers must not overtake data
-			// that was already sent to partitions.
-			record.Key = op.Fn(record)
-			idx := Partition(record.Key, op.Partitions)
-			partChs[idx] <- record
-		}
-	}
-
-	for _, ch := range partChs {
-		close(ch)
-	}
-	wg.Wait()
-
-	// Forward held-back watermarks and barriers in order.
-	for _, p := range pending {
-		out <- p
+	for r := range in {
+		out <- r
 	}
 }
 
-// Partition returns the partition index for a given key using FNV-1a hash.
-// This is fast, has good distribution, and is deterministic — same key always
-// maps to the same partition.
-func Partition(key []byte, numPartitions int) int {
-	if len(key) == 0 || numPartitions <= 1 {
+// Route hashes the record key and returns the target worker index.
+func (op *KeyByOperator) Route(r types.Record) int {
+	key := op.KeySelector(r)
+	if len(key) == 0 || op.Partitions <= 1 {
 		return 0
 	}
 	h := fnv.New32a()
 	h.Write(key)
-	return int(h.Sum32()) % numPartitions
+	return int(h.Sum32()) % op.Partitions
 }

@@ -44,6 +44,17 @@ func (op *WindowOperator) DescribeOp() OperatorMeta {
 	return OperatorMeta{Type: "Window", Label: op.Label, Config: cfg}
 }
 
+// Clone returns a copy with the same window assigner and idle timeout
+// but fresh window buffers and watermark. Used for per-worker isolation
+// in keyed parallel execution.
+func (op *WindowOperator) Clone() Operator {
+	return &WindowOperator{
+		Assigner: op.Assigner,
+		windows:  make(map[windowKey]*windowState),
+		Label:    op.Label,
+	}
+}
+
 // windowKey uniquely identifies a window by key + start + end times
 // as Unix nanoseconds (so it's comparable and hashable as a map key).
 // Including the record key ensures records from different keys don't
