@@ -97,11 +97,15 @@ Wired in `wireKeyedStage` via `workerCountedRead` and `workerTimedRead` wrappers
 
 ## Phase 8 — Failure Handling
 
-- Shared child context per keyed stage
-- Buffered error channel (cap = N workers)
-- Worker failure → cancel shared context → stop all workers
-- `FailurePolicyFail` propagates to pipeline runtime
-- Bad-record errors: continue using existing ProcessOperator failure policy
+**Status:** Done.
+
+- Shared child context (`stageCtx`) for the entire keyed stage.
+- Buffered error channel (`errCh`) with capacity = N workers.
+- Worker goroutines wrapped with `defer recover()` — panics cancel the stage.
+- First fatal error cancels `stageCtx`, stopping the router and all workers.
+- Error stored in `env.stageErr`; checked and returned by `Execute()` after the pipeline drains.
+- Router checks `stageCtx.Done()` before each dispatch.
+- On stage cancel: router closes worker input channels, workers drain and close outputs, merger closes `merged` channel, sink drains normally.
 
 ## Phase 9 — Graceful Shutdown
 

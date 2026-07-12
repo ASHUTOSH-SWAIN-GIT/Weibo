@@ -34,6 +34,7 @@ type StreamExecutionEnv struct {
 
 	workerOps []operator.Operator
 	workerMu  sync.Mutex
+	stageErr  error
 }
 
 // NewEnv creates a new StreamExecutionEnv.
@@ -192,8 +193,12 @@ func (env *StreamExecutionEnv) Execute(ctx context.Context) error {
 	}
 	if err != nil {
 		metrics.SinkErrorsTotal.Inc()
+		return err
 	}
-	return err
+	if env.stageErr != nil {
+		return env.stageErr
+	}
+	return nil
 }
 
 // operatorLabels returns a label string for each operator in the chain.
@@ -281,6 +286,11 @@ func (env *StreamExecutionEnv) wireKeyedStage(
 		workerOuts[i] = make(chan types.Record, 256)
 	}
 
+	// Shared child context: cancelling it stops the router and
+	// all workers.
+	stageCtx, stageCancel := context.WithCancel(ctx)
+	errCh := make(chan error, n)
+
 	// Router goroutine: hash-dispatches records to workers.
 	go func() {
 		defer func() {
@@ -288,9 +298,17 @@ func (env *StreamExecutionEnv) wireKeyedStage(
 				close(ch)
 			}
 		}()
-		for r := range in {
-			w := kb.Route(r)
-			workerIns[w] <- r
+		for {
+			select {
+			case <-stageCtx.Done():
+				return
+			case r, ok := <-in:
+				if !ok {
+					return
+				}
+				w := kb.Route(r)
+				workerIns[w] <- r
+			}
 		}
 	}()
 
@@ -301,11 +319,19 @@ func (env *StreamExecutionEnv) wireKeyedStage(
 		go func(workerID int, inCh <-chan types.Record, outCh chan<- types.Record) {
 			defer wg.Done()
 			defer close(outCh)
+			defer func() {
+				if r := recover(); r != nil {
+					stageCancel()
+					select {
+					case errCh <- fmt.Errorf("worker %d panicked: %v", workerID, r):
+					default:
+					}
+				}
+			}()
 
 			wLabel := strconv.Itoa(workerID)
 			prev := inCh
 
-			// Track records entering the first operator in this worker.
 			if len(stageOps) > 0 {
 				opName := stageOps[0].Name()
 				prev = workerCountedRead(prev, func() {
@@ -323,7 +349,6 @@ func (env *StreamExecutionEnv) wireKeyedStage(
 				next := make(chan types.Record, 256)
 				go clone.Process(prev, next)
 
-				// Per-worker metrics on the output of each operator.
 				prev = workerTimedRead(
 					workerCountedRead(next, func() {
 						metrics.OperatorWorkerRecordsOut.WithLabelValues(opName, wLabel).Inc()
@@ -336,6 +361,16 @@ func (env *StreamExecutionEnv) wireKeyedStage(
 			}
 		}(w, workerIns[w], workerOuts[w])
 	}
+
+	// Error watcher: first fatal error cancels the stage.
+	go func() {
+		select {
+		case err := <-errCh:
+			env.stageErr = err
+			stageCancel()
+		case <-stageCtx.Done():
+		}
+	}()
 
 	// Merger: reads all worker outputs concurrently.
 	merged := make(chan types.Record, 256)
