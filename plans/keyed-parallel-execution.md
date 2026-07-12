@@ -109,12 +109,28 @@ Wired in `wireKeyedStage` via `workerCountedRead` and `workerTimedRead` wrappers
 
 ## Phase 9 — Graceful Shutdown
 
-1. Stop accepting new records (ctx cancelled)
-2. Close router input
-3. Workers drain their channels
-4. Wait for all worker goroutines
-5. Merger drains all worker outputs
-6. All channels closed exactly once
+**Status:** Done.  The existing pipeline shutdown handles keyed stages
+transparently.
+
+Shutdown is triggered by the main `ctx` being cancelled.  Because
+`stageCtx` is a child of `ctx`, it cancels automatically, stopping the
+router.  Channels then close in cascade:
+
+```
+ctx cancel → source stops → sourceCh closes
+  → operators before KeyBy drain and close
+  → router sees closed input (or stageCtx.Done) → closes workerIns
+  → workers see closed input → drain → close workerOuts
+  → merger sees all workerOuts close (wgMerge.Wait) → closes merged
+  → downstream operators / sink drain normally
+```
+
+Invariants verified:
+- Worker input channels closed exactly once (router defer).
+- Worker output channels closed exactly once (worker defer).
+- Merged output channel closed exactly once (merger defer).
+- Workers drain buffered records before exit.
+- Checkpoint saved on shutdown (barrier injected before source drain).
 
 ## Phase 10 — Tests
 
