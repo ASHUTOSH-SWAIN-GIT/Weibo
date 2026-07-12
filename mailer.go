@@ -30,6 +30,9 @@ type StreamExecutionEnv struct {
 	checkpointStorage  checkpoint.Storage
 
 	shutdownTimeout time.Duration
+
+	workerOps []operator.Operator
+	workerMu  sync.Mutex
 }
 
 // NewEnv creates a new StreamExecutionEnv.
@@ -97,9 +100,17 @@ func (env *StreamExecutionEnv) Execute(ctx context.Context) error {
 	metrics.PipelineRunning.Set(1)
 	defer metrics.PipelineRunning.Set(0)
 
+	// Phase A: restore source offset before wiring (so the
+	// reader knows where to resume). Worker state is restored
+	// later because the worker instances don't exist yet.
+	var savedCheckpoint *checkpoint.CheckpointData
 	if env.checkpointStorage != nil {
-		if err := env.restoreFromCheckpoint(); err != nil {
-			fmt.Printf("mailer: checkpoint restore failed (starting fresh): %v\n", err)
+		data, err := env.checkpointStorage.Load()
+		if err != nil {
+			fmt.Printf("mailer: checkpoint load failed (starting fresh): %v\n", err)
+		} else if data != nil {
+			env.restoreSourceOffset(data)
+			savedCheckpoint = data
 		}
 	}
 
@@ -155,6 +166,12 @@ func (env *StreamExecutionEnv) Execute(ctx context.Context) error {
 			}),
 			label,
 		)
+	}
+
+	// Phase B: restore worker instances now that the keyed stage
+	// has created them via Clone().
+	if savedCheckpoint != nil {
+		env.restoreWorkersFromCheckpoint(savedCheckpoint)
 	}
 
 	// Wrap the final channel to detect checkpoint barriers.
@@ -287,6 +304,9 @@ func (env *StreamExecutionEnv) wireKeyedStage(
 			prev := inCh
 			for _, op := range stageOps {
 				clone := op.(operator.Cloneable).Clone()
+				env.workerMu.Lock()
+				env.workerOps = append(env.workerOps, clone)
+				env.workerMu.Unlock()
 				next := make(chan types.Record, 256)
 				go clone.Process(prev, next)
 				prev = next
@@ -403,7 +423,6 @@ func (env *StreamExecutionEnv) saveCheckpoint(id string) {
 		Source:    make(map[string][]byte),
 	}
 
-	// Snapshot each stateful operator.
 	for i, op := range env.operators {
 		if snap, ok := op.(operator.Snapshotable); ok {
 			snapshot, err := snap.Snapshot()
@@ -415,7 +434,20 @@ func (env *StreamExecutionEnv) saveCheckpoint(id string) {
 		}
 	}
 
-	// Snapshot source offset if it supports checkpointing.
+	// Snapshot per-worker operator instances created by keyed stages.
+	env.workerMu.Lock()
+	for i, op := range env.workerOps {
+		if snap, ok := op.(operator.Snapshotable); ok {
+			snapshot, err := snap.Snapshot()
+			if err != nil {
+				fmt.Printf("mailer: checkpoint worker-%d snapshot failed: %v\n", i, err)
+				continue
+			}
+			data.Operators[fmt.Sprintf("worker-%d", i)] = snapshot
+		}
+	}
+	env.workerMu.Unlock()
+
 	if cps, ok := env.source.(source.CheckpointSource); ok {
 		offset, err := cps.CheckpointOffset()
 		if err != nil {
@@ -430,39 +462,39 @@ func (env *StreamExecutionEnv) saveCheckpoint(id string) {
 	}
 }
 
-// restoreFromCheckpoint loads the latest checkpoint and restores
-// all stateful operators from their saved state.
-func (env *StreamExecutionEnv) restoreFromCheckpoint() error {
-	data, err := env.checkpointStorage.Load()
-	if err != nil {
-		return fmt.Errorf("load checkpoint: %w", err)
-	}
+// restoreSourceOffset restores the source offset from a checkpoint.
+// Called before wiring so the Kafka reader knows where to resume.
+func (env *StreamExecutionEnv) restoreSourceOffset(data *checkpoint.CheckpointData) {
 	if data == nil {
-		// No checkpoint found, start fresh.
-		return nil
+		return
 	}
+	if cps, ok := env.source.(source.CheckpointSource); ok {
+		if offsetData, exists := data.Source["offset"]; exists {
+			if err := cps.RestoreOffset(offsetData); err != nil {
+				fmt.Printf("mailer: restore source offset failed: %v\n", err)
+			}
+		}
+	}
+	fmt.Printf("mailer: restored from checkpoint %s\n", data.ID)
+}
 
-	// Restore each stateful operator.
-	for i, op := range env.operators {
+// restoreWorkersFromCheckpoint restores per-worker operator state for
+// operator instances created by keyed stages. Called after workers
+// are created via wireKeyedStage.
+func (env *StreamExecutionEnv) restoreWorkersFromCheckpoint(data *checkpoint.CheckpointData) {
+	if data == nil {
+		return
+	}
+	env.workerMu.Lock()
+	defer env.workerMu.Unlock()
+	for i, op := range env.workerOps {
 		if snap, ok := op.(operator.Snapshotable); ok {
-			key := fmt.Sprintf("op-%d", i)
+			key := fmt.Sprintf("worker-%d", i)
 			if stateData, exists := data.Operators[key]; exists {
 				if err := snap.Restore(stateData); err != nil {
-					return fmt.Errorf("restore operator %d: %w", i, err)
+					fmt.Printf("mailer: restore worker-%d failed: %v\n", i, err)
 				}
 			}
 		}
 	}
-
-	// Restore source offset if supported.
-	if cps, ok := env.source.(source.CheckpointSource); ok {
-		if offsetData, exists := data.Source["offset"]; exists {
-			if err := cps.RestoreOffset(offsetData); err != nil {
-				return fmt.Errorf("restore source offset: %w", err)
-			}
-		}
-	}
-
-	fmt.Printf("mailer: restored from checkpoint %s\n", data.ID)
-	return nil
 }

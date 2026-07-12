@@ -70,15 +70,15 @@ Records for key "Alice" always enter Worker 2, so Window₂ and Reduce₂ always
 
 ## Phase 6 — Checkpointing Per Worker
 
-- `CheckpointData.Operators` keyed as `"Window/worker-0"`, `"Reduce/worker-0"`, etc.
-- Each worker's operator snapshots independently via `Snapshot()`
-- On restore: recreate N workers, restore each worker's state
-- Same deterministic hash ensures same keys route to same worker indices
+**Status:** Done.
 
-**Status:** Not yet implemented.  The worker instances created by `wireKeyedStage`
-are local variables — they are not reachable by `saveCheckpoint()` which
-traverses `env.operators` (the original template operators).  A worker
-registry needs to be added so checkpoints capture per-worker state.
+- `CheckpointData.Operators` stores both `"op-N"` (template) and `"worker-N"` (per-worker cloned instances).
+- `StreamExecutionEnv.workerOps` tracks cloned worker instances created by `wireKeyedStage`.
+- `saveCheckpoint()` snapshots both `env.operators` and `env.workerOps`.
+- Restore split into two phases:
+  1. `restoreSourceOffset(data)` — called before wiring, seeks Kafka reader.
+  2. `restoreWorkersFromCheckpoint(data)` — called after wiring, restores worker state.
+- Same deterministic FNV-1a hash ensures same keys route to same worker index on recovery.
 
 ## Phase 7 — Metrics Per Operator Per Worker
 
