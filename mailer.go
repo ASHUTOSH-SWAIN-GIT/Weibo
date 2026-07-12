@@ -3,6 +3,7 @@ package mailer
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"sync"
 	"time"
 
@@ -301,15 +302,34 @@ func (env *StreamExecutionEnv) wireKeyedStage(
 			defer wg.Done()
 			defer close(outCh)
 
+			wLabel := strconv.Itoa(workerID)
 			prev := inCh
+
+			// Track records entering the first operator in this worker.
+			if len(stageOps) > 0 {
+				opName := stageOps[0].Name()
+				prev = workerCountedRead(prev, func() {
+					metrics.OperatorWorkerRecordsIn.WithLabelValues(opName, wLabel).Inc()
+				})
+			}
+
 			for _, op := range stageOps {
 				clone := op.(operator.Cloneable).Clone()
 				env.workerMu.Lock()
 				env.workerOps = append(env.workerOps, clone)
 				env.workerMu.Unlock()
+
+				opName := clone.Name()
 				next := make(chan types.Record, 256)
 				go clone.Process(prev, next)
-				prev = next
+
+				// Per-worker metrics on the output of each operator.
+				prev = workerTimedRead(
+					workerCountedRead(next, func() {
+						metrics.OperatorWorkerRecordsOut.WithLabelValues(opName, wLabel).Inc()
+					}),
+					opName, wLabel,
+				)
 			}
 			for r := range prev {
 				outCh <- r
@@ -359,6 +379,46 @@ func timedRead(in <-chan types.Record, label string) <-chan types.Record {
 		if n > 0 {
 			avg := time.Since(start).Seconds() / float64(n)
 			metrics.OperatorLatencySeconds.WithLabelValues(label).Observe(avg)
+		}
+	}()
+	return out
+}
+
+// workerCountedRead wraps a read channel so every record triggers incr.
+// Used for per-worker-operator counters.
+func workerCountedRead(in <-chan types.Record, incr func()) <-chan types.Record {
+	out := make(chan types.Record, 256)
+	go func() {
+		defer close(out)
+		for r := range in {
+			incr()
+			out <- r
+		}
+	}()
+	return out
+}
+
+// workerTimedRead measures per-worker per-operator latency.
+func workerTimedRead(in <-chan types.Record, opName, workerID string) <-chan types.Record {
+	out := make(chan types.Record, 256)
+	go func() {
+		defer close(out)
+		const batchSize = 100
+		var n int
+		start := time.Now()
+		for r := range in {
+			n++
+			out <- r
+			if n >= batchSize {
+				avg := time.Since(start).Seconds() / float64(n)
+				metrics.OperatorWorkerLatencySeconds.WithLabelValues(opName, workerID).Observe(avg)
+				n = 0
+				start = time.Now()
+			}
+		}
+		if n > 0 {
+			avg := time.Since(start).Seconds() / float64(n)
+			metrics.OperatorWorkerLatencySeconds.WithLabelValues(opName, workerID).Observe(avg)
 		}
 	}()
 	return out
