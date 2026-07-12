@@ -55,10 +55,30 @@ var (
 		Help:    "Sink write latency in seconds.",
 		Buckets: prometheus.ExponentialBuckets(0.001, 2, 14),
 	})
+
+	OperatorWorkerRecordsIn = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "mailer_operator_worker_records_in_total",
+		Help: "Total records entering a keyed operator worker.",
+	}, []string{"operator", "worker"})
+
+	OperatorWorkerRecordsOut = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "mailer_operator_worker_records_out_total",
+		Help: "Total records emitted by a keyed operator worker.",
+	}, []string{"operator", "worker"})
+
+	OperatorWorkerErrors = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "mailer_operator_worker_errors_total",
+		Help: "Total errors in a keyed operator worker.",
+	}, []string{"operator", "worker"})
+
+	OperatorWorkerLatencySeconds = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    "mailer_operator_worker_processing_duration_seconds",
+		Help:    "Per-worker processing latency in seconds.",
+		Buckets: prometheus.ExponentialBuckets(0.001, 2, 14),
+	}, []string{"operator", "worker"})
 )
 
 // All returns all registered metrics for use with a custom registry
-// or mustRegister-style setup.
 func All() []prometheus.Collector {
 	return []prometheus.Collector{
 		RecordsReadTotal,
@@ -70,5 +90,9 @@ func All() []prometheus.Collector {
 		SinkErrorsTotal,
 		OperatorLatencySeconds,
 		SinkWriteLatencySeconds,
+		OperatorWorkerRecordsIn,
+		OperatorWorkerRecordsOut,
+		OperatorWorkerErrors,
+		OperatorWorkerLatencySeconds,
 	}
 }
