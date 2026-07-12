@@ -125,6 +125,17 @@ func (op *ReduceOperator) Restore(data []byte) error {
 	return vs.RestoreAll(stateData.Entries)
 }
 
+// Clone returns a copy with the same reduce function and label but
+// a fresh in-memory state backend. Used for per-worker isolation
+// in keyed parallel execution.
+func (op *ReduceOperator) Clone() Operator {
+	return &ReduceOperator{
+		Fn:      op.Fn,
+		backend: state.NewMemoryBackend(),
+		Label:   op.Label,
+	}
+}
+
 // StateKey returns the key used for Reduce state lookup.
 // If the record has window metadata, the key includes window bounds
 // so reduce is scoped per-(key, window).

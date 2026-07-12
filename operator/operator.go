@@ -47,3 +47,15 @@ type OperatorMeta struct {
 type DescribableOperator interface {
 	DescribeOp() OperatorMeta
 }
+
+// KeySelector extracts a routing key from a record. Used by KeyBy to
+// deterministically route records to keyed workers.
+type KeySelector func(types.Record) []byte
+
+// Cloneable is an optional interface for operators that can be
+// duplicated with independent state. Stateful operators (Window,
+// Reduce) implement this so each keyed worker gets its own instance
+// with an isolated state backend.
+type Cloneable interface {
+	Clone() Operator
+}

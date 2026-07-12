@@ -3,6 +3,7 @@ package mailer
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/ASHUTOSH-SWAIN-GIT/mailer/checkpoint"
@@ -132,10 +133,18 @@ func (env *StreamExecutionEnv) Execute(ctx context.Context) error {
 
 	current := countedRead(recordCh, func() { metrics.RecordsReadTotal.Inc() })
 
-	for i, op := range env.operators {
-		next := make(chan types.Record, 256)
+	for i := 0; i < len(env.operators); i++ {
+		op := env.operators[i]
 		label := labels[i]
 
+		if kb, ok := op.(*operator.KeyByOperator); ok && kb.IsRouter() {
+			stageOps, skip := takeStateful(env.operators[i+1:])
+			i += skip
+			current = env.wireKeyedStage(ctx, kb, stageOps, current)
+			continue
+		}
+
+		next := make(chan types.Record, 256)
 		go func(op operator.Operator, in <-chan types.Record, out chan<- types.Record) {
 			op.Process(in, out)
 		}(op, current, next)
@@ -213,6 +222,99 @@ func barrierDetect(in <-chan types.Record, save func(id string)) <-chan types.Re
 		}
 	}()
 	return out
+}
+
+// takeStateful collects consecutive Cloneable (stateful) operators
+// from the given slice. Returns the collected operators and the
+// number of operators consumed.
+func takeStateful(ops []operator.Operator) ([]operator.Operator, int) {
+	var stateful []operator.Operator
+	for _, op := range ops {
+		if _, ok := op.(operator.Cloneable); ok {
+			stateful = append(stateful, op)
+		} else {
+			return stateful, len(stateful)
+		}
+	}
+	return stateful, len(stateful)
+}
+
+// wireKeyedStage builds the router → workers → merger topology.
+//
+//	                        ┌── Worker 0: Op₀_clone → Op₁_clone → ... ──┐
+//	current ── Router ──────┼── Worker 1: Op₀_clone → Op₁_clone → ... ──┼── merged → downstream
+//	                        └── Worker 2: Op₀_clone → Op₁_clone → ... ──┘
+//
+// Each worker gets its own clone of every stateful operator in the
+// stage, with an isolated state backend.  The router hash-dispatches
+// records so the same key always reaches the same worker.
+func (env *StreamExecutionEnv) wireKeyedStage(
+	ctx context.Context,
+	kb *operator.KeyByOperator,
+	stageOps []operator.Operator,
+	in <-chan types.Record,
+) <-chan types.Record {
+
+	n := kb.Partitions
+	workerIns := make([]chan types.Record, n)
+	workerOuts := make([]chan types.Record, n)
+	for i := 0; i < n; i++ {
+		workerIns[i] = make(chan types.Record, 256)
+		workerOuts[i] = make(chan types.Record, 256)
+	}
+
+	// Router goroutine: hash-dispatches records to workers.
+	go func() {
+		defer func() {
+			for _, ch := range workerIns {
+				close(ch)
+			}
+		}()
+		for r := range in {
+			w := kb.Route(r)
+			workerIns[w] <- r
+		}
+	}()
+
+	var wg sync.WaitGroup
+
+	for w := 0; w < n; w++ {
+		wg.Add(1)
+		go func(workerID int, inCh <-chan types.Record, outCh chan<- types.Record) {
+			defer wg.Done()
+			defer close(outCh)
+
+			prev := inCh
+			for _, op := range stageOps {
+				clone := op.(operator.Cloneable).Clone()
+				next := make(chan types.Record, 256)
+				go clone.Process(prev, next)
+				prev = next
+			}
+			for r := range prev {
+				outCh <- r
+			}
+		}(w, workerIns[w], workerOuts[w])
+	}
+
+	// Merger: reads all worker outputs concurrently.
+	merged := make(chan types.Record, 256)
+	go func() {
+		defer close(merged)
+		var wgMerge sync.WaitGroup
+		for _, ch := range workerOuts {
+			wgMerge.Add(1)
+			go func(c <-chan types.Record) {
+				defer wgMerge.Done()
+				for r := range c {
+					merged <- r
+				}
+			}(ch)
+		}
+		wgMerge.Wait()
+	}()
+
+	return merged
 }
 
 // timedRead measures per-record latency through an operator by batching

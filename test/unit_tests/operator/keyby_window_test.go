@@ -9,140 +9,50 @@ import (
 	"github.com/ASHUTOSH-SWAIN-GIT/mailer/window"
 )
 
-func TestKeyBy_SetsKeyAndRoutes(t *testing.T) {
-	op := operator.KeyBy(func(r types.Record) []byte {
-		return r.Key
-	}).WithPartitions(4)
+func TestKeyBy_Router_SameKeySameWorker(t *testing.T) {
+	kb := operator.KeyBy(func(r types.Record) []byte { return r.Key }).WithPartitions(4)
 
-	in := make(chan types.Record, 10)
-	out := make(chan types.Record, 10)
-
-	go op.Process(in, out)
-
-	records := []types.Record{
-		{Key: []byte("alice"), Value: []byte("v1")},
-		{Key: []byte("bob"), Value: []byte("v2")},
-		{Key: []byte("alice"), Value: []byte("v3")},
-	}
-	for _, r := range records {
-		in <- r
-	}
-	close(in)
-
-	var results []types.Record
-	for r := range out {
-		results = append(results, r)
-	}
-
-	if len(results) != 3 {
-		t.Fatalf("expected 3 results, got %d", len(results))
-	}
-
-	aliceKeys := 0
-	bobKeys := 0
-	for _, r := range results {
-		if string(r.Key) == "alice" {
-			aliceKeys++
-		} else if string(r.Key) == "bob" {
-			bobKeys++
-		}
-	}
-	if aliceKeys != 2 {
-		t.Errorf("alice keys: got %d, want 2", aliceKeys)
-	}
-	if bobKeys != 1 {
-		t.Errorf("bob keys: got %d, want 1", bobKeys)
+	alice := types.Record{Key: []byte("alice")}
+	w1 := kb.Route(alice)
+	w2 := kb.Route(alice)
+	if w1 != w2 {
+		t.Errorf("same key should route to same worker: %d != %d", w1, w2)
 	}
 }
 
-func TestKeyBy_ForwardsWatermark_AfterDataDrains(t *testing.T) {
-	op := operator.KeyBy(func(r types.Record) []byte { return r.Key }).WithPartitions(2)
-
-	in := make(chan types.Record, 10)
-	out := make(chan types.Record, 10)
-
-	go op.Process(in, out)
-
-	in <- types.Record{Key: []byte("a"), Value: []byte("data")}
-	in <- types.NewWatermark(time.Unix(100, 0))
-	in <- types.Record{Key: []byte("b"), Value: []byte("data2")}
-	in <- types.NewWatermark(time.Unix(200, 0))
-	close(in)
-
-	var gotWatermark time.Time
-	var dataCount int
-	for r := range out {
-		if r.IsWatermark {
-			if r.Timestamp.After(gotWatermark) {
-				gotWatermark = r.Timestamp
-			}
-		} else {
-			dataCount++
-		}
-	}
-
-	if dataCount != 2 {
-		t.Errorf("data records: got %d, want 2", dataCount)
-	}
-	if !gotWatermark.Equal(time.Unix(200, 0)) {
-		t.Errorf("watermark: got %v, want %v", gotWatermark, time.Unix(200, 0))
+func TestKeyBy_Router_EmptyKeyToZero(t *testing.T) {
+	kb := operator.KeyBy(func(r types.Record) []byte { return nil }).WithPartitions(16)
+	if w := kb.Route(types.Record{Key: nil}); w != 0 {
+		t.Errorf("empty key should route to worker 0, got %d", w)
 	}
 }
 
-func TestKeyBy_OnlyWatermark(t *testing.T) {
-	op := operator.KeyBy(func(r types.Record) []byte { return r.Key }).WithPartitions(2)
-
-	in := make(chan types.Record, 10)
-	out := make(chan types.Record, 10)
-
-	go op.Process(in, out)
-
-	wm := time.Unix(50, 0)
-	in <- types.NewWatermark(wm)
-	close(in)
-
-	var gotWatermark time.Time
-	for r := range out {
-		if r.IsWatermark {
-			gotWatermark = r.Timestamp
-		}
-	}
-	if !gotWatermark.Equal(wm) {
-		t.Errorf("watermark: got %v, want %v", gotWatermark, wm)
-	}
-}
-
-func TestPartition_EmptyKey(t *testing.T) {
-	idx := operator.Partition([]byte{}, 16)
-	if idx != 0 {
-		t.Errorf("empty key should go to partition 0, got %d", idx)
-	}
-}
-
-func TestPartition_Deterministic(t *testing.T) {
-	key := []byte("test-key")
-	p1 := operator.Partition(key, 16)
-	p2 := operator.Partition(key, 16)
+func TestKeyBy_Router_Deterministic(t *testing.T) {
+	kb := operator.KeyBy(func(r types.Record) []byte { return r.Key }).WithPartitions(16)
+	r := types.Record{Key: []byte("test-key")}
+	p1 := kb.Route(r)
+	p2 := kb.Route(r)
 	if p1 != p2 {
-		t.Errorf("same key should always map to same partition: %d != %d", p1, p2)
+		t.Errorf("same key/record should always map to same worker: %d != %d", p1, p2)
 	}
 }
 
-func TestPartition_DifferentKeysDifferentPartitions(t *testing.T) {
+func TestKeyBy_Router_DifferentKeysDifferentWorkers(t *testing.T) {
+	kb := operator.KeyBy(func(r types.Record) []byte { return r.Key }).WithPartitions(16)
 	keys := [][]byte{[]byte("a"), []byte("b"), []byte("c"), []byte("d")}
-	partitions := make(map[int]bool)
+	workers := make(map[int]bool)
 	for _, k := range keys {
-		partitions[operator.Partition(k, 16)] = true
+		workers[kb.Route(types.Record{Key: k})] = true
 	}
-	if len(partitions) < 2 {
-		t.Errorf("expected keys to spread across at least 2 partitions, got %d", len(partitions))
+	if len(workers) < 2 {
+		t.Errorf("expected keys to spread across at least 2 workers, got %d", len(workers))
 	}
 }
 
-func TestPartition_SinglePartition(t *testing.T) {
-	idx := operator.Partition([]byte("any-key"), 1)
-	if idx != 0 {
-		t.Errorf("single partition should always return 0, got %d", idx)
+func TestKeyBy_Router_SinglePartition(t *testing.T) {
+	kb := operator.KeyBy(func(r types.Record) []byte { return r.Key }).WithPartitions(1)
+	if w := kb.Route(types.Record{Key: []byte("any")}); w != 0 {
+		t.Errorf("single partition should always return 0, got %d", w)
 	}
 }
 

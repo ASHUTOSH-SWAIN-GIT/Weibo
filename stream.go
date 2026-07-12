@@ -73,15 +73,30 @@ func (s *Stream) Filter(fn func(types.Record) bool, label ...string) *Stream {
 }
 
 // KeyBy partitions the stream by the given key selector function.
-// All records with the same key are routed together. Required before
-// stateful operations like Reduce.
-// The optional label is shown in the dashboard.
-func (s *Stream) KeyBy(fn func(types.Record) []byte, label ...string) *Stream {
+// All records with the same key are routed to the same keyed worker.
+// Required before stateful operations like Window and Reduce.
+//
+// Use WithPartitions to control the number of keyed workers:
+//
+//	stream.KeyBy(fn, "by-customer").WithPartitions(8).Window(...).Reduce(...)
+func (s *Stream) KeyBy(fn operator.KeySelector, label ...string) *Stream {
 	op := operator.KeyBy(fn)
 	if len(label) > 0 {
 		op.Label = label[0]
 	}
 	s.env.operators = append(s.env.operators, op)
+	return s
+}
+
+// WithPartitions sets the number of keyed workers for the most
+// recently added KeyBy operator. Must be called directly after KeyBy.
+func (s *Stream) WithPartitions(n int) *Stream {
+	if len(s.env.operators) == 0 {
+		return s
+	}
+	if kb, ok := s.env.operators[len(s.env.operators)-1].(*operator.KeyByOperator); ok {
+		kb.Partitions = n
+	}
 	return s
 }
 
