@@ -124,17 +124,20 @@ func (s *SinkStage) Run(runCtx, hardCtx context.Context, in <-chan types.Record,
 	for r := range in {
 		sm.countIn(r)
 		if !pumping {
-			continue // sink died or forced shutdown: discard while upstream unwinds
+			continue // forced shutdown: discard while upstream unwinds
 		}
 		select {
 		case pumped <- r:
 			metrics.RecordsWrittenTotal.Inc()
 			sm.countOut(r)
 		case sinkErr = <-done:
-			received = true
-			pumping = false
+			// Sink died mid-stream. Return immediately so Execute can
+			// cancel the pipeline — upstream is blocked on full edges
+			// and only hardCtx will release it.
+			metrics.SinkErrorsTotal.Inc()
+			return sinkErr
 		case <-hardCtx.Done():
-			pumping = false
+			pumping = false // upstream is aborting; drain in until it closes
 		}
 	}
 	close(pumped)
@@ -188,12 +191,24 @@ func (s *ChannelStage) Run(runCtx, hardCtx context.Context, in <-chan types.Reco
 		r, ok, err := recvRecord(hardCtx, mid)
 		if err != nil || !ok {
 			lat.flush()
+			if err != nil {
+				// Forced shutdown: unblock the abandoned operator so
+				// its goroutine can exit once its input closes.
+				go func() {
+					for range mid {
+					}
+				}()
+			}
 			return err
 		}
 		metrics.RecordsProcessedTotal.WithLabelValues(s.Label).Inc()
 		lat.tick()
 		if err := sm.send(hardCtx, out, r); err != nil {
 			lat.flush()
+			go func() {
+				for range mid {
+				}
+			}()
 			return err
 		}
 	}

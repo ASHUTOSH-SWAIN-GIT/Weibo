@@ -71,18 +71,18 @@ A transformation applied to a stream. Each operator takes one or more input stre
 | `Map` | `func(Record) Record` | Transform each record 1:1 |
 | `FlatMap` | `func(Record) []Record` | Transform each record 1:many |
 | `Filter` | `func(Record) bool` | Keep or drop records |
-| `KeyBy` | `func(Record) []byte` | Partition stream by key (enables keyed state) |
-| `Reduce` | `func(accum, current Record) Record` | Combine records with shared state |
+| `KeyBy` | `func(Record) []byte` | Partition stream by key (enables keyed state + parallelism) |
+| `Reduce` | `func(accum []byte, curr Record) []byte` | Per-key aggregate: fold each record into a byte accumulator |
 | `Window` | `WindowAssigner` | Group records into time-based windows |
-| `Process` | `ProcessFunction` | Full control: access state, timers, side outputs |
+| `Process` | `func(Record) (Record, error)` | Error-aware transform with failure policy (drop / DLQ / fail) |
 
 ### Keyed Stream
 
 After `KeyBy`, the stream is partitioned by key. Each key gets its own state — this is how you do per-user counters, per-session windows, etc. State is always local to the key, no cross-key coordination needed.
 
 ```
-stream.KeyBy(func(r Record) []byte { return r.Key })
-       .Reduce(func(accum, curr Record) Record { /* merge */ })
+stream.KeyBy(func(r types.Record) []byte { return r.Key }).WithPartitions(8).
+       Reduce(func(accum []byte, curr types.Record) []byte { /* fold */ })
 ```
 
 ### Window
@@ -117,11 +117,10 @@ State is memory that persists across records. It's what makes a stream processor
 
 | State Type | Use Case | Example |
 |------------|----------|---------|
-| **ValueState** | Single value per key | Current user score |
+| **ValueState** | Single value per key | Current user score, Reduce accumulator |
 | **ListState** | Ordered list per key | Recent login timestamps |
-| **MapState** | Key-value map per key | Per-URL click counts for a user |
 
-State is stored in a **State Backend** (in-memory for v1, pluggable later). On checkpoint, state is snapshotted so it can be restored after a failure.
+State is stored in a **State Backend** (in-memory today, behind an interface so a durable backend can be added). It is used internally by `Reduce` and `Window`; with keyed parallelism each worker gets its own isolated backend. On checkpoint, state is snapshotted so it can be restored after a failure.
 
 ### Checkpoint
 
@@ -129,7 +128,7 @@ A checkpoint is a consistent snapshot of:
 1. The current offset in each source partition
 2. The state of all operators
 
-If the pipeline crashes, it restarts from the last successful checkpoint: sources rewind to the saved offsets, state is restored, and processing continues. This gives **exactly-once** semantics — every record is processed once, no more, no less.
+If the pipeline crashes, it restarts from the last successful checkpoint: sources rewind to the saved offsets, state is restored, and processing continues. This gives **exactly-once semantics for operator state**; records replayed after recovery may reach the sink again, so output is at-least-once until transactional sinks land.
 
 Checkpointing is based on the Chandy-Lamport algorithm (barriers flow through the stream, operators snapshot state when they see a barrier).
 
@@ -218,7 +217,7 @@ alongside the existing per-operator and per-worker metrics.
 
 ---
 
-## Proposed SDK API
+## SDK API
 
 ```go
 package main
@@ -227,10 +226,11 @@ import (
     "context"
     "time"
 
-    "mailer"
-    "mailer/source"
-    "mailer/sink"
-    "mailer/window"
+    "github.com/ASHUTOSH-SWAIN-GIT/mailer"
+    "github.com/ASHUTOSH-SWAIN-GIT/mailer/sink"
+    "github.com/ASHUTOSH-SWAIN-GIT/mailer/source"
+    "github.com/ASHUTOSH-SWAIN-GIT/mailer/types"
+    "github.com/ASHUTOSH-SWAIN-GIT/mailer/window"
 )
 
 func main() {
@@ -251,11 +251,12 @@ func main() {
 
     env.
         FromSource(kafkaSource).
-        KeyBy(func(r mailer.Record) []byte { return r.Key }).
-        Window(window.Tumbling(5 * time.Minute)).
-        Reduce(func(accum, curr mailer.Record) mailer.Record {
-            // sum order amounts per customer per 5 minutes
-            return merge(accum, curr)
+        KeyBy(func(r types.Record) []byte { return r.Key }).WithPartitions(8).
+        Window(window.NewTumbling(5 * time.Minute)).
+        Reduce(func(accum []byte, curr types.Record) []byte {
+            // accum is this key's running aggregate ([]byte, nil on
+            // first record); return the updated aggregate.
+            return addAmount(accum, curr)
         }).
         ToSink(kafkaSink)
 
@@ -267,31 +268,36 @@ func main() {
 
 ```go
 stream.
-    Map(parseOrder).              // deserialize JSON
-    Filter(isValidOrder).         // drop invalid
-    KeyBy(orderCustomerKey).      // partition by customer ID
-    Window(window.Tumbling(5min)). // 5-minute tumbling window
-    Reduce(aggregateAmount).      // sum amounts
-    ToSink(kafkaSink)             // write results
+    Map(parseOrder).                        // transform 1:1
+    Filter(isValidOrder).                   // drop invalid
+    KeyBy(customerKey).WithPartitions(8).   // partition by customer, 8 keyed workers
+    Window(window.NewTumbling(5 * time.Minute)).
+    Reduce(aggregateAmount).                // per-key aggregate ([]byte accumulator)
+    ToSink(kafkaSink)
 ```
 
-### ProcessFunction (low-level)
+### Process (error-aware transform)
+
+`Process` wraps a user function that may fail; the failure policy
+decides what happens to the record (drop it, send it to a dead-letter
+queue, or fail the pipeline):
 
 ```go
-stream.Process(func(ctx mailer.Context, r mailer.Record) {
-    state := ctx.ValueState("count")
-
-    count := state.Get() + 1
-    state.Set(count)
-
-    if count >= 100 {
-        ctx.Output(alertRecord)
-        state.Set(0)
+stream.Process(func(r types.Record) (types.Record, error) {
+    if !isValid(r) {
+        return r, fmt.Errorf("invalid order")
     }
-
-    ctx.Collect(r)
-})
+    return enrich(r), nil
+},
+    operator.WithProcessFailurePolicy(operator.ProcFailureDLQ),
+    operator.WithProcessDLQ(dlqSink),
+)
 ```
+
+Keyed state (per-key accumulators, window contents) is managed by the
+engine inside `Reduce` and `Window` — there is no user-facing state
+API yet; a Flink-style stateful ProcessFunction with direct state
+access is on the roadmap.
 
 ---
 
@@ -299,126 +305,67 @@ stream.Process(func(ctx mailer.Context, r mailer.Record) {
 
 ```
 mailer/
-├── mailer.go              # StreamExecutionEnv, NewEnv(), Execute()
+├── mailer.go              # StreamExecutionEnv, NewEnv(), Execute(), checkpointing glue
 ├── stream.go              # Stream type (fluent chain builder)
-├── record.go              # Record type
+├── metadata.go            # Pipeline description for the dashboard
+├── types/
+│   └── record.go          # Record type (data / watermark / barrier)
+├── pipeline/              # Stage-based execution engine
+│   ├── stage.go           # Stage interface, SourceStage, SinkStage, ChannelStage
+│   ├── edge.go            # Bounded edges + blocking sends (backpressure)
+│   ├── planner.go         # Groups operators into execution stages
+│   ├── stateless_stage.go # Chained stateless operators, worker pool
+│   ├── keyed_stage.go     # Router → keyed workers → aligning merger
+│   ├── markers.go         # Barrier/watermark broadcast + alignment
+│   └── metrics.go         # Per-stage / per-edge instrumentation
 ├── operator/
-│   ├── operator.go        # Operator interface
-│   ├── map.go             # Map operator
-│   ├── flatmap.go         # FlatMap operator
-│   ├── filter.go          # Filter operator
-│   ├── keyby.go           # KeyBy partitioner
-│   ├── reduce.go          # Reduce operator
-│   └── process.go         # ProcessFunction operator
-├── window/
-│   ├── window.go          # WindowAssigner interface
-│   ├── tumbling.go        # Tumbling window
-│   ├── sliding.go         # Sliding window
-│   └── session.go         # Session window
-├── state/
-│   ├── state.go           # StateBackend interface, State types
-│   └── memory.go          # In-memory state backend
-├── source/
-│   ├── source.go          # Source interface
-│   ├── kafka.go           # Kafka source (using segmentio/kafka-go)
-│   ├── kafka_options.go   # Kafka source functional options
-│   ├── kafka_offset.go    # Mailer offset enum (no kafka-go leak)
-│   ├── deserialize.go     # Deserializer interface + JSON impl
-│   ├── watermark.go       # WatermarkSource wrapper
-│   └── generator.go       # Test data generator source
-├── sink/
-│   ├── sink.go            # Sink interface
-│   ├── kafka.go           # Kafka sink (options-based, SASL/TLS, serializer)
-│   ├── kafka_options.go   # Kafka sink functional options
-│   ├── serialize.go       # Serializer interface + JSON impl
-│   ├── postgres.go        # Postgres sink (pgx, batch insert, retry)
-│   ├── postgres_options.go # Postgres sink functional options
-│   ├── stdout.go          # Stdout sink
-│   └── blackhole.go       # Blackhole sink (benchmarking)
-├── checkpoint/
-│   ├── checkpoint.go      # CheckpointManager, barrier injection
-│   └── store.go           # Checkpoint storage (file / memory)
-├── watermark/
-│   └── watermark.go       # Watermark generator strategies
-└── examples/
-    ├── wordcount/         # Basic map + reduce
-    ├── kafka-orders/      # Kafka → Window → Kafka
-    └── fraud-detect/      # Stateful process function
+│   ├── operator.go        # Operator, SingleProcessor, Cloneable, Parallel
+│   ├── map.go             # Map (1:1)
+│   ├── flatmap.go         # FlatMap (1:N)
+│   ├── filter.go          # Filter
+│   ├── process.go         # Process (error-aware, failure policy + DLQ)
+│   ├── keyby.go           # KeyBy router (hash partitioning)
+│   ├── reduce.go          # Reduce (keyed accumulator)
+│   └── window.go          # Window operator (buffers, fires on watermark)
+├── window/                # Window assigners: tumbling, sliding, session
+├── watermark/             # Watermark strategies (bounded out-of-orderness)
+├── state/                 # StateBackend interface + in-memory backend
+├── source/                # Source interface; Kafka (multi-partition, SASL/TLS,
+│                          #   deserializers, watermarks), slice/generator for tests
+├── sink/                  # Sink interface; Kafka, Postgres (batch+retry),
+│                          #   stdout, blackhole; serializers, failure policies, DLQ
+├── checkpoint/            # Barrier-based checkpoint data + file storage
+├── auth/                  # SASL / TLS config shared by Kafka source & sink
+├── observability/
+│   ├── metrics/           # Prometheus registry: pipeline, operator, stage, edge
+│   └── dashboard/         # Built-in web dashboard
+├── examples/
+│   ├── wordcount/         # FlatMap → KeyBy → Reduce
+│   ├── windowing/         # Event time, watermarks, tumbling windows
+│   ├── backpressure/      # Fast source + slow sink, bounded edges
+│   ├── kafka-orders/      # Kafka → Window → Kafka
+│   ├── pg-orders/         # Kafka → Postgres
+│   └── dashboard-demo/    # Metrics + dashboard
+└── test/unit_tests/       # Integration tests: checkpoint recovery, backpressure,
+                           #   crash-resume, shutdown, per-package unit tests
 ```
 
 ---
 
-## Implementation Phases
+## Implementation Status
 
-### Phase 1: Core Pipeline (no Kafka, no state, no windows)
+All originally planned phases are implemented:
 
-Build the foundation — Record, Stream, basic operators, Source/Sink interfaces, in-memory sources and sinks.
+- ✅ **Core pipeline** — Record, fluent Stream API, Map/Filter/FlatMap/Process, sources and sinks.
+- ✅ **Stateful processing** — per-key state, Reduce, `Process` with failure policies + DLQ.
+- ✅ **Windowing & watermarks** — tumbling/sliding/session windows, bounded out-of-orderness watermarks, late-record dropping.
+- ✅ **Kafka & Postgres connectors** — multi-partition Kafka source (consumer groups, SASL/TLS, deserializers, per-partition offset checkpointing), Kafka + Postgres sinks with batching, retries, serializers.
+- ✅ **Checkpointing & recovery** — barrier-based snapshots, file storage, restore of operator state + per-partition source offsets on restart.
+- ✅ **Keyed parallelism** — `WithPartitions(n)`: router → N stateful workers with cloned operators and isolated state; barriers/watermarks broadcast and re-aligned so checkpoints stay consistent.
+- ✅ **Stage-based execution & backpressure** — operators grouped into stages, direct function-call chaining inside a stage, bounded edges between stages, `WithParallelism(n)` for stateless workers, two-phase graceful shutdown.
+- ✅ **Observability** — Prometheus metrics (pipeline, operator, worker, stage, edge) and a built-in dashboard.
 
-**What works:** `GeneratorSource → Map → Filter → StdoutSink`
-
-| File | What it does |
-|------|-------------|
-| `record.go` | Record type with Key, Value, Timestamp, Offset |
-| `mailer.go` | StreamExecutionEnv, `FromSource()`, `Execute()` |
-| `stream.go` | Stream chain builder — `Map()`, `Filter()`, `KeyBy()`, `ToSink()` |
-| `operator/operator.go` | Operator interface |
-| `operator/map.go` | Map operator implementation |
-| `operator/filter.go` | Filter operator implementation |
-| `operator/keyby.go` | KeyBy partitioner |
-| `source/source.go` | Source interface |
-| `source/generator.go` | Generator source for testing |
-| `sink/sink.go` | Sink interface |
-| `sink/stdout.go` | Stdout sink |
-
-### Phase 2: Stateful Processing
-
-Add per-key state and the Reduce operator. State lives in-memory, partitioned by key after KeyBy.
-
-**What works:** `Source → KeyBy → Reduce(accumulator) → Sink`
-
-| File | What it does |
-|------|-------------|
-| `state/state.go` | StateBackend interface, ValueState, ListState |
-| `state/memory.go` | In-memory state backend (map per key) |
-| `operator/reduce.go` | Reduce operator with keyed state |
-| `operator/process.go` | ProcessFunction with state access |
-
-### Phase 3: Windowing & Watermarks
-
-Add time-based windowing. Watermarks flow through the stream and trigger window completion.
-
-**What works:** `Source → KeyBy → Window(5min) → Reduce → Sink`
-
-| File | What it does |
-|------|-------------|
-| `watermark/watermark.go` | Watermark generator (bounded out of orderness) |
-| `window/window.go` | WindowAssigner interface, WindowResult |
-| `window/tumbling.go` | Tumbling window |
-| `window/sliding.go` | Sliding window |
-| `window/session.go` | Session window |
-
-### Phase 4: Kafka Source & Sink
-
-Connect to real Kafka. Consume topics with consumer groups, produce to topics, commit offsets.
-
-**What works:** `KafkaSource → Window → Reduce → KafkaSink`
-
-| File | What it does |
-|------|-------------|
-| `source/kafka.go` | Kafka source using segmentio/kafka-go |
-| `sink/kafka.go` | Kafka sink |
-| `sink/blackhole.go` | Blackhole sink for benchmarking |
-
-### Phase 5: Checkpointing & Fault Tolerance
-
-Add barrier-based checkpointing. On failure, restore state and rewind source offsets.
-
-**What works:** Exactly-once processing with crash recovery.
-
-| File | What it does |
-|------|-------------|
-| `checkpoint/checkpoint.go` | Barrier injection, snapshot coordination |
-| `checkpoint/store.go` | Checkpoint storage (filesystem / in-memory) |
+Up next (roughly in order): durable state backend (Pebble), transactional/idempotent sinks for end-to-end exactly-once, allowed-lateness + side outputs for late data, multi-stream joins, typed `Stream[T]` API.
 
 ---
 
@@ -430,7 +377,7 @@ Flink runs as a JobManager + TaskManager cluster. Mailer runs as a single Go pro
 
 ### Why barrier-based checkpointing?
 
-The Chandy-Lamport approach (barriers flow through the dataflow graph, operators snapshot on barrier arrival) is well-proven in Flink. It provides exactly-once semantics without stopping the stream. The barrier is a special Record that flows in-band with data.
+The Chandy-Lamport approach (barriers flow through the dataflow graph, operators snapshot on barrier arrival) is well-proven in Flink. Barriers are special Records that flow in-band with data; at parallel stages they are broadcast to every worker and re-aligned at the stage exit, so a snapshot always reflects a consistent cut of the stream. This gives exactly-once semantics for **operator state**. End-to-end exactly-once to external sinks additionally requires transactional/idempotent sinks, which are on the roadmap — today, output to sinks is at-least-once across a crash/restore.
 
 ### Why not just use Kafka Streams?
 
@@ -449,11 +396,12 @@ Kafka Streams is Java-only. Mailer gives Go developers a native, embeddable stre
 | Language | Java | Go |
 | Deployment | Cluster (JobManager + TaskManagers) | Single process, embeddable |
 | API | DataStream API, Table API, SQL | DataStream API (fluent chain) |
-| State Backends | RocksDB, Memory | Memory (v1), pluggable |
+| State Backends | RocksDB, Memory | Memory (durable backend planned) |
 | Checkpointing | Barrier-based, aligned/unaligned | Barrier-based, aligned |
 | Windowing | Tumbling, Sliding, Session, Global | Tumbling, Sliding, Session |
 | Kafka Connector | Built-in, mature | Built-in (segmentio/kafka-go) |
-| Exactly-once | Yes | Yes (via checkpointing) |
+| Exactly-once | End-to-end (with transactional sinks) | State: yes (checkpoints); sinks: at-least-once today |
+| Backpressure | Credit-based network flow control | Bounded edges between stages |
 | SQL | Yes | No (not planned for v1) |
 | CEP (Complex Event Processing) | Yes | No (future) |
 
@@ -461,4 +409,4 @@ Kafka Streams is Java-only. Mailer gives Go developers a native, embeddable stre
 
 ## Status
 
-Pre-development. This README defines the architecture and implementation plan. Code starts from Phase 1.
+Actively developed. The engine (stage-based execution, keyed parallelism, checkpoint/recovery, backpressure, metrics) is implemented and covered by unit + integration tests, including crash-and-recovery and shutdown-under-load scenarios. See **Implementation Status** above for what's done and what's next.
