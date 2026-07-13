@@ -1,4 +1,4 @@
-package mailer
+package pipeline_test
 
 import (
 	"context"
@@ -7,11 +7,12 @@ import (
 	"time"
 
 	"github.com/ASHUTOSH-SWAIN-GIT/mailer/operator"
+	"github.com/ASHUTOSH-SWAIN-GIT/mailer/pipeline"
 	"github.com/ASHUTOSH-SWAIN-GIT/mailer/types"
 )
 
-// alignTestOp is a Cloneable operator that records the barriers each clone
-// sees and optionally delays data records to simulate slow workers.
+// alignTestOp is a Cloneable operator that records the barriers each
+// clone sees and optionally delays data records to simulate slow workers.
 type alignTestOp struct {
 	delay time.Duration
 
@@ -57,36 +58,40 @@ func (o *alignTestOp) seenBarriers() []string {
 	return append([]string(nil), o.barriers...)
 }
 
-// runKeyedStage wires a keyed stage with the given partitions and prototype
-// operator, feeds it the records, and returns the merged output.
+// runKeyedStage builds a KeyedStage with the given partitions and
+// prototype operator, feeds it the records, and returns the output.
 func runKeyedStage(t *testing.T, partitions int, proto *alignTestOp, records []types.Record) []types.Record {
 	t.Helper()
 
-	env := NewEnv()
 	kb := operator.KeyBy(func(r types.Record) []byte { return r.Key }).WithPartitions(partitions)
+	stage := pipeline.NewKeyedStage(kb, []operator.Operator{proto}, nil)
 
 	in := make(chan types.Record, len(records))
 	for _, r := range records {
 		in <- r
 	}
 	close(in)
+	out := make(chan types.Record, len(records)*2+16)
 
-	merged := env.wireKeyedStage(context.Background(), kb, []operator.Operator{proto}, in)
+	errc := make(chan error, 1)
+	go func() { errc <- stage.Run(context.Background(), context.Background(), in, out) }()
 
-	var out []types.Record
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		for r := range merged {
-			out = append(out, r)
+	var result []types.Record
+	timeout := time.After(10 * time.Second)
+	for {
+		select {
+		case r, ok := <-out:
+			if !ok {
+				if err := <-errc; err != nil {
+					t.Fatalf("stage.Run returned error: %v", err)
+				}
+				return result
+			}
+			result = append(result, r)
+		case <-timeout:
+			t.Fatal("timed out draining keyed stage output")
 		}
-	}()
-	select {
-	case <-done:
-	case <-time.After(10 * time.Second):
-		t.Fatal("timed out draining keyed stage output")
 	}
-	return out
 }
 
 func dataRecords(n int) []types.Record {
@@ -136,9 +141,9 @@ func TestKeyedStage_BarrierEmittedExactlyOnce(t *testing.T) {
 }
 
 func TestKeyedStage_BarrierAlignsBehindSlowWorkers(t *testing.T) {
-	// Every worker delays each data record; the barrier must still come
-	// out AFTER all pre-barrier data records, because the merger holds it
-	// until every worker has drained its backlog and forwarded its copy.
+	// Every worker delays each data record; the barrier must still
+	// come out AFTER all pre-barrier data records, because the merge
+	// holds it until every worker has drained its backlog.
 	proto := &alignTestOp{delay: 20 * time.Millisecond}
 	recs := append(dataRecords(8), types.NewBarrier("cp-1"))
 
@@ -211,5 +216,21 @@ func TestKeyedStage_SinglePartitionStillWorks(t *testing.T) {
 	}
 	if barriers != 1 {
 		t.Errorf("expected 1 barrier with a single partition, got %d", barriers)
+	}
+}
+
+func TestKeyedStage_ClonesCreatedEagerlyWithCallback(t *testing.T) {
+	proto := &alignTestOp{}
+	kb := operator.KeyBy(func(r types.Record) []byte { return r.Key }).WithPartitions(3)
+
+	var registered []operator.Operator
+	pipeline.NewKeyedStage(kb, []operator.Operator{proto}, func(op operator.Operator) {
+		registered = append(registered, op)
+	})
+
+	// Clones must exist before Run so checkpoint restore can happen
+	// between planning and execution.
+	if len(registered) != 3 {
+		t.Errorf("expected 3 clones registered at construction, got %d", len(registered))
 	}
 }

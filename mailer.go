@@ -2,18 +2,23 @@ package mailer
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"strconv"
 	"sync"
 	"time"
 
 	"github.com/ASHUTOSH-SWAIN-GIT/mailer/checkpoint"
 	"github.com/ASHUTOSH-SWAIN-GIT/mailer/observability/metrics"
 	"github.com/ASHUTOSH-SWAIN-GIT/mailer/operator"
+	"github.com/ASHUTOSH-SWAIN-GIT/mailer/pipeline"
 	"github.com/ASHUTOSH-SWAIN-GIT/mailer/sink"
 	"github.com/ASHUTOSH-SWAIN-GIT/mailer/source"
 	"github.com/ASHUTOSH-SWAIN-GIT/mailer/types"
 )
+
+// DefaultEdgeCapacity is the default buffer size of the bounded edges
+// between execution stages. Override with WithBufferSize.
+const DefaultEdgeCapacity = 1024
 
 // StreamExecutionEnv is the entry point for building and running stream pipelines.
 // Create one with NewEnv(), define your pipeline using FromSource/ToSink,
@@ -31,21 +36,35 @@ type StreamExecutionEnv struct {
 	checkpointStorage  checkpoint.Storage
 
 	shutdownTimeout time.Duration
+	edgeCapacity    int
 
 	workerOps []operator.Operator
 	workerMu  sync.Mutex
-	stageErr  error
 }
 
 // NewEnv creates a new StreamExecutionEnv.
 func NewEnv() *StreamExecutionEnv {
-	return &StreamExecutionEnv{shutdownTimeout: 30 * time.Second}
+	return &StreamExecutionEnv{
+		shutdownTimeout: 30 * time.Second,
+		edgeCapacity:    DefaultEdgeCapacity,
+	}
 }
 
 // WithShutdownTimeout sets how long the pipeline waits for in-flight
 // records to drain before forcing shutdown (default 30s).
 func (env *StreamExecutionEnv) WithShutdownTimeout(d time.Duration) *StreamExecutionEnv {
 	env.shutdownTimeout = d
+	return env
+}
+
+// WithBufferSize sets the capacity of the bounded edges between
+// execution stages (default 1024). Larger buffers absorb bursts;
+// smaller buffers propagate backpressure to the source sooner.
+// Values < 1 are ignored.
+func (env *StreamExecutionEnv) WithBufferSize(n int) *StreamExecutionEnv {
+	if n > 0 {
+		env.edgeCapacity = n
+	}
 	return env
 }
 
@@ -74,23 +93,22 @@ func (env *StreamExecutionEnv) FromSource(src source.Source) *Stream {
 	return &Stream{env: env}
 }
 
-// Execute runs the pipeline. It starts the source, wires up all operators
-// as goroutines connected by channels, and connects the final output to the sink.
-// Blocks until the source is exhausted or the context is cancelled.
+// Execute runs the pipeline. Operators are grouped into execution
+// stages (see the pipeline package); stages run concurrently,
+// connected by bounded edges. A full edge blocks the upstream stage —
+// backpressure propagates stage by stage back to the source, so a slow
+// sink throttles ingestion instead of growing memory.
 //
-// Graceful shutdown (on context cancellation):
-//  1. Source stops accepting new records
-//  2. Source flushes pending offset commits
-//  3. Operators drain buffered records
-//  4. Sink drains and flushes remaining records (up to shutdownTimeout)
-//  5. Checkpoint is saved (if enabled)
-//  6. Returns
+// Graceful shutdown (on context cancellation, C3 two-phase):
+//  1. The source stops producing and flushes pending offset commits.
+//  2. A final checkpoint barrier is injected (if checkpointing is on).
+//  3. Channel closes cascade downstream; every stage drains in-flight
+//     records — nothing is dropped.
+//  4. The sink drains and the final checkpoint is saved.
+//  5. Only if draining exceeds shutdownTimeout are blocked stages
+//     forcibly aborted.
 //
 // Prometheus metrics are collected automatically during execution.
-//
-// If checkpointing is enabled, the pipeline will attempt to restore from
-// the latest checkpoint before starting. A goroutine injects checkpoint
-// barriers at the configured interval.
 func (env *StreamExecutionEnv) Execute(ctx context.Context) error {
 	if env.source == nil {
 		return fmt.Errorf("mailer: no source configured, use FromSource()")
@@ -102,9 +120,8 @@ func (env *StreamExecutionEnv) Execute(ctx context.Context) error {
 	metrics.PipelineRunning.Set(1)
 	defer metrics.PipelineRunning.Set(0)
 
-	// Phase A: restore source offset before wiring (so the
-	// reader knows where to resume). Worker state is restored
-	// later because the worker instances don't exist yet.
+	// Phase A: restore the source offset before wiring, so the reader
+	// knows where to resume.
 	var savedCheckpoint *checkpoint.CheckpointData
 	if env.checkpointStorage != nil {
 		data, err := env.checkpointStorage.Load()
@@ -116,87 +133,97 @@ func (env *StreamExecutionEnv) Execute(ctx context.Context) error {
 		}
 	}
 
-	labels := env.operatorLabels()
-
-	sourceCh := make(chan types.Record, 256)
-	go func() {
-		defer close(sourceCh)
-		if err := env.source.Run(ctx, sourceCh); err != nil {
-			if ctx.Err() == nil {
-				metrics.SourceErrorsTotal.Inc()
-			}
-			fmt.Printf("mailer: source error: %v\n", err)
-		}
-		// Flush pending offset commits before operators drain.
-		if d, ok := env.source.(source.Drainable); ok {
-			flushCtx, cancel := context.WithTimeout(context.Background(), env.shutdownTimeout)
-			defer cancel()
-			if err := d.Drain(flushCtx); err != nil {
-				fmt.Printf("mailer: source drain error: %v\n", err)
-			}
-		}
-	}()
-
-	var recordCh <-chan types.Record
-	if env.checkpointInterval > 0 {
-		recordCh = env.injectBarriers(ctx, sourceCh)
-	} else {
-		recordCh = sourceCh
+	plan, err := pipeline.BuildPlan(pipeline.PlanConfig{
+		Source:       env.source,
+		Operators:    env.operators,
+		Labels:       env.operatorLabels(),
+		Sink:         env.sink,
+		DrainTimeout: env.shutdownTimeout,
+		OnClone: func(op operator.Operator) {
+			env.workerMu.Lock()
+			env.workerOps = append(env.workerOps, op)
+			env.workerMu.Unlock()
+		},
+	})
+	if err != nil {
+		return err
 	}
 
-	current := countedRead(recordCh, func() { metrics.RecordsReadTotal.Inc() })
-
-	for i := 0; i < len(env.operators); i++ {
-		op := env.operators[i]
-		label := labels[i]
-
-		if kb, ok := op.(*operator.KeyByOperator); ok && kb.IsRouter() {
-			stageOps, skip := takeStateful(env.operators[i+1:])
-			i += skip
-			current = env.wireKeyedStage(ctx, kb, stageOps, current)
-			continue
-		}
-
-		next := make(chan types.Record, 256)
-		go func(op operator.Operator, in <-chan types.Record, out chan<- types.Record) {
-			op.Process(in, out)
-		}(op, current, next)
-
-		current = timedRead(
-			countedRead(next, func() {
-				metrics.RecordsProcessedTotal.WithLabelValues(label).Inc()
-			}),
-			label,
-		)
-	}
-
-	// Phase B: restore worker instances now that the keyed stage
-	// has created them via Clone().
+	// Phase B: restore per-worker operator state. Keyed stages clone
+	// their operators at plan time, so every clone exists before any
+	// stage starts processing.
 	if savedCheckpoint != nil {
 		env.restoreWorkersFromCheckpoint(savedCheckpoint)
 	}
 
-	// Wrap the final channel to detect checkpoint barriers.
-	// When a barrier reaches the end of the operator chain, all
-	// in-flight records before the barrier have been processed,
-	// so this is the correct time to snapshot operator state.
-	current = barrierDetect(current, env.saveCheckpoint)
+	// Two-phase shutdown (C3). Cancelling ctx only stops the source;
+	// the pipeline drains through cascading channel closes. hardCtx is
+	// what unblocks stuck sends — it fires shutdownTimeout after ctx
+	// is cancelled, or immediately on a fatal stage error.
+	hardCtx, hardCancel := context.WithCancel(context.Background())
+	defer hardCancel()
+	pipelineDone := make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+			t := time.NewTimer(env.shutdownTimeout)
+			defer t.Stop()
+			select {
+			case <-t.C:
+				hardCancel()
+			case <-pipelineDone:
+			}
+		case <-pipelineDone:
+		}
+	}()
 
-	// Give sink a drain-only context so it doesn't bail early when
-	// the caller's context is cancelled.
-	start := time.Now()
-	err := env.sink.Write(ctx, countedRead(current, func() { metrics.RecordsWrittenTotal.Inc() }))
-	metrics.SinkWriteLatencySeconds.Observe(time.Since(start).Seconds())
-
-	if err != nil && ctx.Err() != nil {
-		return nil // graceful shutdown
+	nStages := len(plan)
+	edges := make([]*pipeline.Edge, nStages-1)
+	for i := range edges {
+		edges[i] = pipeline.NewEdge(fmt.Sprintf("edge-%d", i), env.edgeCapacity)
 	}
-	if err != nil {
-		metrics.SinkErrorsTotal.Inc()
+
+	var wg sync.WaitGroup
+	errs := make([]error, nStages)
+	for i, stage := range plan {
+		var in <-chan types.Record
+		if i > 0 {
+			in = edges[i-1].Ch
+		}
+		// Checkpoint barriers enter the stream right after the source
+		// stage and are detected right before the sink stage, when
+		// every operator upstream has forwarded them.
+		if i == 1 && env.checkpointInterval > 0 {
+			in = env.injectBarriers(ctx, in)
+		}
+		if i == nStages-1 {
+			in = barrierDetect(in, env.saveCheckpoint)
+		}
+		var out chan<- types.Record
+		if i < len(edges) {
+			out = edges[i].Ch
+		}
+
+		wg.Add(1)
+		go func(i int, st pipeline.Stage, in <-chan types.Record, out chan<- types.Record) {
+			defer wg.Done()
+			if err := st.Run(ctx, hardCtx, in, out); err != nil {
+				errs[i] = err
+				hardCancel() // fatal stage error: unwind the whole pipeline
+			}
+		}(i, stage, in, out)
+	}
+	wg.Wait()
+	close(pipelineDone)
+
+	for i, err := range errs {
+		if err == nil || errors.Is(err, context.Canceled) {
+			continue
+		}
+		if i == nStages-1 && ctx.Err() != nil {
+			continue // sink error during graceful shutdown
+		}
 		return err
-	}
-	if env.stageErr != nil {
-		return env.stageErr
 	}
 	return nil
 }
@@ -215,19 +242,6 @@ func (env *StreamExecutionEnv) operatorLabels() []string {
 	return labels
 }
 
-// countedRead wraps a read channel so every record triggers incr.
-func countedRead(in <-chan types.Record, incr func()) <-chan types.Record {
-	out := make(chan types.Record, 256)
-	go func() {
-		defer close(out)
-		for r := range in {
-			incr()
-			out <- r
-		}
-	}()
-	return out
-}
-
 // barrierDetect wraps a read channel and calls saveCheckpoint
 // whenever a barrier record passes through.  Barriers reach this
 // wrapper only after every operator upstream has forwarded them,
@@ -242,260 +256,6 @@ func barrierDetect(in <-chan types.Record, save func(id string)) <-chan types.Re
 			if r.IsBarrier {
 				save(r.CheckpointID)
 			}
-		}
-	}()
-	return out
-}
-
-// takeStateful collects consecutive Cloneable (stateful) operators
-// from the given slice. Returns the collected operators and the
-// number of operators consumed.
-func takeStateful(ops []operator.Operator) ([]operator.Operator, int) {
-	var stateful []operator.Operator
-	for _, op := range ops {
-		if _, ok := op.(operator.Cloneable); ok {
-			stateful = append(stateful, op)
-		} else {
-			return stateful, len(stateful)
-		}
-	}
-	return stateful, len(stateful)
-}
-
-// wireKeyedStage builds the router → workers → merger topology.
-//
-//	                        ┌── Worker 0: Op₀_clone → Op₁_clone → ... ──┐
-//	current ── Router ──────┼── Worker 1: Op₀_clone → Op₁_clone → ... ──┼── merged → downstream
-//	                        └── Worker 2: Op₀_clone → Op₁_clone → ... ──┘
-//
-// Each worker gets its own clone of every stateful operator in the
-// stage, with an isolated state backend.  The router hash-dispatches
-// records so the same key always reaches the same worker.
-func (env *StreamExecutionEnv) wireKeyedStage(
-	ctx context.Context,
-	kb *operator.KeyByOperator,
-	stageOps []operator.Operator,
-	in <-chan types.Record,
-) <-chan types.Record {
-
-	n := kb.Partitions
-	workerIns := make([]chan types.Record, n)
-	workerOuts := make([]chan types.Record, n)
-	for i := 0; i < n; i++ {
-		workerIns[i] = make(chan types.Record, 256)
-		workerOuts[i] = make(chan types.Record, 256)
-	}
-
-	// Shared child context: cancelling it stops the router and
-	// all workers.
-	stageCtx, stageCancel := context.WithCancel(ctx)
-	errCh := make(chan error, n)
-
-	// Router goroutine: hash-dispatches records to workers.
-	go func() {
-		defer func() {
-			for _, ch := range workerIns {
-				close(ch)
-			}
-		}()
-		for {
-			select {
-			case <-stageCtx.Done():
-				return
-			case r, ok := <-in:
-				if !ok {
-					return
-				}
-				// Barriers and watermarks are keyless markers: every
-				// worker must see them, so broadcast instead of routing.
-				// Routing them would send the marker to worker 0 only,
-				// leaving the other workers' state unaligned at snapshot
-				// time.
-				if r.IsBarrier || r.IsWatermark {
-					for _, ch := range workerIns {
-						ch <- r
-					}
-					continue
-				}
-				workerIns[kb.Route(r)] <- r
-			}
-		}
-	}()
-
-	var wg sync.WaitGroup
-
-	for w := 0; w < n; w++ {
-		wg.Add(1)
-		go func(workerID int, inCh <-chan types.Record, outCh chan<- types.Record) {
-			defer wg.Done()
-			defer close(outCh)
-			defer func() {
-				if r := recover(); r != nil {
-					stageCancel()
-					select {
-					case errCh <- fmt.Errorf("worker %d panicked: %v", workerID, r):
-					default:
-					}
-				}
-			}()
-
-			wLabel := strconv.Itoa(workerID)
-			prev := inCh
-
-			if len(stageOps) > 0 {
-				opName := stageOps[0].Name()
-				prev = workerCountedRead(prev, func() {
-					metrics.OperatorWorkerRecordsIn.WithLabelValues(opName, wLabel).Inc()
-				})
-			}
-
-			for _, op := range stageOps {
-				clone := op.(operator.Cloneable).Clone()
-				env.workerMu.Lock()
-				env.workerOps = append(env.workerOps, clone)
-				env.workerMu.Unlock()
-
-				opName := clone.Name()
-				next := make(chan types.Record, 256)
-				go clone.Process(prev, next)
-
-				prev = workerTimedRead(
-					workerCountedRead(next, func() {
-						metrics.OperatorWorkerRecordsOut.WithLabelValues(opName, wLabel).Inc()
-					}),
-					opName, wLabel,
-				)
-			}
-			for r := range prev {
-				outCh <- r
-			}
-		}(w, workerIns[w], workerOuts[w])
-	}
-
-	// Error watcher: first fatal error cancels the stage.
-	go func() {
-		select {
-		case err := <-errCh:
-			env.stageErr = err
-			stageCancel()
-		case <-stageCtx.Done():
-		}
-	}()
-
-	// Merger: reads all worker outputs concurrently into fanIn, then a
-	// single aligner loop forwards downstream. Broadcast markers (barriers,
-	// watermarks) arrive once per worker; the aligner emits each exactly
-	// once, only after ALL workers have delivered it — at that point every
-	// worker has processed all of its pre-marker records, so a snapshot
-	// triggered downstream captures consistent state.
-	fanIn := make(chan types.Record, 256)
-	go func() {
-		defer close(fanIn)
-		var wgMerge sync.WaitGroup
-		for _, ch := range workerOuts {
-			wgMerge.Add(1)
-			go func(c <-chan types.Record) {
-				defer wgMerge.Done()
-				for r := range c {
-					fanIn <- r
-				}
-			}(ch)
-		}
-		wgMerge.Wait()
-	}()
-
-	merged := make(chan types.Record, 256)
-	go func() {
-		defer close(merged)
-		seen := make(map[string]int)
-		for r := range fanIn {
-			if r.IsBarrier || r.IsWatermark {
-				k := markerKey(r)
-				seen[k]++
-				if seen[k] == n {
-					delete(seen, k)
-					merged <- r
-				}
-				continue
-			}
-			merged <- r
-		}
-	}()
-
-	return merged
-}
-
-// markerKey identifies a broadcast marker for alignment counting.
-// Barriers align on CheckpointID, watermarks on their timestamp.
-func markerKey(r types.Record) string {
-	if r.IsBarrier {
-		return "b:" + r.CheckpointID
-	}
-	return "w:" + strconv.FormatInt(r.Timestamp.UnixNano(), 10)
-}
-
-// timedRead measures per-record latency through an operator by batching
-// 100 records and recording the average time per record.
-func timedRead(in <-chan types.Record, label string) <-chan types.Record {
-	out := make(chan types.Record, 256)
-	go func() {
-		defer close(out)
-		const batchSize = 100
-		var n int
-		start := time.Now()
-		for r := range in {
-			n++
-			out <- r
-			if n >= batchSize {
-				avg := time.Since(start).Seconds() / float64(n)
-				metrics.OperatorLatencySeconds.WithLabelValues(label).Observe(avg)
-				n = 0
-				start = time.Now()
-			}
-		}
-		if n > 0 {
-			avg := time.Since(start).Seconds() / float64(n)
-			metrics.OperatorLatencySeconds.WithLabelValues(label).Observe(avg)
-		}
-	}()
-	return out
-}
-
-// workerCountedRead wraps a read channel so every record triggers incr.
-// Used for per-worker-operator counters.
-func workerCountedRead(in <-chan types.Record, incr func()) <-chan types.Record {
-	out := make(chan types.Record, 256)
-	go func() {
-		defer close(out)
-		for r := range in {
-			incr()
-			out <- r
-		}
-	}()
-	return out
-}
-
-// workerTimedRead measures per-worker per-operator latency.
-func workerTimedRead(in <-chan types.Record, opName, workerID string) <-chan types.Record {
-	out := make(chan types.Record, 256)
-	go func() {
-		defer close(out)
-		const batchSize = 100
-		var n int
-		start := time.Now()
-		for r := range in {
-			n++
-			out <- r
-			if n >= batchSize {
-				avg := time.Since(start).Seconds() / float64(n)
-				metrics.OperatorWorkerLatencySeconds.WithLabelValues(opName, workerID).Observe(avg)
-				n = 0
-				start = time.Now()
-			}
-		}
-		if n > 0 {
-			avg := time.Since(start).Seconds() / float64(n)
-			metrics.OperatorWorkerLatencySeconds.WithLabelValues(opName, workerID).Observe(avg)
 		}
 	}()
 	return out
@@ -540,7 +300,7 @@ func (env *StreamExecutionEnv) injectBarriers(ctx context.Context, sourceCh <-ch
 				// Inject barrier into the stream. The barrier flows
 				// through all operators. When it reaches the end of the
 				// operator chain, saveCheckpoint is triggered (see
-				// barrierDetect below). This ensures operator state is
+				// barrierDetect). This ensures operator state is
 				// captured AFTER all pre-barrier records are processed.
 				out <- types.NewBarrier(id)
 			}
@@ -616,8 +376,8 @@ func (env *StreamExecutionEnv) restoreSourceOffset(data *checkpoint.CheckpointDa
 }
 
 // restoreWorkersFromCheckpoint restores per-worker operator state for
-// operator instances created by keyed stages. Called after workers
-// are created via wireKeyedStage.
+// operator instances created by keyed stages. Called after the plan is
+// built (which creates the worker clones) and before stages start.
 func (env *StreamExecutionEnv) restoreWorkersFromCheckpoint(data *checkpoint.CheckpointData) {
 	if data == nil {
 		return

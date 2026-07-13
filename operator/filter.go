@@ -4,6 +4,7 @@ import "github.com/ASHUTOSH-SWAIN-GIT/mailer/types"
 
 // FilterOperator keeps records that match the predicate and drops the rest.
 type FilterOperator struct {
+	Parallelizable
 	Fn    func(types.Record) bool
 	Label string
 }
@@ -33,4 +34,13 @@ func (op *FilterOperator) Process(in <-chan types.Record, out chan<- types.Recor
 			out <- record
 		}
 	}
+}
+
+// ProcessOne applies the predicate to a single record.
+// Returns an empty slice when the record is dropped.
+func (op *FilterOperator) ProcessOne(r types.Record) []types.Record {
+	if op.Fn(r) {
+		return []types.Record{r}
+	}
+	return nil
 }
