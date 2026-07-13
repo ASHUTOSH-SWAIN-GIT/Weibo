@@ -35,16 +35,35 @@ type KeyedStage struct {
 }
 
 // NewKeyedStage clones the stateful operator chain once per partition.
-// onClone is called for every clone so the environment can register it
-// for checkpoint snapshot/restore.
-func NewKeyedStage(kb *operator.KeyByOperator, ops []operator.Operator, onClone func(operator.Operator)) *KeyedStage {
+// onClone registers every clone for checkpoint restore and returns its
+// global index; onSnapshot receives each clone's state captured
+// synchronously when a barrier passes through it — the race-free
+// snapshot point (snapshotting later, at the end of the pipeline,
+// races with the clone processing post-barrier records).
+func NewKeyedStage(
+	kb *operator.KeyByOperator,
+	ops []operator.Operator,
+	onClone func(operator.Operator) int,
+	onSnapshot func(checkpointID, key string, snapshot []byte),
+) *KeyedStage {
 	workers := make([][]operator.Operator, kb.Partitions)
 	for w := range workers {
 		chain := make([]operator.Operator, 0, len(ops))
 		for _, op := range ops {
 			clone := op.(operator.Cloneable).Clone()
+			idx := -1
 			if onClone != nil {
-				onClone(clone)
+				idx = onClone(clone)
+			}
+			if bs, ok := clone.(operator.BarrierSnapshotter); ok && onSnapshot != nil && idx >= 0 {
+				key := fmt.Sprintf("worker-%d", idx)
+				bs.SetBarrierSnapshot(func(id string, snap []byte, err error) {
+					if err != nil {
+						fmt.Printf("mailer: barrier snapshot failed for %s: %v\n", key, err)
+						return
+					}
+					onSnapshot(id, key, snap)
+				})
 			}
 			chain = append(chain, clone)
 		}

@@ -89,6 +89,9 @@ func NewKafkaSource(opts ...KafkaSourceOption) *KafkaSource {
 			Topic:       cfg.topic,
 			GroupTopics: cfg.topics,
 		}
+		if cfg.exactlyOnce {
+			rc.IsolationLevel = kafka.ReadCommitted
+		}
 		if cfg.sasl != nil || cfg.tls != nil {
 			rc.Dialer = buildDialer(cfg.sasl, cfg.tls)
 		}
@@ -120,6 +123,9 @@ func (k *KafkaSource) initParallelReaders() {
 			MinBytes:    k.cfg.minBytes,
 			MaxBytes:    k.cfg.maxBytes,
 			StartOffset: k.cfg.offsetSpec.toKafka(),
+		}
+		if k.cfg.exactlyOnce {
+			rc.IsolationLevel = kafka.ReadCommitted
 		}
 		if k.cfg.sasl != nil || k.cfg.tls != nil {
 			rc.Dialer = buildDialer(k.cfg.sasl, k.cfg.tls)
@@ -187,6 +193,14 @@ func (k *KafkaSource) runSerial(ctx context.Context, out chan<- types.Record) er
 		case <-ctx.Done():
 			return ctx.Err()
 		case out <- *record:
+		}
+		if k.cfg.exactlyOnce {
+			// No eager commits: the checkpoint coordinator commits
+			// offsets after each completed checkpoint (CommitOffsets).
+			// Committing here would make offsets durable before the
+			// sink's transaction — the data-loss window exactly-once
+			// exists to close.
+			continue
 		}
 		if k.cfg.commitBatch > 0 {
 			k.pending = append(k.pending, msg)
@@ -402,6 +416,7 @@ func KafkaToRecord(msg kafka.Message) types.Record {
 		Value:     msg.Value,
 		Timestamp: msg.Time,
 		Offset:    msg.Offset,
+		Partition: msg.Partition,
 		Headers:   headers,
 	}
 }
@@ -418,6 +433,7 @@ func (r *kafkaSourceRunner) Run(ctx context.Context, out chan<- types.Record) er
 var (
 	_ Source           = (*KafkaSource)(nil)
 	_ CheckpointSource = (*KafkaSource)(nil)
+	_ OffsetCommitter  = (*KafkaSource)(nil)
 	_ Drainable        = (*KafkaSource)(nil)
 	_ Describable      = (*KafkaSource)(nil)
 	_ Source           = (*kafkaSourceRunner)(nil)
@@ -426,13 +442,47 @@ var (
 // Drain flushes pending offset commits. Called during graceful shutdown
 // to commit offsets for records that were read but not yet committed.
 func (k *KafkaSource) Drain(ctx context.Context) error {
-	if k.cfg.parallel {
+	if k.cfg.parallel || k.cfg.exactlyOnce {
 		return nil
 	}
 	if len(k.pending) == 0 {
 		return nil
 	}
 	return k.commitWithRetry(ctx, k.readers[0], k.pending...)
+}
+
+// CommitOffsets implements source.OffsetCommitter: commits the given
+// barrier-aligned offsets to the broker after a coordinated checkpoint
+// completes. Advisory (consumer-lag visibility) — recovery reads the
+// checkpoint file, never the broker. Only possible in consumer-group
+// mode; parallel per-partition readers have no group to commit to.
+func (k *KafkaSource) CommitOffsets(ctx context.Context, data []byte) error {
+	if k.cfg.groupID == "" {
+		return nil
+	}
+	var offsets map[string]int64
+	if err := json.Unmarshal(data, &offsets); err != nil {
+		return fmt.Errorf("commit offsets: unmarshal: %w", err)
+	}
+	msgs := make([]kafka.Message, 0, len(offsets))
+	for partStr, next := range offsets {
+		if next <= 0 {
+			continue
+		}
+		var part int
+		fmt.Sscanf(partStr, "%d", &part)
+		// CommitMessages commits msg.Offset+1 (the next offset to
+		// read), matching our stored {"partition": nextOffset} shape.
+		msgs = append(msgs, kafka.Message{
+			Topic:     k.cfg.topic,
+			Partition: part,
+			Offset:    next - 1,
+		})
+	}
+	if len(msgs) == 0 {
+		return nil
+	}
+	return k.commitWithRetry(ctx, k.readers[0], msgs...)
 }
 
 // Describe returns metadata about this Kafka source for the dashboard.

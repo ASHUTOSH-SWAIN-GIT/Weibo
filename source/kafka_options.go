@@ -34,11 +34,30 @@ type kafkaSourceConfig struct {
 	commitFailPolicy CommitPolicy
 
 	parallel bool
+
+	// exactlyOnce disables eager broker offset commits: offsets are
+	// committed only by the checkpoint coordinator after a checkpoint
+	// completes (source.OffsetCommitter). Also enables read_committed
+	// isolation so the source never consumes aborted transactions.
+	exactlyOnce bool
 }
 
 // KafkaSourceOption configures a KafkaSource. Pass one or more to
 // NewKafkaSource. Brokers and at least one topic are required.
 type KafkaSourceOption func(*kafkaSourceConfig)
+
+// KafkaExactlyOnce puts the source in exactly-once mode for use with
+// a CheckpointedSink (e.g. TxnKafkaSink):
+//
+//   - Eager broker offset commits are DISABLED. Offsets are committed
+//     to the broker only after a coordinated checkpoint completes, and
+//     even then only for consumer-lag visibility — recovery reads
+//     offsets from the checkpoint, not the broker.
+//   - Reads use isolation.level=read_committed, so upstream aborted
+//     transactions are never consumed.
+func KafkaExactlyOnce() KafkaSourceOption {
+	return func(c *kafkaSourceConfig) { c.exactlyOnce = true }
+}
 
 // KafkaBrokers sets the Kafka bootstrap brokers.
 // Required. Example: KafkaBrokers("localhost:9092") or KafkaBrokers("a:9092", "b:9092").

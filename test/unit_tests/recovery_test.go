@@ -53,6 +53,7 @@ func newReplaySource(parts [][]types.Record) *replaySource {
 	for p := range parts {
 		for i := range parts[p] {
 			parts[p][i].Offset = int64(i)
+			parts[p][i].Partition = p
 			parts[p][i] = parts[p][i].WithHeader("part", []byte(strconv.Itoa(p)))
 		}
 	}

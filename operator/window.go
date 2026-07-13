@@ -30,6 +30,16 @@ type WindowOperator struct {
 	lastRecordTime   time.Time
 	timer            *time.Timer
 	Label            string
+
+	// barrierSnapshot, when set, is invoked synchronously from the
+	// Process loop each time a barrier passes — the race-free
+	// snapshot point (see operator.BarrierSnapshotter).
+	barrierSnapshot func(checkpointID string, snapshot []byte, err error)
+}
+
+// SetBarrierSnapshot implements BarrierSnapshotter.
+func (op *WindowOperator) SetBarrierSnapshot(fn func(checkpointID string, snapshot []byte, err error)) {
+	op.barrierSnapshot = fn
 }
 
 func (op *WindowOperator) Name() string     { return "Window" }
@@ -139,6 +149,12 @@ func (op *WindowOperator) Process(in <-chan types.Record, out chan<- types.Recor
 				continue
 			}
 			if record.IsBarrier {
+				// Snapshot NOW, between records: buffered windows and
+				// the watermark reflect exactly the pre-barrier stream.
+				if op.barrierSnapshot != nil {
+					snap, err := op.Snapshot()
+					op.barrierSnapshot(record.CheckpointID, snap, err)
+				}
 				out <- record
 				continue
 			}
