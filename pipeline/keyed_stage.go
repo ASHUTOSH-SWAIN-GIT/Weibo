@@ -148,6 +148,14 @@ func (s *KeyedStage) Run(runCtx, hardCtx context.Context, in <-chan types.Record
 			}
 			for r := range prev {
 				if sendRecord(stageCtx, outCh, r) != nil {
+					// Forced shutdown: the cloned operator chain above
+					// is blocked writing into its internal channels.
+					// Drain prev so the chain unwinds once the router
+					// closes the worker input.
+					go func() {
+						for range prev {
+						}
+					}()
 					return
 				}
 			}

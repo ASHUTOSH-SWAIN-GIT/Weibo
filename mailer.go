@@ -197,10 +197,10 @@ func (env *StreamExecutionEnv) Execute(ctx context.Context) error {
 		// stage and are detected right before the sink stage, when
 		// every operator upstream has forwarded them.
 		if i == 1 && env.checkpointInterval > 0 {
-			in = env.injectBarriers(ctx, in)
+			in = env.injectBarriers(ctx, hardCtx, in)
 		}
 		if i == nStages-1 {
-			in = barrierDetect(in, env.saveCheckpoint)
+			in = barrierDetect(hardCtx, in, env.saveCheckpoint)
 		}
 		var out chan<- types.Record
 		if i < len(edges) {
@@ -251,12 +251,16 @@ func (env *StreamExecutionEnv) operatorLabels() []string {
 // wrapper only after every operator upstream has forwarded them,
 // so operator state snapshots capture the correct point-in-time
 // state (post-barrier Chandy-Lamport alignment).
-func barrierDetect(in <-chan types.Record, save func(id string)) <-chan types.Record {
+func barrierDetect(hardCtx context.Context, in <-chan types.Record, save func(id string)) <-chan types.Record {
 	out := make(chan types.Record, 256)
 	go func() {
 		defer close(out)
 		for r := range in {
-			out <- r
+			select {
+			case out <- r:
+			case <-hardCtx.Done():
+				return // forced shutdown: downstream is gone
+			}
 			if r.IsBarrier {
 				save(r.CheckpointID)
 			}
@@ -268,7 +272,7 @@ func barrierDetect(in <-chan types.Record, save func(id string)) <-chan types.Re
 // injectBarriers wraps a source channel and periodically injects checkpoint
 // barriers into the stream. When a barrier reaches the end of the pipeline,
 // all stateful operators snapshot their state and the checkpoint is saved.
-func (env *StreamExecutionEnv) injectBarriers(ctx context.Context, sourceCh <-chan types.Record) <-chan types.Record {
+func (env *StreamExecutionEnv) injectBarriers(ctx, hardCtx context.Context, sourceCh <-chan types.Record) <-chan types.Record {
 	out := make(chan types.Record, 256)
 	go func() {
 		defer close(out)
@@ -278,16 +282,31 @@ func (env *StreamExecutionEnv) injectBarriers(ctx context.Context, sourceCh <-ch
 
 		checkpointID := 0
 
+		// forward blocks until downstream accepts r; it gives up only
+		// on hardCtx so this goroutine can't leak when the pipeline is
+		// forcibly unwound with full edges.
+		forward := func(r types.Record) bool {
+			select {
+			case out <- r:
+				return true
+			case <-hardCtx.Done():
+				return false
+			}
+		}
+
 		for {
 			select {
 			case <-ctx.Done():
 				// Inject a final checkpoint barrier before draining so
 				// state is saved on graceful shutdown.
 				checkpointID++
-				out <- types.NewBarrier(fmt.Sprintf("cp-%d-shutdown", checkpointID))
-
+				if !forward(types.NewBarrier(fmt.Sprintf("cp-%d-shutdown", checkpointID))) {
+					return
+				}
 				for record := range sourceCh {
-					out <- record
+					if !forward(record) {
+						return
+					}
 				}
 				return
 
@@ -295,7 +314,9 @@ func (env *StreamExecutionEnv) injectBarriers(ctx context.Context, sourceCh <-ch
 				if !ok {
 					return
 				}
-				out <- record
+				if !forward(record) {
+					return
+				}
 
 			case <-ticker.C:
 				checkpointID++
@@ -306,7 +327,9 @@ func (env *StreamExecutionEnv) injectBarriers(ctx context.Context, sourceCh <-ch
 				// operator chain, saveCheckpoint is triggered (see
 				// barrierDetect). This ensures operator state is
 				// captured AFTER all pre-barrier records are processed.
-				out <- types.NewBarrier(id)
+				if !forward(types.NewBarrier(id)) {
+					return
+				}
 			}
 		}
 	}()
