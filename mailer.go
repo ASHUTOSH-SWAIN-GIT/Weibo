@@ -306,8 +306,18 @@ func (env *StreamExecutionEnv) wireKeyedStage(
 				if !ok {
 					return
 				}
-				w := kb.Route(r)
-				workerIns[w] <- r
+				// Barriers and watermarks are keyless markers: every
+				// worker must see them, so broadcast instead of routing.
+				// Routing them would send the marker to worker 0 only,
+				// leaving the other workers' state unaligned at snapshot
+				// time.
+				if r.IsBarrier || r.IsWatermark {
+					for _, ch := range workerIns {
+						ch <- r
+					}
+					continue
+				}
+				workerIns[kb.Route(r)] <- r
 			}
 		}
 	}()
@@ -372,24 +382,56 @@ func (env *StreamExecutionEnv) wireKeyedStage(
 		}
 	}()
 
-	// Merger: reads all worker outputs concurrently.
-	merged := make(chan types.Record, 256)
+	// Merger: reads all worker outputs concurrently into fanIn, then a
+	// single aligner loop forwards downstream. Broadcast markers (barriers,
+	// watermarks) arrive once per worker; the aligner emits each exactly
+	// once, only after ALL workers have delivered it — at that point every
+	// worker has processed all of its pre-marker records, so a snapshot
+	// triggered downstream captures consistent state.
+	fanIn := make(chan types.Record, 256)
 	go func() {
-		defer close(merged)
+		defer close(fanIn)
 		var wgMerge sync.WaitGroup
 		for _, ch := range workerOuts {
 			wgMerge.Add(1)
 			go func(c <-chan types.Record) {
 				defer wgMerge.Done()
 				for r := range c {
-					merged <- r
+					fanIn <- r
 				}
 			}(ch)
 		}
 		wgMerge.Wait()
 	}()
 
+	merged := make(chan types.Record, 256)
+	go func() {
+		defer close(merged)
+		seen := make(map[string]int)
+		for r := range fanIn {
+			if r.IsBarrier || r.IsWatermark {
+				k := markerKey(r)
+				seen[k]++
+				if seen[k] == n {
+					delete(seen, k)
+					merged <- r
+				}
+				continue
+			}
+			merged <- r
+		}
+	}()
+
 	return merged
+}
+
+// markerKey identifies a broadcast marker for alignment counting.
+// Barriers align on CheckpointID, watermarks on their timestamp.
+func markerKey(r types.Record) string {
+	if r.IsBarrier {
+		return "b:" + r.CheckpointID
+	}
+	return "w:" + strconv.FormatInt(r.Timestamp.UnixNano(), 10)
 }
 
 // timedRead measures per-record latency through an operator by batching
