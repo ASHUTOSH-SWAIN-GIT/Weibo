@@ -31,7 +31,11 @@ func main() {
 	src := source.FromSlices(keys, sentences)
 
 	// Pipeline:
-	//   Source → FlatMap(split into words) → KeyBy(word) → Reduce(count) → Map(format) → Sink(stdout)
+	//   Source → FlatMap(split into words) → KeyBy(word) → Reduce(count) → Map(format) → Sink
+	//
+	// The planner groups this into execution stages connected by
+	// bounded edges (backpressure boundaries):
+	//   [source] → [FlatMap] → [keyed: Reduce ×16 workers] → [Map] → [sink]
 	env.
 		FromSource(src).
 		FlatMap(func(r types.Record) []types.Record {

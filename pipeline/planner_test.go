@@ -61,8 +61,8 @@ func TestPlanner_KeyByStartsKeyedStageConsumingStateful(t *testing.T) {
 		operator.Reduce(func(a []byte, c types.Record) []byte { return a }),
 		operator.Map(func(r types.Record) types.Record { return r }),
 	)
-	// source, stateless-0 (Map), keyed (Window+Reduce), stateless-1 (Map), sink
-	want := []string{"source", "stateless-0", "keyed", "stateless-1", "sink"}
+	// source, stateless-0 (Map), keyed-0 (Window+Reduce), stateless-1 (Map), sink
+	want := []string{"source", "stateless-0", "keyed-0", "stateless-1", "sink"}
 	got := stageNames(plan)
 	if len(got) != len(want) {
 		t.Fatalf("expected stages %v, got %v", want, got)
@@ -92,12 +92,12 @@ func TestPlanner_StatefulWithoutKeyByGetsChannelStage(t *testing.T) {
 	plan := buildPlan(t,
 		operator.Window(window.NewTumbling(time.Second)),
 	)
-	// source, op-Window, sink
+	// source, op-Window-0, sink
 	if len(plan) != 3 {
 		t.Fatalf("expected 3 stages, got %d: %v", len(plan), stageNames(plan))
 	}
-	if plan[1].Name() != "op-Window" {
-		t.Errorf("expected op-Window channel stage, got %s", plan[1].Name())
+	if plan[1].Name() != "op-Window-0" {
+		t.Errorf("expected op-Window-0 channel stage, got %s", plan[1].Name())
 	}
 }
 

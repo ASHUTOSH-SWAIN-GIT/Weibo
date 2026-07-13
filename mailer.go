@@ -182,6 +182,9 @@ func (env *StreamExecutionEnv) Execute(ctx context.Context) error {
 	for i := range edges {
 		edges[i] = pipeline.NewEdge(fmt.Sprintf("edge-%d", i), env.edgeCapacity)
 	}
+	// Publish per-edge queue gauges: an edge pinned at capacity means
+	// the stage downstream of it is the bottleneck.
+	pipeline.SampleEdges(pipelineDone, edges)
 
 	var wg sync.WaitGroup
 	errs := make([]error, nStages)
@@ -209,6 +212,7 @@ func (env *StreamExecutionEnv) Execute(ctx context.Context) error {
 			defer wg.Done()
 			if err := st.Run(ctx, hardCtx, in, out); err != nil {
 				errs[i] = err
+				metrics.StageErrorsTotal.WithLabelValues(st.Name()).Inc()
 				hardCancel() // fatal stage error: unwind the whole pipeline
 			}
 		}(i, stage, in, out)

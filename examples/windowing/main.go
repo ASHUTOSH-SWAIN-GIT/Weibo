@@ -44,9 +44,15 @@ func main() {
 
 	// Pipeline:
 	//   Source → KeyBy(customer) → Window(5s tumbling) → Reduce(sum) → Sink(stdout)
+	//
+	// WithPartitions(4) runs the Window+Reduce stage with 4 keyed
+	// workers — each customer's orders always land on the same worker,
+	// so per-key state and ordering are preserved. Watermarks and
+	// checkpoint barriers are broadcast to all workers and re-aligned
+	// at the stage exit.
 	env.
 		FromSource(wmSrc).
-		KeyBy(func(r types.Record) []byte { return r.Key }).
+		KeyBy(func(r types.Record) []byte { return r.Key }).WithPartitions(4).
 		Window(window.NewTumbling(5 * time.Second)).
 		Reduce(sumAmount).
 		Map(func(r types.Record) types.Record {

@@ -52,6 +52,8 @@ func BuildPlan(cfg PlanConfig) ([]Stage, error) {
 	var groupLabels []string
 	groupPar := 1
 	statelessCount := 0
+	keyedCount := 0
+	channelCount := 0
 
 	flush := func() {
 		if len(group) == 0 {
@@ -78,7 +80,10 @@ func BuildPlan(cfg PlanConfig) ([]Stage, error) {
 			flush()
 			stateful, skip := takeStateful(cfg.Operators[i+1:])
 			i += skip
-			stages = append(stages, NewKeyedStage(kb, stateful, cfg.OnClone))
+			ks := NewKeyedStage(kb, stateful, cfg.OnClone)
+			ks.StageName = fmt.Sprintf("keyed-%d", keyedCount)
+			keyedCount++
+			stages = append(stages, ks)
 			continue
 		}
 
@@ -99,7 +104,12 @@ func BuildPlan(cfg PlanConfig) ([]Stage, error) {
 		// Channel-based operator outside a keyed stage (e.g. Window
 		// or Reduce without KeyBy): runs alone with the old model.
 		flush()
-		stages = append(stages, &ChannelStage{Op: op, Label: cfg.Labels[i]})
+		stages = append(stages, &ChannelStage{
+			Op:        op,
+			Label:     cfg.Labels[i],
+			StageName: fmt.Sprintf("op-%s-%d", op.Name(), channelCount),
+		})
+		channelCount++
 	}
 	flush()
 

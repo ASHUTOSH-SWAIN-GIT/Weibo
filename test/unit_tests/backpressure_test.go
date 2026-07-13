@@ -7,7 +7,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus/testutil"
+
 	"github.com/ASHUTOSH-SWAIN-GIT/mailer"
+	"github.com/ASHUTOSH-SWAIN-GIT/mailer/observability/metrics"
 	"github.com/ASHUTOSH-SWAIN-GIT/mailer/source"
 	"github.com/ASHUTOSH-SWAIN-GIT/mailer/types"
 )
@@ -73,6 +76,39 @@ func TestBackpressure_ParallelStatelessDelivery(t *testing.T) {
 	}
 	if got := atomic.LoadInt64(&sk.count); got != n {
 		t.Errorf("expected %d records at sink, got %d", n, got)
+	}
+}
+
+// TestObservability_StageAndEdgeMetrics: running a pipeline must
+// populate the per-stage throughput counters and per-edge capacity
+// gauges introduced with stage-based execution.
+func TestObservability_StageAndEdgeMetrics(t *testing.T) {
+	const n = 500
+	sk := &slowSink{}
+
+	sourceInBefore := testutil.ToFloat64(metrics.StageRecordsInTotal.WithLabelValues("source", "source"))
+	sinkInBefore := testutil.ToFloat64(metrics.StageRecordsInTotal.WithLabelValues("sink", "sink"))
+
+	env := mailer.NewEnv().WithBufferSize(32)
+	env.FromSource(source.NewSliceSource(makeRecords(n))).
+		Map(func(r types.Record) types.Record { return r }, "noop").
+		ToSink(sk)
+
+	if err := env.Execute(context.Background()); err != nil {
+		t.Fatalf("Execute failed: %v", err)
+	}
+
+	if got := testutil.ToFloat64(metrics.StageRecordsInTotal.WithLabelValues("source", "source")) - sourceInBefore; got != n {
+		t.Errorf("source stage records_in: expected %d, got %v", n, got)
+	}
+	if got := testutil.ToFloat64(metrics.StageRecordsInTotal.WithLabelValues("sink", "sink")) - sinkInBefore; got != n {
+		t.Errorf("sink stage records_in: expected %d, got %v", n, got)
+	}
+	// Plan is source → stateless-0 → sink: two edges, capacity 32.
+	for _, edge := range []string{"edge-0", "edge-1"} {
+		if got := testutil.ToFloat64(metrics.EdgeQueueCapacity.WithLabelValues(edge)); got != 32 {
+			t.Errorf("edge %s capacity gauge: expected 32, got %v", edge, got)
+		}
 	}
 }
 

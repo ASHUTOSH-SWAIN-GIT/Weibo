@@ -27,10 +27,16 @@ func (s *StatelessStage) Name() string { return s.StageName }
 
 func (s *StatelessStage) Run(runCtx, hardCtx context.Context, in <-chan types.Record, out chan<- types.Record) error {
 	defer close(out)
-	if s.Parallelism <= 1 {
-		return s.runWorker(hardCtx, in, out)
+	sm := newStageMetrics(s.StageName, "stateless")
+	par := s.Parallelism
+	if par < 1 {
+		par = 1
 	}
-	return s.runParallel(hardCtx, in, out)
+	defer sm.setWorkers(par)()
+	if par == 1 {
+		return s.runWorker(hardCtx, in, out, sm)
+	}
+	return s.runParallel(hardCtx, in, out, sm)
 }
 
 // runWorker is the execution loop shared by the serial path (reading
@@ -38,7 +44,11 @@ func (s *StatelessStage) Run(runCtx, hardCtx context.Context, in <-chan types.Re
 // dispatched channel). Markers are forwarded as-is: in the serial
 // path they stay in order; in the parallel path they land in the
 // worker's output for the aligned merge to dedup.
-func (s *StatelessStage) runWorker(hardCtx context.Context, in <-chan types.Record, out chan<- types.Record) (err error) {
+//
+// sm is non-nil only in the serial path, where this loop IS the stage
+// boundary; parallel workers write to internal channels and the
+// dispatcher/merge do the stage-level accounting instead.
+func (s *StatelessStage) runWorker(hardCtx context.Context, in <-chan types.Record, out chan<- types.Record, sm *stageMetrics) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			err = fmt.Errorf("stage %s: operator panicked: %v", s.StageName, r)
@@ -58,6 +68,11 @@ func (s *StatelessStage) runWorker(hardCtx context.Context, in <-chan types.Reco
 		}
 	}()
 
+	send := sendRecord
+	if sm != nil {
+		send = sm.send
+	}
+
 	for {
 		r, ok, rerr := recvRecord(hardCtx, in)
 		if rerr != nil {
@@ -66,8 +81,11 @@ func (s *StatelessStage) runWorker(hardCtx context.Context, in <-chan types.Reco
 		if !ok {
 			return nil
 		}
+		if sm != nil {
+			sm.countIn(r)
+		}
 		if r.IsBarrier || r.IsWatermark {
-			if serr := sendRecord(hardCtx, out, r); serr != nil {
+			if serr := send(hardCtx, out, r); serr != nil {
 				return serr
 			}
 			continue
@@ -87,7 +105,7 @@ func (s *StatelessStage) runWorker(hardCtx context.Context, in <-chan types.Reco
 			}
 		}
 		for _, rec := range outs {
-			if serr := sendRecord(hardCtx, out, rec); serr != nil {
+			if serr := send(hardCtx, out, rec); serr != nil {
 				return serr
 			}
 		}
@@ -99,7 +117,7 @@ func (s *StatelessStage) runWorker(hardCtx context.Context, in <-chan types.Reco
 //	in → dispatcher ──┬── worker 0 ──┐
 //	   (round-robin,  ├── worker 1 ──┼── alignedMerge → out
 //	broadcast markers)└── worker N ──┘
-func (s *StatelessStage) runParallel(hardCtx context.Context, in <-chan types.Record, out chan<- types.Record) error {
+func (s *StatelessStage) runParallel(hardCtx context.Context, in <-chan types.Record, out chan<- types.Record, sm *stageMetrics) error {
 	// stageCtx lets a failed worker unwind the dispatcher and merge
 	// immediately instead of deadlocking on its abandoned channels.
 	stageCtx, stageCancel := context.WithCancel(hardCtx)
@@ -128,6 +146,7 @@ func (s *StatelessStage) runParallel(hardCtx context.Context, in <-chan types.Re
 			if err != nil || !ok {
 				return
 			}
+			sm.countIn(r)
 			if r.IsBarrier || r.IsWatermark {
 				for _, ch := range workerIns {
 					if sendRecord(stageCtx, ch, r) != nil {
@@ -150,7 +169,7 @@ func (s *StatelessStage) runParallel(hardCtx context.Context, in <-chan types.Re
 		go func(workerIn <-chan types.Record, workerOut chan<- types.Record) {
 			defer wg.Done()
 			defer close(workerOut)
-			if err := s.runWorker(stageCtx, workerIn, workerOut); err != nil {
+			if err := s.runWorker(stageCtx, workerIn, workerOut, nil); err != nil {
 				select {
 				case errCh <- err:
 				default:
@@ -160,7 +179,7 @@ func (s *StatelessStage) runParallel(hardCtx context.Context, in <-chan types.Re
 		}(workerIns[w], workerOuts[w])
 	}
 
-	mergeErr := alignedMerge(stageCtx, workerOuts, out)
+	mergeErr := alignedMerge(stageCtx, workerOuts, out, sm)
 	wg.Wait()
 	select {
 	case err := <-errCh:
