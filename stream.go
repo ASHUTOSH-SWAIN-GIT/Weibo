@@ -100,6 +100,23 @@ func (s *Stream) WithPartitions(n int) *Stream {
 	return s
 }
 
+// WithParallelism sets the number of workers for the most recently
+// added stateless operator (Map, Filter, FlatMap, Process). Must be
+// called directly after the operator it configures.
+//
+// Consecutive operators with the same parallelism share one execution
+// stage. Note: with parallelism > 1, record order is NOT preserved
+// across workers — use it for CPU-heavy, order-insensitive transforms.
+func (s *Stream) WithParallelism(n int) *Stream {
+	if len(s.env.operators) == 0 {
+		return s
+	}
+	if p, ok := s.env.operators[len(s.env.operators)-1].(operator.Parallel); ok {
+		p.SetParallelism(n)
+	}
+	return s
+}
+
 // Reduce applies a stateful aggregation per key. Must be used after KeyBy.
 // The reduce function is called with the current accumulator (nil on first call)
 // and the incoming record, and returns the new accumulator.

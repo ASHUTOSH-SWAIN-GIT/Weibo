@@ -6,6 +6,7 @@ import "github.com/ASHUTOSH-SWAIN-GIT/mailer/types"
 // The function returns a slice of records. If the slice is empty,
 // the input record is effectively filtered out.
 type FlatMapOperator struct {
+	Parallelizable
 	Fn    func(types.Record) []types.Record
 	Label string
 }
@@ -35,4 +36,9 @@ func (op *FlatMapOperator) Process(in <-chan types.Record, out chan<- types.Reco
 			out <- result
 		}
 	}
+}
+
+// ProcessOne applies the flat map function to a single record.
+func (op *FlatMapOperator) ProcessOne(r types.Record) []types.Record {
+	return op.Fn(r)
 }

@@ -30,6 +30,7 @@ type RecordSink interface {
 //
 // Watermarks and barriers pass through unchanged.
 type ProcessOperator struct {
+	Parallelizable
 	Fn            func(types.Record) (types.Record, error)
 	Label         string
 	FailurePolicy ProcFailurePolicy
@@ -88,6 +89,17 @@ func (op *ProcessOperator) Process(in <-chan types.Record, out chan<- types.Reco
 		}
 		out <- result
 	}
+}
+
+// ProcessOne applies the user function to a single record, handling
+// errors via the configured failure policy.
+func (op *ProcessOperator) ProcessOne(r types.Record) []types.Record {
+	result, err := op.Fn(r)
+	if err != nil {
+		op.handleFailure(r, err)
+		return nil
+	}
+	return []types.Record{result}
 }
 
 func (op *ProcessOperator) handleFailure(r types.Record, err error) {

@@ -59,3 +59,43 @@ type KeySelector func(types.Record) []byte
 type Cloneable interface {
 	Clone() Operator
 }
+
+// SingleProcessor is implemented by stateless operators that can be
+// invoked directly, one record at a time, without channels. The
+// execution engine chains SingleProcessors inside a stage as plain
+// function calls.
+//
+// The returned slice length encodes the operator semantics:
+// 0 = record dropped (Filter), 1 = transformed (Map), N = fan-out (FlatMap).
+//
+// Barriers and watermarks are never passed to ProcessOne — the stage
+// machinery forwards and aligns them itself.
+type SingleProcessor interface {
+	ProcessOne(r types.Record) []types.Record
+}
+
+// Parallel is implemented by operators that can run with multiple
+// workers. The planner groups consecutive operators with the same
+// parallelism into one execution stage.
+type Parallel interface {
+	Parallelism() int
+	SetParallelism(n int)
+}
+
+// Parallelizable provides the Parallel implementation for stateless
+// operators via embedding. Zero value means parallelism 1.
+type Parallelizable struct {
+	Par int
+}
+
+// Parallelism returns the configured worker count (minimum 1).
+func (p *Parallelizable) Parallelism() int {
+	if p.Par < 1 {
+		return 1
+	}
+	return p.Par
+}
+
+// SetParallelism sets the worker count. Values < 1 are treated as 1.
+// Note: with parallelism > 1, record order is not preserved across workers.
+func (p *Parallelizable) SetParallelism(n int) { p.Par = n }

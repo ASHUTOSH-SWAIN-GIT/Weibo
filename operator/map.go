@@ -6,6 +6,7 @@ import "github.com/ASHUTOSH-SWAIN-GIT/mailer/types"
 // Every input record produces exactly one output record.
 // To conditionally drop records, use Filter before or after Map.
 type MapOperator struct {
+	Parallelizable
 	Fn    func(types.Record) types.Record
 	Label string
 }
@@ -30,4 +31,9 @@ func (op *MapOperator) Process(in <-chan types.Record, out chan<- types.Record) 
 		}
 		out <- op.Fn(record)
 	}
+}
+
+// ProcessOne applies the map function to a single record.
+func (op *MapOperator) ProcessOne(r types.Record) []types.Record {
+	return []types.Record{op.Fn(r)}
 }
