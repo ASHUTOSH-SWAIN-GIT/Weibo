@@ -28,6 +28,11 @@ type Record struct {
 	// Used for checkpointing — when we restore, we rewind to this offset.
 	Offset int64
 
+	// Partition is the source partition this record came from.
+	// Together with Offset it lets the engine track barrier-aligned
+	// per-partition positions in-band, immune to channel buffering.
+	Partition int
+
 	// Headers carry optional metadata (e.g. Kafka headers, trace IDs).
 	Headers map[string][]byte
 

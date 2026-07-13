@@ -46,6 +46,16 @@ type ReduceOperator struct {
 	Fn      ReduceFn
 	backend state.StateBackend
 	Label   string
+
+	// barrierSnapshot, when set, is invoked synchronously from the
+	// Process loop each time a barrier passes — the race-free
+	// snapshot point (see operator.BarrierSnapshotter).
+	barrierSnapshot func(checkpointID string, snapshot []byte, err error)
+}
+
+// SetBarrierSnapshot implements BarrierSnapshotter.
+func (op *ReduceOperator) SetBarrierSnapshot(fn func(checkpointID string, snapshot []byte, err error)) {
+	op.barrierSnapshot = fn
 }
 
 // Reduce creates a ReduceOperator with the given reduce function.
@@ -82,8 +92,12 @@ func (op *ReduceOperator) Process(in <-chan types.Record, out chan<- types.Recor
 		}
 
 		if record.IsBarrier {
-			// State is already in memory; barrier just flows through.
-			// The CheckpointCoordinator will call Snapshot() separately.
+			// Snapshot NOW, between records: state reflects exactly the
+			// pre-barrier stream and nothing is mutating it.
+			if op.barrierSnapshot != nil {
+				snap, err := op.Snapshot()
+				op.barrierSnapshot(record.CheckpointID, snap, err)
+			}
 			out <- record
 			continue
 		}

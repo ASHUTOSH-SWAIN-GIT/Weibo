@@ -2,8 +2,10 @@ package mailer
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"sync"
 	"time"
 
@@ -40,6 +42,29 @@ type StreamExecutionEnv struct {
 
 	workerOps []operator.Operator
 	workerMu  sync.Mutex
+
+	// pendingOffsets maps a checkpoint ID to the barrier-aligned
+	// source offsets captured when that barrier was injected. Aligned
+	// by construction: the map is built from records that actually
+	// passed the injector, so channel buffering between the source
+	// and the injector cannot desynchronize it (unlike reading live
+	// reader stats at save time).
+	pendingOffsets map[string][]byte
+	offsetsMu      sync.Mutex
+
+	// coord drives the two-phase checkpoint protocol when the sink is
+	// a CheckpointedSink (exactly-once mode). Nil otherwise.
+	coord *checkpoint.Coordinator
+
+	// barrierSnaps holds operator state captured synchronously as
+	// barriers pass through stateful operators (race-free snapshot
+	// point), keyed by checkpoint ID then checkpoint-data key.
+	barrierSnaps map[string]map[string][]byte
+	snapsMu      sync.Mutex
+
+	// checkpointHook is a test-only seam forwarded to the coordinator
+	// to halt or fail the protocol at exact steps.
+	checkpointHook func(checkpoint.Step, string) checkpoint.HookAction
 }
 
 // NewEnv creates a new StreamExecutionEnv.
@@ -86,6 +111,14 @@ func (env *StreamExecutionEnv) WithCheckpointing(interval time.Duration, storage
 	return env
 }
 
+// WithCheckpointHook installs a test-only hook fired after each
+// coordinated checkpoint protocol step. Used by crash-window tests to
+// halt or fail the coordinator at exact positions. Not for production.
+func (env *StreamExecutionEnv) WithCheckpointHook(fn func(checkpoint.Step, string) checkpoint.HookAction) *StreamExecutionEnv {
+	env.checkpointHook = fn
+	return env
+}
+
 // FromSource sets the data source for the pipeline and returns a Stream
 // that you can chain operators on.
 func (env *StreamExecutionEnv) FromSource(src source.Source) *Stream {
@@ -120,16 +153,41 @@ func (env *StreamExecutionEnv) Execute(ctx context.Context) error {
 	metrics.PipelineRunning.Set(1)
 	defer metrics.PipelineRunning.Set(0)
 
+	// Coordinated (exactly-once) mode is active when the sink stages
+	// its output transactionally. It requires checkpointing and a
+	// resumable source — refuse half-configured setups.
+	coordinatedSink, coordinated := env.sink.(sink.CheckpointedSink)
+	if coordinated {
+		if env.checkpointStorage == nil || env.checkpointInterval <= 0 {
+			return fmt.Errorf("mailer: a CheckpointedSink requires WithCheckpointing(interval, storage)")
+		}
+		if _, ok := env.source.(source.CheckpointSource); !ok {
+			return fmt.Errorf("mailer: exactly-once requires a source that supports offset checkpointing (source.CheckpointSource)")
+		}
+	}
+
 	// Phase A: restore the source offset before wiring, so the reader
 	// knows where to resume.
 	var savedCheckpoint *checkpoint.CheckpointData
 	if env.checkpointStorage != nil {
-		data, err := env.checkpointStorage.Load()
-		if err != nil {
-			fmt.Printf("mailer: checkpoint load failed (starting fresh): %v\n", err)
-		} else if data != nil {
-			env.restoreSourceOffset(data)
-			savedCheckpoint = data
+		if coordinated {
+			data, err := env.resolveCoordinatedRecovery(ctx, coordinatedSink)
+			if err != nil {
+				// Guessing here risks duplicates or loss — refuse to start.
+				return fmt.Errorf("mailer: recovery: %w", err)
+			}
+			if data != nil {
+				env.restoreSourceOffset(data)
+				savedCheckpoint = data
+			}
+		} else {
+			data, err := env.checkpointStorage.Load()
+			if err != nil {
+				fmt.Printf("mailer: checkpoint load failed (starting fresh): %v\n", err)
+			} else if data != nil {
+				env.restoreSourceOffset(data)
+				savedCheckpoint = data
+			}
 		}
 	}
 
@@ -139,11 +197,13 @@ func (env *StreamExecutionEnv) Execute(ctx context.Context) error {
 		Labels:       env.operatorLabels(),
 		Sink:         env.sink,
 		DrainTimeout: env.shutdownTimeout,
-		OnClone: func(op operator.Operator) {
+		OnClone: func(op operator.Operator) int {
 			env.workerMu.Lock()
+			defer env.workerMu.Unlock()
 			env.workerOps = append(env.workerOps, op)
-			env.workerMu.Unlock()
+			return len(env.workerOps) - 1
 		},
+		OnSnapshot: env.addBarrierSnapshot,
 	})
 	if err != nil {
 		return err
@@ -154,6 +214,24 @@ func (env *StreamExecutionEnv) Execute(ctx context.Context) error {
 	// stage starts processing.
 	if savedCheckpoint != nil {
 		env.restoreWorkersFromCheckpoint(savedCheckpoint)
+	}
+
+	// Coordinator lifecycle (exactly-once mode only).
+	var coordErrCh chan error
+	if coordinated {
+		txnID := ""
+		if t, ok := env.sink.(interface{ TransactionalID() string }); ok {
+			txnID = t.TransactionalID()
+		}
+		env.coord = checkpoint.NewCoordinator(env.checkpointStorage, txnID)
+		env.coord.CommitSink = coordinatedSink.Commit
+		env.coord.AbortSink = coordinatedSink.Abort
+		env.coord.Hook = env.checkpointHook
+		if oc, ok := env.source.(source.OffsetCommitter); ok {
+			env.coord.CommitOffsets = oc.CommitOffsets
+		}
+		coordinatedSink.SetOnPrepared(env.coord.OnSinkPrepared)
+		coordErrCh = make(chan error, 1)
 	}
 
 	// Two-phase shutdown (C3). Cancelling ctx only stops the source;
@@ -176,6 +254,22 @@ func (env *StreamExecutionEnv) Execute(ctx context.Context) error {
 		case <-pipelineDone:
 		}
 	}()
+
+	if coordinated {
+		env.coord.Start(hardCtx)
+		defer env.coord.Stop()
+		// A coordination failure (persist error, sink commit error,
+		// injected test failure) is pipeline-fatal: capture it and
+		// force-unwind.
+		go func() {
+			select {
+			case err := <-env.coord.Fatal():
+				coordErrCh <- err
+				hardCancel()
+			case <-pipelineDone:
+			}
+		}()
+	}
 
 	nStages := len(plan)
 	edges := make([]*pipeline.Edge, nStages-1)
@@ -200,7 +294,17 @@ func (env *StreamExecutionEnv) Execute(ctx context.Context) error {
 			in = env.injectBarriers(ctx, hardCtx, in)
 		}
 		if i == nStages-1 {
-			in = barrierDetect(hardCtx, in, env.saveCheckpoint)
+			// Pre-sink barrier tap: uncoordinated mode persists the
+			// checkpoint here (state is consistent, sink not involved);
+			// coordinated mode only hands the state snapshot to the
+			// coordinator — persistence waits for the sink's prepare ack.
+			onBarrier := env.saveCheckpoint
+			if coordinated {
+				onBarrier = func(id string) {
+					env.coord.OnStateSnapshot(id, env.collectSnapshots(id))
+				}
+			}
+			in = barrierDetect(hardCtx, in, onBarrier)
 		}
 		var out chan<- types.Record
 		if i < len(edges) {
@@ -219,6 +323,22 @@ func (env *StreamExecutionEnv) Execute(ctx context.Context) error {
 	}
 	wg.Wait()
 	close(pipelineDone)
+
+	if coordinated {
+		env.coord.Stop() // idempotent; waits for in-flight finalization
+		var coordErr error
+		select {
+		case coordErr = <-coordErrCh: // relayed by the watcher
+		default:
+			select {
+			case coordErr = <-env.coord.Fatal(): // watcher hadn't relayed yet
+			default:
+			}
+		}
+		if coordErr != nil && !(errors.Is(coordErr, context.Canceled) && ctx.Err() != nil) {
+			return coordErr
+		}
+	}
 
 	for i, err := range errs {
 		if err == nil || errors.Is(err, context.Canceled) {
@@ -256,13 +376,17 @@ func barrierDetect(hardCtx context.Context, in <-chan types.Record, save func(id
 	go func() {
 		defer close(out)
 		for r := range in {
+			// Save BEFORE forwarding: once the barrier reaches the
+			// sink, the coordinator may finalize the checkpoint — the
+			// state snapshot must already be registered by then, or
+			// the checkpoint persists with empty state.
+			if r.IsBarrier {
+				save(r.CheckpointID)
+			}
 			select {
 			case out <- r:
 			case <-hardCtx.Done():
 				return // forced shutdown: downstream is gone
-			}
-			if r.IsBarrier {
-				save(r.CheckpointID)
 			}
 		}
 	}()
@@ -280,7 +404,21 @@ func (env *StreamExecutionEnv) injectBarriers(ctx, hardCtx context.Context, sour
 		ticker := time.NewTicker(env.checkpointInterval)
 		defer ticker.Stop()
 
+		// Run-unique ID prefix: checkpoint IDs must never collide
+		// across restarts — the recovery marker probe matches on ID,
+		// and a stale marker from a previous run must not "prove" a
+		// different run's checkpoint committed.
+		runNonce := time.Now().UnixNano()
 		checkpointID := 0
+		mkID := func(suffix string) string {
+			return fmt.Sprintf("cp-%d-%d%s", runNonce, checkpointID, suffix)
+		}
+
+		// Barrier-aligned offset tracking: every data record that
+		// passes this point advances its partition's position. A
+		// barrier injected here is therefore preceded by exactly the
+		// records reflected in the map — the alignment invariant.
+		offsets := make(map[int]int64)
 
 		// forward blocks until downstream accepts r; it gives up only
 		// on hardCtx so this goroutine can't leak when the pipeline is
@@ -294,16 +432,26 @@ func (env *StreamExecutionEnv) injectBarriers(ctx, hardCtx context.Context, sour
 			}
 		}
 
+		// barrier snapshots the aligned offsets under the new
+		// checkpoint ID, then injects the barrier record.
+		barrier := func(id string) bool {
+			env.registerAlignedOffsets(id, offsets)
+			return forward(types.NewBarrier(id))
+		}
+
 		for {
 			select {
 			case <-ctx.Done():
 				// Inject a final checkpoint barrier before draining so
 				// state is saved on graceful shutdown.
 				checkpointID++
-				if !forward(types.NewBarrier(fmt.Sprintf("cp-%d-shutdown", checkpointID))) {
+				if !barrier(mkID("-shutdown")) {
 					return
 				}
 				for record := range sourceCh {
+					if !record.IsWatermark && !record.IsBarrier {
+						offsets[record.Partition] = record.Offset + 1
+					}
 					if !forward(record) {
 						return
 					}
@@ -312,7 +460,15 @@ func (env *StreamExecutionEnv) injectBarriers(ctx, hardCtx context.Context, sour
 
 			case record, ok := <-sourceCh:
 				if !ok {
+					// End of stream: one final barrier so every record
+					// is covered by a checkpoint (and, in coordinated
+					// mode, committed by the sink transaction).
+					checkpointID++
+					barrier(mkID("-final"))
 					return
+				}
+				if !record.IsWatermark && !record.IsBarrier {
+					offsets[record.Partition] = record.Offset + 1
 				}
 				if !forward(record) {
 					return
@@ -320,14 +476,14 @@ func (env *StreamExecutionEnv) injectBarriers(ctx, hardCtx context.Context, sour
 
 			case <-ticker.C:
 				checkpointID++
-				id := fmt.Sprintf("cp-%d", checkpointID)
+				id := mkID("")
 
 				// Inject barrier into the stream. The barrier flows
 				// through all operators. When it reaches the end of the
 				// operator chain, saveCheckpoint is triggered (see
 				// barrierDetect). This ensures operator state is
 				// captured AFTER all pre-barrier records are processed.
-				if !forward(types.NewBarrier(id)) {
+				if !barrier(id) {
 					return
 				}
 			}
@@ -337,47 +493,187 @@ func (env *StreamExecutionEnv) injectBarriers(ctx, hardCtx context.Context, sour
 	return out
 }
 
-// saveCheckpoint captures a snapshot from all stateful operators
-// and writes it to the checkpoint storage.
-func (env *StreamExecutionEnv) saveCheckpoint(id string) {
-	data := &checkpoint.CheckpointData{
-		ID:        id,
-		Timestamp: time.Now().UTC(),
-		Operators: make(map[string][]byte),
-		Source:    make(map[string][]byte),
+// registerAlignedOffsets stores a JSON snapshot of the injector's
+// aligned offset map under the given checkpoint ID, in the same
+// {"partition": nextOffset} shape as source.CheckpointSource.
+func (env *StreamExecutionEnv) registerAlignedOffsets(id string, offsets map[int]int64) {
+	snapshot := make(map[string]int64, len(offsets))
+	for p, off := range offsets {
+		snapshot[strconv.Itoa(p)] = off
+	}
+	data, err := json.Marshal(snapshot)
+	if err != nil {
+		return
+	}
+	// Coordinated mode: the coordinator owns pending checkpoints.
+	if env.coord != nil {
+		env.coord.OnBarrierInjected(id, data)
+		return
+	}
+	env.offsetsMu.Lock()
+	if env.pendingOffsets == nil {
+		env.pendingOffsets = make(map[string][]byte)
+	}
+	env.pendingOffsets[id] = data
+	env.offsetsMu.Unlock()
+}
+
+// takeAlignedOffsets returns and removes the aligned offsets captured
+// at barrier injection for the given checkpoint ID.
+func (env *StreamExecutionEnv) takeAlignedOffsets(id string) ([]byte, bool) {
+	env.offsetsMu.Lock()
+	defer env.offsetsMu.Unlock()
+	data, ok := env.pendingOffsets[id]
+	if ok {
+		delete(env.pendingOffsets, id)
+	}
+	return data, ok
+}
+
+// addBarrierSnapshot stores state captured when a barrier passed
+// through a stateful operator, until the barrier reaches the end of
+// the pipeline and the checkpoint is assembled.
+func (env *StreamExecutionEnv) addBarrierSnapshot(checkpointID, key string, snapshot []byte) {
+	env.snapsMu.Lock()
+	defer env.snapsMu.Unlock()
+	if env.barrierSnaps == nil {
+		env.barrierSnaps = make(map[string]map[string][]byte)
+	}
+	if env.barrierSnaps[checkpointID] == nil {
+		// Bound the map: a checkpoint whose barrier never reaches the
+		// end of the pipeline would otherwise leak its snapshots.
+		if len(env.barrierSnaps) > 8 {
+			for stale := range env.barrierSnaps {
+				if stale != checkpointID {
+					delete(env.barrierSnaps, stale)
+					break
+				}
+			}
+		}
+		env.barrierSnaps[checkpointID] = make(map[string][]byte)
+	}
+	env.barrierSnaps[checkpointID][key] = snapshot
+}
+
+// collectSnapshots assembles the state for one checkpoint. Stateful
+// operators that implement BarrierSnapshotter delivered their state
+// when the barrier passed through them (race-free); anything else is
+// snapshotted here as a legacy fallback.
+func (env *StreamExecutionEnv) collectSnapshots(checkpointID string) map[string][]byte {
+	env.snapsMu.Lock()
+	snaps := env.barrierSnaps[checkpointID]
+	delete(env.barrierSnaps, checkpointID)
+	env.snapsMu.Unlock()
+	if snaps == nil {
+		snaps = make(map[string][]byte)
 	}
 
 	for i, op := range env.operators {
+		key := fmt.Sprintf("op-%d", i)
+		if _, done := snaps[key]; done {
+			continue
+		}
 		if snap, ok := op.(operator.Snapshotable); ok {
 			snapshot, err := snap.Snapshot()
 			if err != nil {
 				fmt.Printf("mailer: checkpoint snapshot failed for operator %d: %v\n", i, err)
 				continue
 			}
-			data.Operators[fmt.Sprintf("op-%d", i)] = snapshot
+			snaps[key] = snapshot
 		}
 	}
 
-	// Snapshot per-worker operator instances created by keyed stages.
+	// Legacy fallback for keyed-worker clones without barrier-time
+	// snapshots (custom Cloneable operators).
 	env.workerMu.Lock()
 	for i, op := range env.workerOps {
+		key := fmt.Sprintf("worker-%d", i)
+		if _, done := snaps[key]; done {
+			continue
+		}
 		if snap, ok := op.(operator.Snapshotable); ok {
 			snapshot, err := snap.Snapshot()
 			if err != nil {
 				fmt.Printf("mailer: checkpoint worker-%d snapshot failed: %v\n", i, err)
 				continue
 			}
-			data.Operators[fmt.Sprintf("worker-%d", i)] = snapshot
+			snaps[key] = snapshot
 		}
 	}
 	env.workerMu.Unlock()
 
-	if cps, ok := env.source.(source.CheckpointSource); ok {
-		offset, err := cps.CheckpointOffset()
-		if err != nil {
-			fmt.Printf("mailer: checkpoint source offset failed: %v\n", err)
-		} else {
-			data.Source["offset"] = offset
+	return snaps
+}
+
+// resolveCoordinatedRecovery implements the exactly-once recovery
+// decision table:
+//
+//	latest completed              → restore from it
+//	latest prepared, txn committed → promote to completed, restore
+//	latest prepared, txn absent    → abort txn, restore previous completed
+//
+// The "did the transaction commit" question is answered by the sink's
+// marker probe (WasCommitted) — the output of an uncommitted
+// transaction was never visible, so falling back and replaying it
+// cannot duplicate.
+func (env *StreamExecutionEnv) resolveCoordinatedRecovery(ctx context.Context, cs sink.CheckpointedSink) (*checkpoint.CheckpointData, error) {
+	latest, err := env.checkpointStorage.Load()
+	if err != nil {
+		return nil, fmt.Errorf("load latest checkpoint: %w", err)
+	}
+	if latest == nil {
+		return nil, nil // fresh start
+	}
+	if latest.Completed() {
+		return latest, nil
+	}
+
+	committed, err := cs.WasCommitted(ctx, latest.ID)
+	if err != nil {
+		return nil, fmt.Errorf("cannot resolve prepared checkpoint %s: %w", latest.ID, err)
+	}
+	if committed {
+		if err := env.checkpointStorage.UpdateStatus(latest.ID, checkpoint.StatusCompleted); err != nil {
+			return nil, fmt.Errorf("promote checkpoint %s: %w", latest.ID, err)
+		}
+		fmt.Printf("mailer: recovery: checkpoint %s transaction had committed — promoted to completed\n", latest.ID)
+		latest.Status = checkpoint.StatusCompleted
+		return latest, nil
+	}
+
+	// Never committed: its output was never visible. Abort (best
+	// effort — producer fencing handles it too) and fall back.
+	if err := cs.Abort(ctx, latest.ID); err != nil {
+		fmt.Printf("mailer: recovery: abort dangling transaction %s: %v\n", latest.ID, err)
+	}
+	fmt.Printf("mailer: recovery: discarding uncommitted checkpoint %s\n", latest.ID)
+	return env.checkpointStorage.LoadLatestCompleted()
+}
+
+// saveCheckpoint captures a snapshot from all stateful operators
+// and writes it to the checkpoint storage (uncoordinated path).
+func (env *StreamExecutionEnv) saveCheckpoint(id string) {
+	data := &checkpoint.CheckpointData{
+		ID:        id,
+		Timestamp: time.Now().UTC(),
+		Operators: env.collectSnapshots(id),
+		Source:    make(map[string][]byte),
+		Status:    checkpoint.StatusCompleted,
+	}
+
+	if _, ok := env.source.(source.CheckpointSource); ok {
+		// Prefer the barrier-aligned offsets captured at injection;
+		// fall back to the source's live position only if the barrier
+		// predates offset tracking (shouldn't happen in practice).
+		if aligned, ok := env.takeAlignedOffsets(id); ok {
+			data.Source["offset"] = aligned
+		} else if cps, ok := env.source.(source.CheckpointSource); ok {
+			offset, err := cps.CheckpointOffset()
+			if err != nil {
+				fmt.Printf("mailer: checkpoint source offset failed: %v\n", err)
+			} else {
+				data.Source["offset"] = offset
+			}
 		}
 	}
 

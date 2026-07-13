@@ -128,7 +128,7 @@ A checkpoint is a consistent snapshot of:
 1. The current offset in each source partition
 2. The state of all operators
 
-If the pipeline crashes, it restarts from the last successful checkpoint: sources rewind to the saved offsets, state is restored, and processing continues. This gives **exactly-once semantics for operator state**; records replayed after recovery may reach the sink again, so output is at-least-once until transactional sinks land.
+If the pipeline crashes, it restarts from the last successful checkpoint: sources rewind to the saved offsets, state is restored, and processing continues. Operator state is always exactly-once. Output is **end-to-end exactly-once with `TxnKafkaSink`** (each checkpoint interval's output commits in a Kafka transaction, atomically with the checkpoint) and at-least-once with all other sinks — see Delivery Guarantees below.
 
 Checkpointing is based on the Chandy-Lamport algorithm (barriers flow through the stream, operators snapshot state when they see a barrier).
 
@@ -364,8 +364,9 @@ All originally planned phases are implemented:
 - ✅ **Keyed parallelism** — `WithPartitions(n)`: router → N stateful workers with cloned operators and isolated state; barriers/watermarks broadcast and re-aligned so checkpoints stay consistent.
 - ✅ **Stage-based execution & backpressure** — operators grouped into stages, direct function-call chaining inside a stage, bounded edges between stages, `WithParallelism(n)` for stateless workers, two-phase graceful shutdown.
 - ✅ **Observability** — Prometheus metrics (pipeline, operator, worker, stage, edge) and a built-in dashboard.
+- ✅ **End-to-end exactly-once (Kafka → Kafka)** — coordinated two-phase checkpoints: barrier-aligned source offsets, synchronous operator snapshots at barrier passage, transactional sink (`TxnKafkaSink` on franz-go) with per-checkpoint transaction markers for crash recovery. See Delivery Guarantees.
 
-Up next (roughly in order): durable state backend (Pebble), transactional/idempotent sinks for end-to-end exactly-once, allowed-lateness + side outputs for late data, multi-stream joins, typed `Stream[T]` API.
+Up next (roughly in order): durable state backend (Pebble), idempotent-upsert Postgres sink, allowed-lateness + side outputs for late data, multi-stream joins, typed `Stream[T]` API.
 
 ---
 
@@ -377,7 +378,23 @@ Flink runs as a JobManager + TaskManager cluster. Mailer runs as a single Go pro
 
 ### Why barrier-based checkpointing?
 
-The Chandy-Lamport approach (barriers flow through the dataflow graph, operators snapshot on barrier arrival) is well-proven in Flink. Barriers are special Records that flow in-band with data; at parallel stages they are broadcast to every worker and re-aligned at the stage exit, so a snapshot always reflects a consistent cut of the stream. This gives exactly-once semantics for **operator state**. End-to-end exactly-once to external sinks additionally requires transactional/idempotent sinks, which are on the roadmap — today, output to sinks is at-least-once across a crash/restore.
+The Chandy-Lamport approach (barriers flow through the dataflow graph, operators snapshot on barrier arrival) is well-proven in Flink. Barriers are special Records that flow in-band with data; stateful operators snapshot synchronously as the barrier passes through them, and at parallel stages barriers are broadcast to every worker and strictly re-aligned at the stage exit — no record can overtake a pending barrier. A snapshot is therefore always a consistent cut of the stream.
+
+## Delivery Guarantees
+
+| Configuration | Guarantee |
+|---|---|
+| `KafkaSource(KafkaExactlyOnce()) → … → TxnKafkaSink` + `WithCheckpointing` | **End-to-end exactly-once.** Source offsets, operator state, and sink output commit as one coordinated checkpoint (two-phase commit; the checkpoint file is the transaction log; a per-checkpoint transaction marker resolves crashes between sink commit and checkpoint completion). |
+| Any source → any plain sink, `WithCheckpointing` on | Exactly-once **state**, at-least-once **output**: replay after recovery re-emits records the sink already wrote. |
+| No checkpointing | At-most-once across restarts (processing restarts from the source's configured start offset). |
+
+Requirements for the exactly-once configuration:
+
+- **Consumers of the output topic must use `isolation.level=read_committed`** — otherwise they observe records from aborted transactions and all guarantees are void.
+- The `TxnKafkaTransactionalID` must be stable across restarts and unique per pipeline instance (a second instance with the same ID fences the first).
+- The marker topic (`<topic>.checkpoints` by default) must not be deleted — it is how recovery proves whether an unconfirmed transaction committed.
+- Output visibility latency equals the checkpoint interval: records become readable when their interval's transaction commits.
+- A checkpoint failure fails the pipeline (the aborted transaction's output must be replayed); restart recovers from the last completed checkpoint.
 
 ### Why not just use Kafka Streams?
 
@@ -400,7 +417,7 @@ Kafka Streams is Java-only. Mailer gives Go developers a native, embeddable stre
 | Checkpointing | Barrier-based, aligned/unaligned | Barrier-based, aligned |
 | Windowing | Tumbling, Sliding, Session, Global | Tumbling, Sliding, Session |
 | Kafka Connector | Built-in, mature | Built-in (segmentio/kafka-go) |
-| Exactly-once | End-to-end (with transactional sinks) | State: yes (checkpoints); sinks: at-least-once today |
+| Exactly-once | End-to-end (with transactional sinks) | End-to-end (Kafka→Kafka via TxnKafkaSink); other sinks at-least-once |
 | Backpressure | Credit-based network flow control | Bounded edges between stages |
 | SQL | Yes | No (not planned for v1) |
 | CEP (Complex Event Processing) | Yes | No (future) |

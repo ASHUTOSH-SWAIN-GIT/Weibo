@@ -43,3 +43,13 @@ type CheckpointSource interface {
 type Drainable interface {
 	Drain(ctx context.Context) error
 }
+
+// OffsetCommitter is an optional interface for sources whose offsets
+// should be committed externally (e.g. to the Kafka broker) after a
+// coordinated checkpoint completes. The commit is ADVISORY — consumer
+// lag visibility only. The checkpoint file remains the source of
+// truth for recovery. Offsets use the same JSON shape as
+// CheckpointSource.CheckpointOffset ({"partition": nextOffset}).
+type OffsetCommitter interface {
+	CommitOffsets(ctx context.Context, offsets []byte) error
+}

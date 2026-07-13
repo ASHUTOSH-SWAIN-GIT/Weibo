@@ -60,6 +60,19 @@ type Cloneable interface {
 	Clone() Operator
 }
 
+// BarrierSnapshotter is implemented by stateful operators that can
+// snapshot their state synchronously when a checkpoint barrier passes
+// through their Process loop. Snapshotting there — between two
+// records — is the only race-free point: the operator is quiescent
+// and its state reflects exactly the pre-barrier stream. Snapshots
+// taken from outside (e.g. when the barrier reaches the end of the
+// pipeline) race with the operator processing post-barrier records.
+type BarrierSnapshotter interface {
+	// SetBarrierSnapshot registers a callback invoked with the
+	// operator's state each time a barrier passes through it.
+	SetBarrierSnapshot(fn func(checkpointID string, snapshot []byte, err error))
+}
+
 // SingleProcessor is implemented by stateless operators that can be
 // invoked directly, one record at a time, without channels. The
 // execution engine chains SingleProcessors inside a stage as plain

@@ -2,34 +2,29 @@ package pipeline
 
 import (
 	"context"
-	"strconv"
 	"sync"
 	"time"
 
 	"github.com/ASHUTOSH-SWAIN-GIT/mailer/types"
 )
 
-// markerKey identifies a broadcast marker for alignment counting.
-// Barriers align on CheckpointID, watermarks on their timestamp.
-func markerKey(r types.Record) string {
-	if r.IsBarrier {
-		return "b:" + r.CheckpointID
-	}
-	return "w:" + strconv.FormatInt(r.Timestamp.UnixNano(), 10)
-}
-
 // alignedMerge fans the worker output channels into out, aligning
 // broadcast markers (barriers and watermarks): each marker was sent
 // to every worker, so it arrives len(workerOuts) times. The merge
 // emits it downstream exactly once — only after ALL workers have
-// delivered their copy. At that point every worker has processed all
-// of its pre-marker records, so a checkpoint triggered downstream
-// captures consistent state (Chandy-Lamport alignment).
+// delivered their copy.
 //
-// Data records are forwarded as they arrive. Post-marker records from
-// already-aligned workers may pass the held marker; that is safe
-// because workers own disjoint partitions — their state was already
-// captured at their own marker.
+// Alignment is strict: a worker that delivers a marker is PARKED (its
+// output is no longer read) until every worker has delivered the same
+// marker. This guarantees that no post-marker record can overtake the
+// marker downstream — required for transactional sinks, where a
+// post-barrier record leaking ahead of the barrier would be committed
+// with the wrong checkpoint and duplicated on replay. Backpressure
+// holds the parked workers' output naturally.
+//
+// Per-worker order is preserved by routing markers through the same
+// fan-in channel as data: a marker can never be counted before the
+// records that preceded it on its own worker.
 //
 // Returns when all worker outputs are closed, or with an error if
 // hardCtx fires. When sm is non-nil, downstream sends are counted and
@@ -42,14 +37,20 @@ func alignedMerge(hardCtx context.Context, workerOuts []chan types.Record, out c
 	}
 
 	fanIn := make(chan types.Record, internalBuf)
+	resume := make([]chan struct{}, n)
+	for i := range resume {
+		resume[i] = make(chan struct{}, 1)
+	}
+
 	go func() {
 		defer close(fanIn)
 		var wg sync.WaitGroup
-		for _, ch := range workerOuts {
+		for w, ch := range workerOuts {
 			wg.Add(1)
-			go func(c <-chan types.Record) {
+			go func(w int, c <-chan types.Record) {
 				defer wg.Done()
 				for r := range c {
+					isMarker := r.IsBarrier || r.IsWatermark
 					select {
 					case fanIn <- r:
 					case <-hardCtx.Done():
@@ -57,25 +58,44 @@ func alignedMerge(hardCtx context.Context, workerOuts []chan types.Record, out c
 						}
 						return
 					}
+					if isMarker {
+						// Park until every worker reached this marker.
+						select {
+						case <-resume[w]:
+						case <-hardCtx.Done():
+							for range c {
+							}
+							return
+						}
+					}
 				}
-			}(ch)
+			}(w, ch)
 		}
 		wg.Wait()
 	}()
 
-	seen := make(map[string]int)
+	// Workers park after each marker, so at most one marker round is
+	// in flight — a plain counter suffices.
+	arrived := 0
 	for {
 		r, ok, err := recvRecord(hardCtx, fanIn)
 		if err != nil || !ok {
 			return err
 		}
 		if r.IsBarrier || r.IsWatermark {
-			k := markerKey(r)
-			seen[k]++
-			if seen[k] == n {
-				delete(seen, k)
-				if err := send(hardCtx, out, r); err != nil {
-					return err
+			arrived++
+			if arrived < n {
+				continue // hold until the laggards deliver their copy
+			}
+			arrived = 0
+			if err := send(hardCtx, out, r); err != nil {
+				return err
+			}
+			for _, ch := range resume {
+				select {
+				case ch <- struct{}{}:
+				case <-hardCtx.Done():
+					return hardCtx.Err()
 				}
 			}
 			continue

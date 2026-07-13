@@ -21,7 +21,15 @@ type PlanConfig struct {
 
 	// OnClone is called for every stateful operator clone a keyed
 	// stage creates, so the caller can register it for checkpointing.
-	OnClone func(operator.Operator)
+	// It returns the clone's global worker index ("worker-<idx>" in
+	// checkpoint data).
+	OnClone func(operator.Operator) int
+
+	// OnSnapshot receives operator state captured synchronously when
+	// a barrier passes through a stateful operator (the race-free
+	// snapshot point). key is the checkpoint-data key ("worker-<idx>"
+	// or "op-<idx>").
+	OnSnapshot func(checkpointID, key string, snapshot []byte)
 }
 
 // BuildPlan groups the flat operator list into execution stages:
@@ -80,7 +88,7 @@ func BuildPlan(cfg PlanConfig) ([]Stage, error) {
 			flush()
 			stateful, skip := takeStateful(cfg.Operators[i+1:])
 			i += skip
-			ks := NewKeyedStage(kb, stateful, cfg.OnClone)
+			ks := NewKeyedStage(kb, stateful, cfg.OnClone, cfg.OnSnapshot)
 			ks.StageName = fmt.Sprintf("keyed-%d", keyedCount)
 			keyedCount++
 			stages = append(stages, ks)
@@ -104,6 +112,19 @@ func BuildPlan(cfg PlanConfig) ([]Stage, error) {
 		// Channel-based operator outside a keyed stage (e.g. Window
 		// or Reduce without KeyBy): runs alone with the old model.
 		flush()
+		// Wire the race-free barrier-time snapshot for top-level
+		// stateful operators too ("op-<idx>" in checkpoint data).
+		if bs, ok := op.(operator.BarrierSnapshotter); ok && cfg.OnSnapshot != nil {
+			key := fmt.Sprintf("op-%d", i)
+			onSnap := cfg.OnSnapshot
+			bs.SetBarrierSnapshot(func(id string, snap []byte, err error) {
+				if err != nil {
+					fmt.Printf("mailer: barrier snapshot failed for %s: %v\n", key, err)
+					return
+				}
+				onSnap(id, key, snap)
+			})
+		}
 		stages = append(stages, &ChannelStage{
 			Op:        op,
 			Label:     cfg.Labels[i],
