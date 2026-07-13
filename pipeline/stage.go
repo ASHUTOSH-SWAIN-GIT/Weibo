@@ -49,6 +49,8 @@ func (s *SourceStage) Name() string { return "source" }
 // pipeline (parity with previous behavior — the stream simply ends).
 func (s *SourceStage) Run(runCtx, hardCtx context.Context, _ <-chan types.Record, out chan<- types.Record) error {
 	defer close(out)
+	sm := newStageMetrics(s.Name(), "source")
+	defer sm.setWorkers(1)()
 
 	raw := make(chan types.Record, internalBuf)
 	go func() {
@@ -82,7 +84,8 @@ func (s *SourceStage) Run(runCtx, hardCtx context.Context, _ <-chan types.Record
 			return nil
 		}
 		metrics.RecordsReadTotal.Inc()
-		if err := sendRecord(hardCtx, out, r); err != nil {
+		sm.countIn(r)
+		if err := sm.send(hardCtx, out, r); err != nil {
 			go func() {
 				for range raw {
 				}
@@ -103,6 +106,9 @@ func (s *SinkStage) Name() string { return "sink" }
 // hardCtx so it keeps draining through graceful shutdown and is only
 // interrupted by the shutdown timeout (C3).
 func (s *SinkStage) Run(runCtx, hardCtx context.Context, in <-chan types.Record, _ chan<- types.Record) error {
+	sm := newStageMetrics(s.Name(), "sink")
+	defer sm.setWorkers(1)()
+
 	pumped := make(chan types.Record, internalBuf)
 	done := make(chan error, 1)
 	go func() {
@@ -116,12 +122,14 @@ func (s *SinkStage) Run(runCtx, hardCtx context.Context, in <-chan types.Record,
 	received := false
 	pumping := true
 	for r := range in {
+		sm.countIn(r)
 		if !pumping {
 			continue // sink died or forced shutdown: discard while upstream unwinds
 		}
 		select {
 		case pumped <- r:
 			metrics.RecordsWrittenTotal.Inc()
+			sm.countOut(r)
 		case sinkErr = <-done:
 			received = true
 			pumping = false
@@ -144,17 +152,34 @@ func (s *SinkStage) Run(runCtx, hardCtx context.Context, in <-chan types.Record,
 // used without KeyBy). It preserves the old per-operator execution
 // model for that operator alone.
 type ChannelStage struct {
-	Op    operator.Operator
-	Label string
+	Op        operator.Operator
+	Label     string
+	StageName string // unique name assigned by the planner
 }
 
-func (s *ChannelStage) Name() string { return "op-" + s.Op.Name() }
+func (s *ChannelStage) Name() string {
+	if s.StageName != "" {
+		return s.StageName
+	}
+	return "op-" + s.Op.Name()
+}
 
 func (s *ChannelStage) Run(runCtx, hardCtx context.Context, in <-chan types.Record, out chan<- types.Record) error {
 	defer close(out)
+	sm := newStageMetrics(s.Name(), "channel")
+	defer sm.setWorkers(1)()
+
+	countedIn := make(chan types.Record, internalBuf)
+	go func() {
+		defer close(countedIn)
+		for r := range in {
+			sm.countIn(r)
+			countedIn <- r
+		}
+	}()
 
 	mid := make(chan types.Record, internalBuf)
-	go s.Op.Process(in, mid) // Process closes mid when in closes
+	go s.Op.Process(countedIn, mid) // Process closes mid when countedIn closes
 
 	lat := newLatencyBatcher(func(avg float64) {
 		metrics.OperatorLatencySeconds.WithLabelValues(s.Label).Observe(avg)
@@ -167,7 +192,7 @@ func (s *ChannelStage) Run(runCtx, hardCtx context.Context, in <-chan types.Reco
 		}
 		metrics.RecordsProcessedTotal.WithLabelValues(s.Label).Inc()
 		lat.tick()
-		if err := sendRecord(hardCtx, out, r); err != nil {
+		if err := sm.send(hardCtx, out, r); err != nil {
 			lat.flush()
 			return err
 		}

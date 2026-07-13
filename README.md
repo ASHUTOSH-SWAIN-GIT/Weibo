@@ -167,6 +167,55 @@ A Job is a complete pipeline definition: Source → Operator(s) → Sink. You su
 
 **Single-process, multi-goroutine.** No cluster runtime. Each source partition is consumed by a separate goroutine. Keyed state is partitioned by key across in-memory maps. Checkpointing uses barrier alignment.
 
+### Execution Model: Stages and Edges
+
+At `Execute()`, the planner groups the operator chain into **execution
+stages**. Inside a stage, operators run as direct function calls — no
+channels, no goroutine hops. Bounded channels (**edges**, default
+capacity 1024) exist only *between* stages:
+
+```
+[Source] →edge→ [Map→Filter] →edge→ [KeyBy: Window→Reduce ×N workers] →edge→ [Sink]
+```
+
+- Consecutive stateless operators (Map, Filter, FlatMap, Process) with
+  the same parallelism share one stage.
+- `KeyBy` starts a keyed stage: a router hash-dispatches records to N
+  stateful workers (same key → same worker), each with cloned
+  operators and isolated state.
+- Checkpoint barriers and watermarks are broadcast to every worker of
+  a parallel stage and re-aligned at its exit, so snapshots stay
+  consistent at any parallelism.
+
+**Backpressure** falls out of the bounded edges: sending to a full
+edge blocks. A slow sink fills its input edge, which blocks the stage
+before it, and so on back to the source — which simply stops fetching
+from Kafka. Bounded memory, zero drops, no tuning required. Tune the
+buffer/latency trade-off with:
+
+```go
+env := mailer.NewEnv().
+    WithBufferSize(2048)          // edge capacity (default 1024)
+
+stream.Map(cpuHeavyTransform).
+    WithParallelism(4)            // worker pool for one stateless op
+                                  // (order across workers not preserved)
+```
+
+**Shutdown is two-phase:** cancelling the context stops the source;
+everything downstream drains through cascading channel closes (a final
+checkpoint barrier rides the drain, so state is saved). Only if the
+drain exceeds `WithShutdownTimeout` (default 30s) are blocked stages
+forcibly aborted.
+
+**Observability:** every edge and stage exports Prometheus metrics —
+`mailer_edge_queue_size` / `_capacity` (an edge pinned at capacity
+identifies the bottleneck stage right after it),
+`mailer_stage_records_in_total` / `_out_total`,
+`mailer_stage_send_block_seconds_total` (time spent blocked on
+backpressure), `mailer_stage_workers`, and `mailer_stage_errors_total`,
+alongside the existing per-operator and per-worker metrics.
+
 ---
 
 ## Proposed SDK API

@@ -25,6 +25,9 @@ import (
 type KeyedStage struct {
 	KeyBy *operator.KeyByOperator
 
+	// StageName is the unique name assigned by the planner (metrics label).
+	StageName string
+
 	// workers[w] is worker w's cloned operator chain. Clones are
 	// created eagerly at plan time so checkpoint state can be
 	// restored into them before the stage starts running.
@@ -50,12 +53,19 @@ func NewKeyedStage(kb *operator.KeyByOperator, ops []operator.Operator, onClone 
 	return &KeyedStage{KeyBy: kb, workers: workers}
 }
 
-func (s *KeyedStage) Name() string { return "keyed" }
+func (s *KeyedStage) Name() string {
+	if s.StageName != "" {
+		return s.StageName
+	}
+	return "keyed"
+}
 
 func (s *KeyedStage) Run(runCtx, hardCtx context.Context, in <-chan types.Record, out chan<- types.Record) error {
 	defer close(out)
 
 	n := len(s.workers)
+	sm := newStageMetrics(s.Name(), "keyed")
+	defer sm.setWorkers(n)()
 
 	// stageCtx: a worker panic cancels the whole stage so the router,
 	// remaining workers, and merge unwind instead of deadlocking.
@@ -82,6 +92,7 @@ func (s *KeyedStage) Run(runCtx, hardCtx context.Context, in <-chan types.Record
 			if err != nil || !ok {
 				return
 			}
+			sm.countIn(r)
 			if r.IsBarrier || r.IsWatermark {
 				for _, ch := range workerIns {
 					if sendRecord(stageCtx, ch, r) != nil {
@@ -143,7 +154,7 @@ func (s *KeyedStage) Run(runCtx, hardCtx context.Context, in <-chan types.Record
 		}(w, workerIns[w], workerOuts[w])
 	}
 
-	mergeErr := alignedMerge(stageCtx, workerOuts, out)
+	mergeErr := alignedMerge(stageCtx, workerOuts, out, sm)
 	wg.Wait()
 	select {
 	case err := <-errCh:

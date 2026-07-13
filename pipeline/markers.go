@@ -32,9 +32,14 @@ func markerKey(r types.Record) string {
 // captured at their own marker.
 //
 // Returns when all worker outputs are closed, or with an error if
-// hardCtx fires.
-func alignedMerge(hardCtx context.Context, workerOuts []chan types.Record, out chan<- types.Record) error {
+// hardCtx fires. When sm is non-nil, downstream sends are counted and
+// block-timed as the stage's output.
+func alignedMerge(hardCtx context.Context, workerOuts []chan types.Record, out chan<- types.Record, sm *stageMetrics) error {
 	n := len(workerOuts)
+	send := sendRecord
+	if sm != nil {
+		send = sm.send
+	}
 
 	fanIn := make(chan types.Record, internalBuf)
 	go func() {
@@ -69,13 +74,13 @@ func alignedMerge(hardCtx context.Context, workerOuts []chan types.Record, out c
 			seen[k]++
 			if seen[k] == n {
 				delete(seen, k)
-				if err := sendRecord(hardCtx, out, r); err != nil {
+				if err := send(hardCtx, out, r); err != nil {
 					return err
 				}
 			}
 			continue
 		}
-		if err := sendRecord(hardCtx, out, r); err != nil {
+		if err := send(hardCtx, out, r); err != nil {
 			return err
 		}
 	}
