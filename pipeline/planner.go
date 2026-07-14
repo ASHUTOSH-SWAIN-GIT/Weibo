@@ -1,6 +1,7 @@
 package pipeline
 
 import (
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -43,6 +44,37 @@ type StageHooks struct {
 	// "worker-<idx>"). Nil means operators keep their self-created
 	// default (in-memory) backends.
 	StateBackendFor func(ownerID string) (state.StateBackend, error)
+
+	// NativeStateDir returns the directory a Checkpointable backend
+	// should hard-link its barrier-time checkpoint into, for a given
+	// (checkpoint ID, owner). Nil when checkpointing is off or the
+	// storage has no state directory support.
+	NativeStateDir func(checkpointID, ownerID string) string
+}
+
+// wireNativeSnapshot injects a native barrier-time snapshot into ops
+// whose backend supports Checkpointable: the operator hard-links its
+// state into the checkpoint's state dir and reports a state-ref
+// marker instead of serialized bytes. Must run AFTER assignBackend.
+func (h StageHooks) wireNativeSnapshot(op operator.Operator, ownerID string) {
+	if h.NativeStateDir == nil {
+		return
+	}
+	ns, ok := op.(operator.NativeSnapshotter)
+	if !ok {
+		return
+	}
+	cp, ok := ns.Backend().(state.Checkpointable)
+	if !ok {
+		return
+	}
+	dirFor := h.NativeStateDir
+	ns.SetNativeSnapshot(func(checkpointID string) ([]byte, error) {
+		if err := cp.CheckpointTo(dirFor(checkpointID, ownerID)); err != nil {
+			return nil, err
+		}
+		return json.Marshal(map[string]string{"state_ref": ownerID})
+	})
 }
 
 // assignBackend injects an engine-created state backend into op when
@@ -146,6 +178,7 @@ func BuildPlan(cfg PlanConfig) ([]Stage, error) {
 		if err := cfg.assignBackend(op, fmt.Sprintf("op-%d", i)); err != nil {
 			return nil, err
 		}
+		cfg.wireNativeSnapshot(op, fmt.Sprintf("op-%d", i))
 		// Wire the race-free barrier-time snapshot for top-level
 		// stateful operators too ("op-<idx>" in checkpoint data).
 		if bs, ok := op.(operator.BarrierSnapshotter); ok && cfg.OnSnapshot != nil {

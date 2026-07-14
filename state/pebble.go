@@ -26,6 +26,14 @@ type PebbleBackend struct {
 	dir  string
 	seqs map[seqKey]uint64
 	mu   sync.Mutex
+
+	// life guards the db handle's lifecycle. Straggler goroutines
+	// from a force-aborted pipeline can still touch state while (or
+	// after) the engine closes backends; operations on a closed
+	// backend become no-ops instead of panicking — their results are
+	// post-abort garbage that never becomes visible anyway.
+	life   sync.RWMutex
+	closed bool
 }
 
 type seqKey struct {
@@ -56,15 +64,36 @@ func OpenPebble(dir string) (*PebbleBackend, error) {
 	return &PebbleBackend{db: db, dir: dir, seqs: make(map[seqKey]uint64)}, nil
 }
 
-// Close shuts down the Pebble DB.
+// Close shuts down the Pebble DB. Idempotent.
 func (p *PebbleBackend) Close() error {
+	p.life.Lock()
+	defer p.life.Unlock()
+	if p.closed {
+		return nil
+	}
+	p.closed = true
 	return p.db.Close()
 }
 
 // CheckpointTo creates a hard-link-based snapshot of the live Pebble DB
 // at dir.  The caller must place dir on the same filesystem as the
 // live DB for hard-links to work.
+//
+// The memtable is flushed first: the write path runs unsynced
+// (Sync: false), so recent writes exist only in memory and an
+// unflushed WAL — hard-linking without a flush would checkpoint an
+// empty/stale view. Flush cost is proportional to data written since
+// the previous flush, which is exactly the "changed data" scaling
+// native checkpoints promise.
 func (p *PebbleBackend) CheckpointTo(dir string) error {
+	p.life.RLock()
+	defer p.life.RUnlock()
+	if p.closed {
+		return fmt.Errorf("state/pebble: checkpoint on closed backend")
+	}
+	if err := p.db.Flush(); err != nil {
+		return fmt.Errorf("state/pebble: flush before checkpoint: %w", err)
+	}
 	return p.db.Checkpoint(dir)
 }
 
@@ -72,10 +101,13 @@ func (p *PebbleBackend) CheckpointTo(dir string) error {
 // directory.  The current DB is closed, the live directory is wiped,
 // and the checkpointed data is copied back.
 func (p *PebbleBackend) RestoreFrom(dir string) error {
-	if p.db != nil {
+	p.life.Lock()
+	defer p.life.Unlock()
+	if p.db != nil && !p.closed {
 		if err := p.db.Close(); err != nil {
 			return fmt.Errorf("state/pebble: close before restore: %w", err)
 		}
+		p.closed = true
 	}
 	if err := os.RemoveAll(p.dir); err != nil {
 		return fmt.Errorf("state/pebble: wipe live dir: %w", err)
@@ -92,6 +124,7 @@ func (p *PebbleBackend) RestoreFrom(dir string) error {
 	}
 	p.db = db
 	p.seqs = make(map[seqKey]uint64)
+	p.closed = false
 	return nil
 }
 
@@ -117,11 +150,14 @@ func (vs *pebbleValueState) SetKey(k string) { vs.key = k }
 func (vs *pebbleValueState) userKey() []byte { return valueUserKey(vs.namespace, vs.key) }
 
 func (vs *pebbleValueState) Get() []byte {
-	val, closer, err := vs.backend.db.Get(vs.userKey())
+	p := vs.backend
+	p.life.RLock()
+	defer p.life.RUnlock()
+	if p.closed {
+		return nil
+	}
+	val, closer, err := p.db.Get(vs.userKey())
 	if err != nil {
-		if err == pebble.ErrNotFound {
-			return nil
-		}
 		return nil
 	}
 	defer closer.Close()
@@ -131,20 +167,38 @@ func (vs *pebbleValueState) Get() []byte {
 }
 
 func (vs *pebbleValueState) Set(value []byte) {
-	if err := vs.backend.db.Set(vs.userKey(), value, noSync); err != nil {
+	p := vs.backend
+	p.life.RLock()
+	defer p.life.RUnlock()
+	if p.closed {
+		return
+	}
+	if err := p.db.Set(vs.userKey(), value, noSync); err != nil {
 		panic(fmt.Sprintf("state/pebble: Set: %v", err))
 	}
 }
 
 func (vs *pebbleValueState) Clear() {
-	if err := vs.backend.db.Delete(vs.userKey(), noSync); err != nil {
+	p := vs.backend
+	p.life.RLock()
+	defer p.life.RUnlock()
+	if p.closed {
+		return
+	}
+	if err := p.db.Delete(vs.userKey(), noSync); err != nil {
 		panic(fmt.Sprintf("state/pebble: Clear: %v", err))
 	}
 }
 
 func (vs *pebbleValueState) SnapshotAll() map[string][]byte {
+	p := vs.backend
+	p.life.RLock()
+	defer p.life.RUnlock()
+	if p.closed {
+		return map[string][]byte{}
+	}
 	prefix := valuePrefixBytes(vs.namespace)
-	iter, _ := vs.backend.db.NewIter(&pebble.IterOptions{
+	iter, _ := p.db.NewIter(&pebble.IterOptions{
 		LowerBound: prefix,
 		UpperBound: prefixUpperBound(prefix),
 	})
@@ -159,7 +213,13 @@ func (vs *pebbleValueState) SnapshotAll() map[string][]byte {
 }
 
 func (vs *pebbleValueState) RestoreAll(entries map[string][]byte) error {
-	b := vs.backend.db.NewBatch()
+	p := vs.backend
+	p.life.RLock()
+	defer p.life.RUnlock()
+	if p.closed {
+		return fmt.Errorf("state/pebble: restore on closed backend")
+	}
+	b := p.db.NewBatch()
 	defer b.Close()
 	b.DeleteRange(prefixStart(vs.namespace), prefixEnd(vs.namespace), noSync)
 	for k, v := range entries {
@@ -167,7 +227,7 @@ func (vs *pebbleValueState) RestoreAll(entries map[string][]byte) error {
 			return err
 		}
 	}
-	return vs.backend.db.Apply(b, noSync)
+	return p.db.Apply(b, noSync)
 }
 
 // ---- ListState -------------------------------------------------------------
@@ -181,21 +241,33 @@ type pebbleListState struct {
 func (ls *pebbleListState) SetKey(k string) { ls.key = k }
 
 func (ls *pebbleListState) Append(value []byte) {
-	ls.backend.mu.Lock()
+	p := ls.backend
+	p.life.RLock()
+	defer p.life.RUnlock()
+	if p.closed {
+		return
+	}
+	p.mu.Lock()
 	sk := seqKey{namespace: ls.namespace, key: ls.key}
-	seq := ls.backend.seqs[sk]
-	ls.backend.seqs[sk] = seq + 1
-	ls.backend.mu.Unlock()
+	seq := p.seqs[sk]
+	p.seqs[sk] = seq + 1
+	p.mu.Unlock()
 
 	listKey := listEntryKey(ls.namespace, ls.key, seq)
-	if err := ls.backend.db.Set(listKey, value, noSync); err != nil {
+	if err := p.db.Set(listKey, value, noSync); err != nil {
 		panic(fmt.Sprintf("state/pebble: ListState.Append: %v", err))
 	}
 }
 
 func (ls *pebbleListState) GetAll() [][]byte {
+	p := ls.backend
+	p.life.RLock()
+	defer p.life.RUnlock()
+	if p.closed {
+		return nil
+	}
 	prefix := listPrefixBytes(ls.namespace, ls.key)
-	iter, _ := ls.backend.db.NewIter(&pebble.IterOptions{
+	iter, _ := p.db.NewIter(&pebble.IterOptions{
 		LowerBound: prefix,
 		UpperBound: prefixUpperBound(prefix),
 	})
@@ -209,8 +281,14 @@ func (ls *pebbleListState) GetAll() [][]byte {
 }
 
 func (ls *pebbleListState) Clear() {
+	p := ls.backend
+	p.life.RLock()
+	defer p.life.RUnlock()
+	if p.closed {
+		return
+	}
 	start := listPrefixBytes(ls.namespace, ls.key)
-	if err := ls.backend.db.DeleteRange(start, prefixUpperBound(start), noSync); err != nil {
+	if err := p.db.DeleteRange(start, prefixUpperBound(start), noSync); err != nil {
 		panic(fmt.Sprintf("state/pebble: ListState.Clear: %v", err))
 	}
 }

@@ -98,6 +98,13 @@ func (s *SourceStage) Run(runCtx, hardCtx context.Context, _ <-chan types.Record
 // SinkStage wraps a sink.Sink as the last stage of a plan.
 type SinkStage struct {
 	Sink sink.Sink
+
+	// OnBarrier, when set (uncoordinated checkpointing), is invoked
+	// for each barrier only after the sink has drained every record
+	// ahead of it — so a checkpoint is never durable for records the
+	// sink never received. Coordinated (exactly-once) pipelines leave
+	// this nil; the sink itself acknowledges barriers there.
+	OnBarrier func(checkpointID string)
 }
 
 func (s *SinkStage) Name() string { return "sink" }
@@ -126,6 +133,30 @@ func (s *SinkStage) Run(runCtx, hardCtx context.Context, in <-chan types.Record,
 		if !pumping {
 			continue // forced shutdown: discard while upstream unwinds
 		}
+
+		// Uncoordinated checkpoint alignment: before reporting a
+		// barrier, wait until the sink's Write loop has dequeued
+		// every record ahead of it. Saving earlier would make source
+		// offsets durable for records still sitting in this buffer —
+		// lost on crash, violating at-least-once.
+		if r.IsBarrier && s.OnBarrier != nil {
+			for pumping && len(pumped) > 0 {
+				select {
+				case sinkErr = <-done:
+					metrics.SinkErrorsTotal.Inc()
+					return sinkErr
+				case <-hardCtx.Done():
+					pumping = false
+				case <-time.After(200 * time.Microsecond):
+				}
+			}
+			if pumping {
+				s.OnBarrier(r.CheckpointID)
+			} else {
+				continue
+			}
+		}
+
 		select {
 		case pumped <- r:
 			metrics.RecordsWrittenTotal.Inc()

@@ -51,6 +51,16 @@ type ReduceOperator struct {
 	// Process loop each time a barrier passes — the race-free
 	// snapshot point (see operator.BarrierSnapshotter).
 	barrierSnapshot func(checkpointID string, snapshot []byte, err error)
+
+	// nativeSnapshot, when set, replaces Snapshot() at the barrier:
+	// it checkpoints the backend natively (e.g. Pebble hard-links)
+	// and returns a state-ref marker instead of serialized state.
+	nativeSnapshot func(checkpointID string) ([]byte, error)
+}
+
+// SetNativeSnapshot implements NativeSnapshotter.
+func (op *ReduceOperator) SetNativeSnapshot(fn func(checkpointID string) ([]byte, error)) {
+	op.nativeSnapshot = fn
 }
 
 // SetBarrierSnapshot implements BarrierSnapshotter.
@@ -100,9 +110,17 @@ func (op *ReduceOperator) Process(in <-chan types.Record, out chan<- types.Recor
 
 		if record.IsBarrier {
 			// Snapshot NOW, between records: state reflects exactly the
-			// pre-barrier stream and nothing is mutating it.
+			// pre-barrier stream and nothing is mutating it. Native
+			// backends checkpoint via hard-links (cost ∝ changed data);
+			// others serialize everything.
 			if op.barrierSnapshot != nil {
-				snap, err := op.Snapshot()
+				var snap []byte
+				var err error
+				if op.nativeSnapshot != nil {
+					snap, err = op.nativeSnapshot(record.CheckpointID)
+				} else {
+					snap, err = op.Snapshot()
+				}
 				op.barrierSnapshot(record.CheckpointID, snap, err)
 			}
 			out <- record
