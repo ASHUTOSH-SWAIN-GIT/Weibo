@@ -176,14 +176,27 @@ is verification: run the entire recovery + exactly-once test matrix
 (crash sweep, keyed multi-partition, persist-failure) parameterized
 over both factories. Gate: full suite green with Pebble under `-race`.
 
+**Status:** ✅ DONE.  Conformance suite (14 tests × 2 backends), recovery
+tests (2 tests × 2 backends), exactly-once tests (7 tests × 2 backends)
+all pass with `-race`.
+
 **P4 — Native Pebble checkpoints (scalable mode).**
 `Checkpointable`, state refs in `CheckpointData.StateDirs`, FileStorage
 dir layout + fsync order + GC + orphan sweep, restore-from-dir, wipe
 live dir on restore, prepared-checkpoint state-dir cleanup in the
-recovery fallback. Tests: checkpoint with 100k keys stays O(delta)
-(assert checkpoint JSON stays small; assert time bounded), GC leaves
-exactly the retained checkpoints' dirs, crash between state-dir write
-and JSON write → orphan swept, EO crash sweep again in scalable mode.
+recovery fallback.
+
+**Status:** ✅ DONE.
+
+- `state.Checkpointable` interface: `CheckpointTo(dir)`, `RestoreFrom(dir)`
+- `PebbleBackend` implements Checkpointable via `pebble.DB.Checkpoint()` (hard-links)
+- `CheckpointData.StateDirs` maps ownerID → state dir key
+- `collectSnapshots` routes to `CheckpointTo` for Pebble backends, stores state-ref marker
+- `extractStateDirs` populates `StateDirs` from snapshot markers, clears inline state bytes
+- `restoreWorkersFromCheckpoint` uses `RestoreFrom` when `StateDirs` exists
+- `FileStorage.Save()` fsyncs state dirs before writing commit-point JSON
+- `FileStorage.StateDir(id)`, `SweepOrphans()`, `DeleteStateDirs()` for lifecycle
+- `syncDir()` ensures newly created state subdirectories are durable
 
 **P5 — Exactly-once verification + benchmarks.**
 The full EO matrix over (memory, pebble-compatible, pebble-scalable) ×

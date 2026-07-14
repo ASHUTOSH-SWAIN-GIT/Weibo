@@ -157,6 +157,10 @@ func (op *ReduceOperator) Clone() Operator {
 	}
 }
 
+// Backend returns the underlying state backend. Used by the
+// checkpoint coordinator to check for native checkpointing support.
+func (op *ReduceOperator) Backend() state.StateBackend { return op.backend }
+
 // StateKey returns the key used for Reduce state lookup.
 // If the record has window metadata, the key includes window bounds
 // so reduce is scoped per-(key, window).

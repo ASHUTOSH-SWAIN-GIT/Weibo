@@ -14,8 +14,22 @@ import (
 
 	"github.com/ASHUTOSH-SWAIN-GIT/mailer"
 	"github.com/ASHUTOSH-SWAIN-GIT/mailer/checkpoint"
+	"github.com/ASHUTOSH-SWAIN-GIT/mailer/state"
 	"github.com/ASHUTOSH-SWAIN-GIT/mailer/types"
 )
+
+func stateBackends(t *testing.T) []struct {
+	Name    string
+	Factory state.BackendFactory
+} {
+	return []struct {
+		Name    string
+		Factory state.BackendFactory
+	}{
+		{"Memory", state.InMemory()},
+		{"Pebble", state.Pebble(t.TempDir())},
+	}
+}
 
 // ---------------------------------------------------------------------------
 // Test doubles that mimic the Kafka contract without a broker.
@@ -218,80 +232,81 @@ func checkpointOffsets(storage checkpoint.Storage) map[string]int64 {
 // from its own checkpointed offset (not from zero, not from a global
 // position), and must deliver the entire post-checkpoint suffix.
 func TestRecovery_CrashResumeFromMultiPartitionOffsets(t *testing.T) {
-	const perPart = 40
-	dir := t.TempDir()
-	storage := checkpoint.NewFileStorage(dir)
+	for _, bk := range stateBackends(t) {
+		t.Run(bk.Name, func(t *testing.T) {
+			const perPart = 40
+			dir := t.TempDir()
+			storage := checkpoint.NewFileStorage(dir)
 
-	mkParts := func() [][]types.Record {
-		parts := make([][]types.Record, 3)
-		for p := range parts {
-			for i := 0; i < perPart; i++ {
-				parts[p] = append(parts[p], types.NewRecord(
-					[]byte("key-"+strconv.Itoa(p)), []byte("v"+strconv.Itoa(i))))
+			mkParts := func() [][]types.Record {
+				parts := make([][]types.Record, 3)
+				for p := range parts {
+					for i := 0; i < perPart; i++ {
+						parts[p] = append(parts[p], types.NewRecord(
+							[]byte("key-"+strconv.Itoa(p)), []byte("v"+strconv.Itoa(i))))
+					}
+				}
+				return parts
 			}
-		}
-		return parts
-	}
 
-	// Run 1: crash the sink once a checkpoint exists and some records
-	// got through.
-	src1 := newReplaySource(mkParts())
-	src1.emitDelay = time.Millisecond // keep the source live so barriers interleave
-	sink1 := newCaptureSink()
-	sink1.failWhen = func(seen int) bool {
-		return seen >= 30 && checkpointOffsets(storage) != nil
-	}
-
-	env1 := mailer.NewEnv().WithBufferSize(16).
-		WithCheckpointing(5*time.Millisecond, storage)
-	env1.FromSource(src1).
-		Map(func(r types.Record) types.Record { return r }, "pass").
-		ToSink(sink1)
-
-	if err := env1.Execute(context.Background()); err == nil {
-		t.Fatal("run 1: expected pipeline to fail from injected sink crash, got nil")
-	}
-
-	saved := checkpointOffsets(storage)
-	if saved == nil {
-		t.Fatal("run 1: no checkpoint was saved before the crash")
-	}
-	if len(saved) != 3 {
-		t.Fatalf("checkpoint should hold offsets for all 3 partitions, got %v", saved)
-	}
-
-	// Run 2: fresh environment, same storage — must resume and finish.
-	src2 := newReplaySource(mkParts())
-	sink2 := newCaptureSink()
-	env2 := mailer.NewEnv().WithBufferSize(16).
-		WithCheckpointing(5*time.Millisecond, storage)
-	env2.FromSource(src2).
-		Map(func(r types.Record) types.Record { return r }, "pass").
-		ToSink(sink2)
-
-	if err := env2.Execute(context.Background()); err != nil {
-		t.Fatalf("run 2: Execute failed: %v", err)
-	}
-
-	// Each partition resumed from its own saved offset.
-	start := src2.startPositions()
-	for p := 0; p < 3; p++ {
-		want := saved[strconv.Itoa(p)]
-		if start[p] != want {
-			t.Errorf("partition %d resumed at %d, checkpoint says %d", p, start[p], want)
-		}
-	}
-
-	// The full post-checkpoint suffix was delivered in run 2.
-	sink2.mu.Lock()
-	defer sink2.mu.Unlock()
-	for p := 0; p < 3; p++ {
-		for off := saved[strconv.Itoa(p)]; off < perPart; off++ {
-			id := strconv.Itoa(p) + "/" + strconv.FormatInt(off, 10)
-			if !sink2.seen[id] {
-				t.Errorf("record %s (post-checkpoint) never delivered after recovery", id)
+			src1 := newReplaySource(mkParts())
+			src1.emitDelay = time.Millisecond
+			sink1 := newCaptureSink()
+			sink1.failWhen = func(seen int) bool {
+				return seen >= 30 && checkpointOffsets(storage) != nil
 			}
-		}
+
+			env1 := mailer.NewEnv().WithBufferSize(16).
+				WithCheckpointing(5*time.Millisecond, storage).
+				WithStateBackend(bk.Factory)
+			env1.FromSource(src1).
+				Map(func(r types.Record) types.Record { return r }, "pass").
+				ToSink(sink1)
+
+			if err := env1.Execute(context.Background()); err == nil {
+				t.Fatal("run 1: expected pipeline to fail from injected sink crash, got nil")
+			}
+
+			saved := checkpointOffsets(storage)
+			if saved == nil {
+				t.Fatal("run 1: no checkpoint was saved before the crash")
+			}
+			if len(saved) != 3 {
+				t.Fatalf("checkpoint should hold offsets for all 3 partitions, got %v", saved)
+			}
+
+			src2 := newReplaySource(mkParts())
+			sink2 := newCaptureSink()
+			env2 := mailer.NewEnv().WithBufferSize(16).
+				WithCheckpointing(5*time.Millisecond, storage).
+				WithStateBackend(bk.Factory)
+			env2.FromSource(src2).
+				Map(func(r types.Record) types.Record { return r }, "pass").
+				ToSink(sink2)
+
+			if err := env2.Execute(context.Background()); err != nil {
+				t.Fatalf("run 2: Execute failed: %v", err)
+			}
+
+			start := src2.startPositions()
+			for p := 0; p < 3; p++ {
+				want := saved[strconv.Itoa(p)]
+				if start[p] != want {
+					t.Errorf("partition %d resumed at %d, checkpoint says %d", p, start[p], want)
+				}
+			}
+
+			sink2.mu.Lock()
+			defer sink2.mu.Unlock()
+			for p := 0; p < 3; p++ {
+				for off := saved[strconv.Itoa(p)]; off < perPart; off++ {
+					id := strconv.Itoa(p) + "/" + strconv.FormatInt(off, 10)
+					if !sink2.seen[id] {
+						t.Errorf("record %s (post-checkpoint) never delivered after recovery", id)
+					}
+				}
+			}
+		})
 	}
 }
 
@@ -301,80 +316,81 @@ func TestRecovery_CrashResumeFromMultiPartitionOffsets(t *testing.T) {
 // processes the rest. Final per-key counts must equal an uninterrupted
 // run — state and offsets were captured consistently.
 func TestRecovery_KeyedStateRestoredExactly(t *testing.T) {
-	const perPart = 50 // 2 partitions → 100 records, pause at 50 (25 per partition)
-	dir := t.TempDir()
-	storage := checkpoint.NewFileStorage(dir)
+	for _, bk := range stateBackends(t) {
+		t.Run(bk.Name, func(t *testing.T) {
+			const perPart = 50
+			dir := t.TempDir()
+			storage := checkpoint.NewFileStorage(dir)
 
-	// Partition 0 alternates keys a/b, partition 1 alternates c/d.
-	mkParts := func() [][]types.Record {
-		keysByPart := [][]string{{"a", "b"}, {"c", "d"}}
-		parts := make([][]types.Record, 2)
-		for p := range parts {
-			for i := 0; i < perPart; i++ {
-				parts[p] = append(parts[p],
-					types.NewRecord([]byte(keysByPart[p][i%2]), []byte("v")))
+			mkParts := func() [][]types.Record {
+				keysByPart := [][]string{{"a", "b"}, {"c", "d"}}
+				parts := make([][]types.Record, 2)
+				for p := range parts {
+					for i := 0; i < perPart; i++ {
+						parts[p] = append(parts[p],
+							types.NewRecord([]byte(keysByPart[p][i%2]), []byte("v")))
+					}
+				}
+				return parts
 			}
-		}
-		return parts
-	}
 
-	// Run 1: emit 50, then wait for a checkpoint whose offsets cover
-	// exactly those 50 (i.e. taken after the pipeline went quiet), then stop.
-	src1 := newReplaySource(mkParts())
-	src1.pauseAfter = 50
-	src1.stopAfterPause = true
-	src1.resume = func() bool {
-		offs := checkpointOffsets(storage)
-		return offs != nil && offs["0"]+offs["1"] == 50
-	}
+			src1 := newReplaySource(mkParts())
+			src1.pauseAfter = 50
+			src1.stopAfterPause = true
+			src1.resume = func() bool {
+				offs := checkpointOffsets(storage)
+				return offs != nil && offs["0"]+offs["1"] == 50
+			}
 
-	sink1 := newCaptureSink()
-	env1 := mailer.NewEnv().WithCheckpointing(5*time.Millisecond, storage)
-	env1.FromSource(src1).
-		KeyBy(func(r types.Record) []byte { return r.Key }).WithPartitions(4).
-		Reduce(countReduceFn).
-		ToSink(sink1)
+			sink1 := newCaptureSink()
+			env1 := mailer.NewEnv().
+				WithCheckpointing(5*time.Millisecond, storage).
+				WithStateBackend(bk.Factory)
+			env1.FromSource(src1).
+				KeyBy(func(r types.Record) []byte { return r.Key }).WithPartitions(4).
+				Reduce(countReduceFn).
+				ToSink(sink1)
 
-	if err := env1.Execute(context.Background()); err != nil {
-		t.Fatalf("run 1: Execute failed: %v", err)
-	}
+			if err := env1.Execute(context.Background()); err != nil {
+				t.Fatalf("run 1: Execute failed: %v", err)
+			}
 
-	// Round-robin emission: 50 total = 25 per partition.
-	saved := checkpointOffsets(storage)
-	if saved["0"] != 25 || saved["1"] != 25 {
-		t.Fatalf("expected per-partition offsets {0:25 1:25}, got %v", saved)
-	}
+			saved := checkpointOffsets(storage)
+			if saved["0"] != 25 || saved["1"] != 25 {
+				t.Fatalf("expected per-partition offsets {0:25 1:25}, got %v", saved)
+			}
 
-	// Run 2: restore and process the remaining 50.
-	src2 := newReplaySource(mkParts())
-	sink2 := newCaptureSink()
-	env2 := mailer.NewEnv().WithCheckpointing(5*time.Millisecond, storage)
-	env2.FromSource(src2).
-		KeyBy(func(r types.Record) []byte { return r.Key }).WithPartitions(4).
-		Reduce(countReduceFn).
-		ToSink(sink2)
+			src2 := newReplaySource(mkParts())
+			sink2 := newCaptureSink()
+			env2 := mailer.NewEnv().
+				WithCheckpointing(5*time.Millisecond, storage).
+				WithStateBackend(bk.Factory)
+			env2.FromSource(src2).
+				KeyBy(func(r types.Record) []byte { return r.Key }).WithPartitions(4).
+				Reduce(countReduceFn).
+				ToSink(sink2)
 
-	if err := env2.Execute(context.Background()); err != nil {
-		t.Fatalf("run 2: Execute failed: %v", err)
-	}
+			if err := env2.Execute(context.Background()); err != nil {
+				t.Fatalf("run 2: Execute failed: %v", err)
+			}
 
-	if start := src2.startPositions(); start[0] != 25 || start[1] != 25 {
-		t.Fatalf("run 2 should resume both partitions at 25, got %v", start)
-	}
+			if start := src2.startPositions(); start[0] != 25 || start[1] != 25 {
+				t.Fatalf("run 2 should resume both partitions at 25, got %v", start)
+			}
 
-	// Every key appears 25 times per full log; the restored count must
-	// continue where run 1 left off, ending at exactly 25.
-	sink2.mu.Lock()
-	defer sink2.mu.Unlock()
-	for _, key := range []string{"a", "b", "c", "d"} {
-		v, ok := sink2.lastByKey[key]
-		if !ok {
-			t.Errorf("key %s: no output in run 2", key)
-			continue
-		}
-		if got := binary.BigEndian.Uint64(v); got != 25 {
-			t.Errorf("key %s: final count %d, want 25 (state not restored consistently)", key, got)
-		}
+			sink2.mu.Lock()
+			defer sink2.mu.Unlock()
+			for _, key := range []string{"a", "b", "c", "d"} {
+				v, ok := sink2.lastByKey[key]
+				if !ok {
+					t.Errorf("key %s: no output in run 2", key)
+					continue
+				}
+				if got := binary.BigEndian.Uint64(v); got != 25 {
+					t.Errorf("key %s: final count %d, want 25", key, got)
+				}
+			}
+		})
 	}
 }
 

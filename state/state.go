@@ -65,3 +65,15 @@ type ListState interface {
 	// Clear removes all values for the current key.
 	Clear()
 }
+
+// Checkpointable is an optional interface for backends that can
+// checkpoint without serializing all state.  The engine calls
+// CheckpointTo during a barrier-triggered snapshot to produce a
+// portable copy of the current state directory (hard-linked),
+// and RestoreFrom on recovery to rebuild the live DB from that
+// copy.  This keeps checkpoint metadata small regardless of
+// state size.
+type Checkpointable interface {
+	CheckpointTo(dir string) error
+	RestoreFrom(dir string) error
+}

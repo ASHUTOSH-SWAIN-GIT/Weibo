@@ -11,6 +11,7 @@ import (
 
 	"github.com/ASHUTOSH-SWAIN-GIT/mailer"
 	"github.com/ASHUTOSH-SWAIN-GIT/mailer/checkpoint"
+	"github.com/ASHUTOSH-SWAIN-GIT/mailer/state"
 	"github.com/ASHUTOSH-SWAIN-GIT/mailer/types"
 )
 
@@ -161,7 +162,7 @@ func eoParts3() [][]types.Record {
 // coordinated checkpoints every 5ms. If haltStep is non-empty, the
 // coordinator halts (simulated crash) at the haltOccurrence-th time
 // that step completes, and the run is cancelled shortly after.
-func runEO(t *testing.T, sk *fakeTxnSink, storage checkpoint.Storage, haltStep checkpoint.Step, haltOccurrence int) error {
+func runEO(t *testing.T, sk *fakeTxnSink, storage checkpoint.Storage, haltStep checkpoint.Step, haltOccurrence int, sf state.BackendFactory) error {
 	t.Helper()
 
 	src := newReplaySource(eoParts3())
@@ -170,7 +171,8 @@ func runEO(t *testing.T, sk *fakeTxnSink, storage checkpoint.Storage, haltStep c
 	env := mailer.NewEnv().
 		WithBufferSize(16).
 		WithShutdownTimeout(300*time.Millisecond).
-		WithCheckpointing(5*time.Millisecond, storage)
+		WithCheckpointing(5*time.Millisecond, storage).
+		WithStateBackend(sf)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -234,19 +236,20 @@ func assertExactlyOnce(t *testing.T, sk *fakeTxnSink) {
 // checkpoint, and replay — its output was never visible, so the replay
 // cannot duplicate.
 func TestExactlyOnce_CrashBeforeSinkCommit(t *testing.T) {
-	sk := newFakeTxnSink()
-	storage := checkpoint.NewFileStorage(t.TempDir())
-
-	runEO(t, sk, storage, checkpoint.StepPersistPrepared, 2) // crash run
-
-	if err := runEO(t, sk, storage, "", 0); err != nil { // recovery run
-		t.Fatalf("recovery run failed: %v", err)
-	}
-	assertExactlyOnce(t, sk)
-
-	latest, _ := storage.Load()
-	if latest == nil || !latest.Completed() {
-		t.Error("expected final checkpoint to be completed after recovery run")
+	for _, bk := range stateBackends(t) {
+		t.Run(bk.Name, func(t *testing.T) {
+			sk := newFakeTxnSink()
+			storage := checkpoint.NewFileStorage(t.TempDir())
+			runEO(t, sk, storage, checkpoint.StepPersistPrepared, 2, bk.Factory)
+			if err := runEO(t, sk, storage, "", 0, bk.Factory); err != nil {
+				t.Fatalf("recovery run failed: %v", err)
+			}
+			assertExactlyOnce(t, sk)
+			latest, _ := storage.Load()
+			if latest == nil || !latest.Completed() {
+				t.Error("expected final checkpoint to be completed after recovery run")
+			}
+		})
 	}
 }
 
@@ -255,30 +258,34 @@ func TestExactlyOnce_CrashBeforeSinkCommit(t *testing.T) {
 // Recovery must find the marker, promote the prepared checkpoint, and
 // NOT replay its interval — that would duplicate.
 func TestExactlyOnce_CrashAfterSinkCommitBeforeCompleted(t *testing.T) {
-	sk := newFakeTxnSink()
-	storage := checkpoint.NewFileStorage(t.TempDir())
-
-	runEO(t, sk, storage, checkpoint.StepSinkCommitted, 2)
-
-	if err := runEO(t, sk, storage, "", 0); err != nil {
-		t.Fatalf("recovery run failed: %v", err)
+	for _, bk := range stateBackends(t) {
+		t.Run(bk.Name, func(t *testing.T) {
+			sk := newFakeTxnSink()
+			storage := checkpoint.NewFileStorage(t.TempDir())
+			runEO(t, sk, storage, checkpoint.StepSinkCommitted, 2, bk.Factory)
+			if err := runEO(t, sk, storage, "", 0, bk.Factory); err != nil {
+				t.Fatalf("recovery run failed: %v", err)
+			}
+			assertExactlyOnce(t, sk)
+		})
 	}
-	assertExactlyOnce(t, sk)
 }
 
 // Crash on the very first checkpoint, before anything ever completed:
 // recovery falls back to a fresh start and the aborted transaction's
 // output must not surface.
 func TestExactlyOnce_CrashWithNoCompletedCheckpoint(t *testing.T) {
-	sk := newFakeTxnSink()
-	storage := checkpoint.NewFileStorage(t.TempDir())
-
-	runEO(t, sk, storage, checkpoint.StepPersistPrepared, 1)
-
-	if err := runEO(t, sk, storage, "", 0); err != nil {
-		t.Fatalf("recovery run failed: %v", err)
+	for _, bk := range stateBackends(t) {
+		t.Run(bk.Name, func(t *testing.T) {
+			sk := newFakeTxnSink()
+			storage := checkpoint.NewFileStorage(t.TempDir())
+			runEO(t, sk, storage, checkpoint.StepPersistPrepared, 1, bk.Factory)
+			if err := runEO(t, sk, storage, "", 0, bk.Factory); err != nil {
+				t.Fatalf("recovery run failed: %v", err)
+			}
+			assertExactlyOnce(t, sk)
+		})
 	}
-	assertExactlyOnce(t, sk)
 }
 
 // The umbrella property: crash at EVERY protocol step, recover, and
@@ -290,17 +297,19 @@ func TestExactlyOnce_CrashSweepAllProtocolSteps(t *testing.T) {
 		checkpoint.StepPersistCompleted,
 		checkpoint.StepOffsetsCommitted,
 	}
-	for _, step := range steps {
-		t.Run(string(step), func(t *testing.T) {
-			sk := newFakeTxnSink()
-			storage := checkpoint.NewFileStorage(t.TempDir())
-
-			runEO(t, sk, storage, step, 2)
-
-			if err := runEO(t, sk, storage, "", 0); err != nil {
-				t.Fatalf("recovery run failed: %v", err)
+	for _, bk := range stateBackends(t) {
+		t.Run(bk.Name, func(t *testing.T) {
+			for _, step := range steps {
+				t.Run(string(step), func(t *testing.T) {
+					sk := newFakeTxnSink()
+					storage := checkpoint.NewFileStorage(t.TempDir())
+					runEO(t, sk, storage, step, 2, bk.Factory)
+					if err := runEO(t, sk, storage, "", 0, bk.Factory); err != nil {
+						t.Fatalf("recovery run failed: %v", err)
+					}
+					assertExactlyOnce(t, sk)
+				})
 			}
-			assertExactlyOnce(t, sk)
 		})
 	}
 }
@@ -330,102 +339,85 @@ func (f *failingStorage) Save(data *checkpoint.CheckpointData) error {
 // its output invisible, and fail the pipeline; the next run recovers
 // and completes exactly-once.
 func TestExactlyOnce_PersistFailureAbortsSinkTxn(t *testing.T) {
-	sk := newFakeTxnSink()
-	fs := &failingStorage{Storage: checkpoint.NewFileStorage(t.TempDir())}
-
-	err := runEO(t, sk, fs, "", 0)
-	if err == nil {
-		t.Fatal("expected pipeline to fail on injected storage failure")
+	for _, bk := range stateBackends(t) {
+		t.Run(bk.Name, func(t *testing.T) {
+			sk := newFakeTxnSink()
+			fs := &failingStorage{Storage: checkpoint.NewFileStorage(t.TempDir())}
+			err := runEO(t, sk, fs, "", 0, bk.Factory)
+			if err == nil {
+				t.Fatal("expected pipeline to fail on injected storage failure")
+			}
+			sk.mu.Lock()
+			abortedCount := len(sk.aborted)
+			sk.mu.Unlock()
+			if abortedCount == 0 {
+				t.Error("expected the sink transaction to be aborted on persist failure")
+			}
+			if err := runEO(t, sk, fs, "", 0, bk.Factory); err != nil {
+				t.Fatalf("recovery run failed: %v", err)
+			}
+			assertExactlyOnce(t, sk)
+		})
 	}
-
-	sk.mu.Lock()
-	abortedCount := len(sk.aborted)
-	sk.mu.Unlock()
-	if abortedCount == 0 {
-		t.Error("expected the sink transaction to be aborted on persist failure")
-	}
-
-	if err := runEO(t, sk, fs, "", 0); err != nil {
-		t.Fatalf("recovery run failed: %v", err)
-	}
-	assertExactlyOnce(t, sk)
 }
 
 // Keyed stateful pipeline across a crash: Reduce state, keyed-worker
 // snapshots, multi-partition offsets, and transactional output must
 // all line up — final per-key counts equal an uninterrupted run.
 func TestExactlyOnce_KeyedStateMultiPartition(t *testing.T) {
-	sk := newFakeTxnSink()
-	storage := checkpoint.NewFileStorage(t.TempDir())
+	for _, bk := range stateBackends(t) {
+		t.Run(bk.Name, func(t *testing.T) {
+			sk := newFakeTxnSink()
+			storage := checkpoint.NewFileStorage(t.TempDir())
 
-	run := func(halt checkpoint.Step, occ int) error {
-		src := newReplaySource(eoParts3())
-		src.emitDelay = 500 * time.Microsecond
-
-		env := mailer.NewEnv().
-			WithBufferSize(16).
-			WithShutdownTimeout(300*time.Millisecond).
-			WithCheckpointing(5*time.Millisecond, storage)
-
-		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
-		if halt != "" {
-			occurrences := 0
-			var once sync.Once
-			env.WithCheckpointHook(func(step checkpoint.Step, id string) checkpoint.HookAction {
-				if step != halt {
-					return checkpoint.HookContinue
+			run := func(halt checkpoint.Step, occ int) error {
+				src := newReplaySource(eoParts3())
+				src.emitDelay = 500 * time.Microsecond
+				env := mailer.NewEnv().
+					WithBufferSize(16).WithShutdownTimeout(300*time.Millisecond).
+					WithCheckpointing(5*time.Millisecond, storage).
+					WithStateBackend(bk.Factory)
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				if halt != "" {
+					occurrences := 0
+					var once sync.Once
+					env.WithCheckpointHook(func(step checkpoint.Step, id string) checkpoint.HookAction {
+						if step != halt { return checkpoint.HookContinue }
+						occurrences++
+						if occurrences < occ { return checkpoint.HookContinue }
+						once.Do(func() { go func() { time.Sleep(20*time.Millisecond); cancel() }() })
+						return checkpoint.HookHalt
+					})
 				}
-				occurrences++
-				if occurrences < occ {
-					return checkpoint.HookContinue
+				env.FromSource(src).
+					KeyBy(func(r types.Record) []byte { return r.Key }).WithPartitions(4).
+					Reduce(countReduceFn).ToSink(sk)
+				return env.Execute(ctx)
+			}
+			run(checkpoint.StepPersistPrepared, 2)
+			if err := run("", 0); err != nil {
+				t.Fatalf("recovery run failed: %v", err)
+			}
+			last := sk.visibleLastByKey()
+			for p := 0; p < eoParts; p++ {
+				key := "key-" + strconv.Itoa(p)
+				v, ok := last[key]
+				if !ok { t.Errorf("key %s: no committed output", key); continue }
+				if got := binary.BigEndian.Uint64(v); got != eoPerPart {
+					t.Errorf("key %s: final count %d, want %d", key, got, eoPerPart)
 				}
-				once.Do(func() {
-					go func() { time.Sleep(20 * time.Millisecond); cancel() }()
-				})
-				return checkpoint.HookHalt
-			})
-		}
-		env.FromSource(src).
-			KeyBy(func(r types.Record) []byte { return r.Key }).WithPartitions(4).
-			Reduce(countReduceFn).
-			ToSink(sk)
-		return env.Execute(ctx)
-	}
-
-	run(checkpoint.StepPersistPrepared, 2) // crash
-	if err := run("", 0); err != nil {     // recover + finish
-		t.Fatalf("recovery run failed: %v", err)
-	}
-
-	// Each partition emits eoPerPart records for its single key; the
-	// last visible Reduce emission per key must be exactly that count.
-	last := sk.visibleLastByKey()
-	for p := 0; p < eoParts; p++ {
-		key := "key-" + strconv.Itoa(p)
-		v, ok := last[key]
-		if !ok {
-			t.Errorf("key %s: no committed output", key)
-			continue
-		}
-		if got := binary.BigEndian.Uint64(v); got != eoPerPart {
-			t.Errorf("key %s: final count %d, want %d (state/offset/output misaligned)", key, got, eoPerPart)
-		}
-	}
-
-	// The completed checkpoint tracks every partition individually.
-	final, err := storage.LoadLatestCompleted()
-	if err != nil || final == nil {
-		t.Fatalf("no completed checkpoint after recovery: %v", err)
-	}
-	offs := checkpointOffsets(storage)
-	if len(offs) != eoParts {
-		t.Errorf("expected offsets for %d partitions, got %v", eoParts, offs)
-	}
-	for p := 0; p < eoParts; p++ {
-		if offs[strconv.Itoa(p)] != eoPerPart {
-			t.Errorf("partition %d: final checkpointed offset %d, want %d", p, offs[strconv.Itoa(p)], eoPerPart)
-		}
+			}
+			final, err := storage.LoadLatestCompleted()
+			if err != nil || final == nil { t.Fatalf("no completed checkpoint after recovery: %v", err) }
+			offs := checkpointOffsets(storage)
+			if len(offs) != eoParts { t.Errorf("expected offsets for %d partitions, got %v", eoParts, offs) }
+			for p := 0; p < eoParts; p++ {
+				if offs[strconv.Itoa(p)] != eoPerPart {
+					t.Errorf("partition %d: final checkpointed offset %d, want %d", p, offs[strconv.Itoa(p)], eoPerPart)
+				}
+			}
+		})
 	}
 }
 

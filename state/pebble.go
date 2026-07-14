@@ -4,6 +4,9 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"io"
+	"os"
+	"path/filepath"
 	"sync"
 
 	"github.com/cockroachdb/pebble"
@@ -56,6 +59,40 @@ func OpenPebble(dir string) (*PebbleBackend, error) {
 // Close shuts down the Pebble DB.
 func (p *PebbleBackend) Close() error {
 	return p.db.Close()
+}
+
+// CheckpointTo creates a hard-link-based snapshot of the live Pebble DB
+// at dir.  The caller must place dir on the same filesystem as the
+// live DB for hard-links to work.
+func (p *PebbleBackend) CheckpointTo(dir string) error {
+	return p.db.Checkpoint(dir)
+}
+
+// RestoreFrom rebuilds the live DB from a previously saved checkpoint
+// directory.  The current DB is closed, the live directory is wiped,
+// and the checkpointed data is copied back.
+func (p *PebbleBackend) RestoreFrom(dir string) error {
+	if p.db != nil {
+		if err := p.db.Close(); err != nil {
+			return fmt.Errorf("state/pebble: close before restore: %w", err)
+		}
+	}
+	if err := os.RemoveAll(p.dir); err != nil {
+		return fmt.Errorf("state/pebble: wipe live dir: %w", err)
+	}
+	if err := os.MkdirAll(p.dir, 0755); err != nil {
+		return fmt.Errorf("state/pebble: mkdir live dir: %w", err)
+	}
+	if err := copyDir(dir, p.dir); err != nil {
+		return fmt.Errorf("state/pebble: copy checkpoint -> live: %w", err)
+	}
+	db, err := pebble.Open(p.dir, pebbleOptions())
+	if err != nil {
+		return fmt.Errorf("state/pebble: reopen after restore: %w", err)
+	}
+	p.db = db
+	p.seqs = make(map[seqKey]uint64)
+	return nil
 }
 
 // ---- StateBackend ----------------------------------------------------------
@@ -266,4 +303,30 @@ func cloneBytes(b []byte) []byte {
 	c := make([]byte, len(b))
 	copy(c, b)
 	return c
+}
+
+// copyDir copies all files from src to dst recursively.
+func copyDir(src, dst string) error {
+	return filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, _ := filepath.Rel(src, path)
+		target := filepath.Join(dst, rel)
+		if info.IsDir() {
+			return os.MkdirAll(target, info.Mode())
+		}
+		srcFile, err := os.Open(path)
+		if err != nil {
+			return err
+		}
+		defer srcFile.Close()
+		dstFile, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, info.Mode())
+		if err != nil {
+			return err
+		}
+		defer dstFile.Close()
+		_, err = io.Copy(dstFile, srcFile)
+		return err
+	})
 }

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -26,7 +27,9 @@ const (
 
 // CheckpointData holds the complete state of a pipeline at a point in time.
 // It includes the state of each stateful operator (by index) and the
-// source offset (if applicable).
+// source offset (if applicable).  StateDirs maps owner IDs to relative
+// paths of native (hard-linked) state directories, used by PebbleBackend
+// for O(1)-delta checkpoints.
 type CheckpointData struct {
 	ID        string            `json:"id"`
 	Timestamp time.Time         `json:"timestamp"`
@@ -34,6 +37,7 @@ type CheckpointData struct {
 	Source    map[string][]byte `json:"source"`    // source-specific offset data
 	Status    Status            `json:"status,omitempty"`
 	TxnID     string            `json:"txn_id,omitempty"` // sink transactional id (diagnostics)
+	StateDirs map[string]string `json:"state_dirs,omitempty"` // ownerID -> relative path
 }
 
 // Completed reports whether this checkpoint is safe to restore from.
@@ -64,6 +68,10 @@ type Storage interface {
 
 	// UpdateStatus rewrites the status of an existing checkpoint
 	// (prepared → completed promotion).
+	// StateDir returns the root directory for native state snapshots
+	// (e.g. Pebble hard-links) associated with a checkpoint.
+	StateDir(id string) string
+
 	UpdateStatus(id string, status Status) error
 }
 
@@ -76,9 +84,51 @@ type FileStorage struct {
 }
 
 // NewFileStorage creates a FileStorage that writes checkpoints to the given directory.
-// The directory is created if it doesn't exist.
+// The directory is created if it doesn't exist.  On startup, call SweepOrphans to
+// clean up state directories from failed checkpoints.
 func NewFileStorage(dir string) *FileStorage {
 	return &FileStorage{dir: dir}
+}
+
+// StateDir returns the checkpoint-specific state directory for the
+// given checkpoint ID.  All per-owner state directories live under
+// this single parent.
+func (fs *FileStorage) StateDir(id string) string {
+	return filepath.Join(fs.dir, "checkpoint-"+id+".state")
+}
+
+// SweepOrphans deletes any <id>.state directories whose matching
+// checkpoint JSON does not exist.  Call once at startup before any
+// pipeline runs.
+func (fs *FileStorage) SweepOrphans() error {
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+
+	entries, err := os.ReadDir(fs.dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	for _, e := range entries {
+		name := e.Name()
+		if !e.IsDir() || !strings.HasSuffix(name, ".state") {
+			continue
+		}
+		id := strings.TrimSuffix(name, ".state")
+		jsonPath := filepath.Join(fs.dir, id+".json")
+		if _, err := os.Stat(jsonPath); os.IsNotExist(err) {
+			os.RemoveAll(filepath.Join(fs.dir, name))
+		}
+	}
+	return nil
+}
+
+// DeleteStateDirs removes the state directories for a checkpoint ID.
+// Used during retention/GC.
+func (fs *FileStorage) DeleteStateDirs(id string) {
+	os.RemoveAll(fs.StateDir(id))
 }
 
 // Save writes checkpoint data to a JSON file atomically and durably
@@ -102,6 +152,17 @@ func (fs *FileStorage) saveLocked(data *CheckpointData) error {
 	if err != nil {
 		return fmt.Errorf("checkpoint: marshal: %w", err)
 	}
+
+	// Sync state dirs before writing the JSON — the JSON is the
+	// commit point, and a state dir that is not durable when the
+	// JSON lands is lost on crash.
+	for _, rel := range data.StateDirs {
+		abs := filepath.Join(fs.dir, rel)
+		if err := syncDir(abs); err != nil {
+			return fmt.Errorf("checkpoint: sync state dir %s: %w", rel, err)
+		}
+	}
+
 	filePath := filepath.Join(fs.dir, "checkpoint-"+data.ID+".json")
 	if err := writeFileSync(filePath, b); err != nil {
 		return err
@@ -230,4 +291,15 @@ func (fs *FileStorage) loadSpecificLocked(id string) (*CheckpointData, error) {
 		return nil, fmt.Errorf("checkpoint: unmarshal: %w", err)
 	}
 	return &data, nil
+}
+
+// syncDir opens a directory file descriptor and fsyncs it so that
+// directory metadata (newly created subdirs) is durable.
+func syncDir(dir string) error {
+	f, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	return f.Sync()
 }
