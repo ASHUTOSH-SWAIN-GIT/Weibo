@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"strconv"
 	"sync"
 	"time"
@@ -15,6 +16,7 @@ import (
 	"github.com/ASHUTOSH-SWAIN-GIT/mailer/pipeline"
 	"github.com/ASHUTOSH-SWAIN-GIT/mailer/sink"
 	"github.com/ASHUTOSH-SWAIN-GIT/mailer/source"
+	"github.com/ASHUTOSH-SWAIN-GIT/mailer/state"
 	"github.com/ASHUTOSH-SWAIN-GIT/mailer/types"
 )
 
@@ -65,6 +67,15 @@ type StreamExecutionEnv struct {
 	// checkpointHook is a test-only seam forwarded to the coordinator
 	// to halt or fail the protocol at exact steps.
 	checkpointHook func(checkpoint.Step, string) checkpoint.HookAction
+
+	// stateFactory creates per-owner state backends for stateful
+	// operators (WithStateBackend). Nil = operators keep their
+	// self-created in-memory backends.
+	stateFactory state.BackendFactory
+
+	// stateClosers are factory-created backends that need closing
+	// when the run finishes (e.g. on-disk backends).
+	stateClosers []io.Closer
 }
 
 // NewEnv creates a new StreamExecutionEnv.
@@ -108,6 +119,21 @@ func (env *StreamExecutionEnv) WithBufferSize(n int) *StreamExecutionEnv {
 func (env *StreamExecutionEnv) WithCheckpointing(interval time.Duration, storage checkpoint.Storage) *StreamExecutionEnv {
 	env.checkpointInterval = interval
 	env.checkpointStorage = storage
+	return env
+}
+
+// WithStateBackend sets the factory used to create state backends for
+// stateful operators (Reduce, and any operator implementing
+// operator.StateConfigurable). The factory is called once per state
+// owner while the execution plan is built — "op-<i>" for top-level
+// operators, "worker-<idx>" for keyed-worker clones — so every owner
+// gets isolated state. Backends implementing io.Closer are closed
+// when Execute returns.
+//
+// Default: state.InMemory() semantics (each operator keeps its own
+// in-memory backend).
+func (env *StreamExecutionEnv) WithStateBackend(f state.BackendFactory) *StreamExecutionEnv {
+	env.stateFactory = f
 	return env
 }
 
@@ -191,19 +217,46 @@ func (env *StreamExecutionEnv) Execute(ctx context.Context) error {
 		}
 	}
 
+	// Per-owner state backends: wrap the factory so every backend it
+	// creates is tracked for closing when the run ends.
+	env.stateClosers = nil
+	var backendFor func(ownerID string) (state.StateBackend, error)
+	if env.stateFactory != nil {
+		backendFor = func(ownerID string) (state.StateBackend, error) {
+			b, err := env.stateFactory(ownerID)
+			if err != nil {
+				return nil, err
+			}
+			if c, ok := b.(io.Closer); ok {
+				env.stateClosers = append(env.stateClosers, c)
+			}
+			return b, nil
+		}
+	}
+	defer func() {
+		for _, c := range env.stateClosers {
+			if cerr := c.Close(); cerr != nil {
+				fmt.Printf("mailer: closing state backend: %v\n", cerr)
+			}
+		}
+	}()
+
 	plan, err := pipeline.BuildPlan(pipeline.PlanConfig{
 		Source:       env.source,
 		Operators:    env.operators,
 		Labels:       env.operatorLabels(),
 		Sink:         env.sink,
 		DrainTimeout: env.shutdownTimeout,
-		OnClone: func(op operator.Operator) int {
-			env.workerMu.Lock()
-			defer env.workerMu.Unlock()
-			env.workerOps = append(env.workerOps, op)
-			return len(env.workerOps) - 1
+		StageHooks: pipeline.StageHooks{
+			OnClone: func(op operator.Operator) int {
+				env.workerMu.Lock()
+				defer env.workerMu.Unlock()
+				env.workerOps = append(env.workerOps, op)
+				return len(env.workerOps) - 1
+			},
+			OnSnapshot:      env.addBarrierSnapshot,
+			StateBackendFor: backendFor,
 		},
-		OnSnapshot: env.addBarrierSnapshot,
 	})
 	if err != nil {
 		return err

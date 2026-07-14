@@ -58,6 +58,13 @@ func (op *ReduceOperator) SetBarrierSnapshot(fn func(checkpointID string, snapsh
 	op.barrierSnapshot = fn
 }
 
+// SetStateBackend implements StateConfigurable: the engine injects
+// the backend created for this operator's owner ID. Called during
+// plan construction, before any record is processed or state restored.
+func (op *ReduceOperator) SetStateBackend(b state.StateBackend) {
+	op.backend = b
+}
+
 // Reduce creates a ReduceOperator with the given reduce function.
 // A fresh MemoryBackend is created for this operator's state.
 func Reduce(fn ReduceFn) *ReduceOperator {

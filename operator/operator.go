@@ -1,6 +1,9 @@
 package operator
 
-import "github.com/ASHUTOSH-SWAIN-GIT/mailer/types"
+import (
+	"github.com/ASHUTOSH-SWAIN-GIT/mailer/state"
+	"github.com/ASHUTOSH-SWAIN-GIT/mailer/types"
+)
 
 // Operator transforms an input stream into an output stream.
 // Each operator reads from an input channel, applies a transformation,
@@ -58,6 +61,19 @@ type KeySelector func(types.Record) []byte
 // with an isolated state backend.
 type Cloneable interface {
 	Clone() Operator
+}
+
+// StateConfigurable is implemented by stateful operators whose state
+// backend can be injected by the engine. The planner assigns each
+// operator instance a backend created from the environment's
+// BackendFactory (WithStateBackend), keyed by the owner ID used in
+// checkpoint data. Operators keep a self-created in-memory backend as
+// the default when no factory is configured.
+//
+// SetStateBackend is called during plan construction, strictly before
+// the operator processes any record or has state restored into it.
+type StateConfigurable interface {
+	SetStateBackend(b state.StateBackend)
 }
 
 // BarrierSnapshotter is implemented by stateful operators that can
