@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"path/filepath"
 	"strconv"
 	"sync"
 	"time"
@@ -621,41 +622,76 @@ func (env *StreamExecutionEnv) collectSnapshots(checkpointID string) map[string]
 		snaps = make(map[string][]byte)
 	}
 
+	// Pre-allocate state dirs for any Checkpointable (native Pebble) backends.
+	stateRoot := env.checkpointStorage.StateDir(checkpointID)
+
 	for i, op := range env.operators {
 		key := fmt.Sprintf("op-%d", i)
 		if _, done := snaps[key]; done {
 			continue
 		}
-		if snap, ok := op.(operator.Snapshotable); ok {
-			snapshot, err := snap.Snapshot()
-			if err != nil {
-				fmt.Printf("mailer: checkpoint snapshot failed for operator %d: %v\n", i, err)
-				continue
-			}
-			snaps[key] = snapshot
-		}
+		snaps[key] = env.snapshotOrCheckpoint(stateRoot, key, op)
 	}
 
-	// Legacy fallback for keyed-worker clones without barrier-time
-	// snapshots (custom Cloneable operators).
 	env.workerMu.Lock()
 	for i, op := range env.workerOps {
 		key := fmt.Sprintf("worker-%d", i)
 		if _, done := snaps[key]; done {
 			continue
 		}
-		if snap, ok := op.(operator.Snapshotable); ok {
-			snapshot, err := snap.Snapshot()
-			if err != nil {
-				fmt.Printf("mailer: checkpoint worker-%d snapshot failed: %v\n", i, err)
-				continue
-			}
-			snaps[key] = snapshot
-		}
+		snaps[key] = env.snapshotOrCheckpoint(stateRoot, key, op)
 	}
 	env.workerMu.Unlock()
 
 	return snaps
+}
+
+// extractStateDirs reads state-ref markers from snapshot entries and
+// returns the StateDirs map. Entries containing a state_ref are
+// replaced with nil so the operator processor ignores them.
+func extractStateDirs(snaps map[string][]byte) map[string]string {
+	dirs := make(map[string]string)
+	for key, val := range snaps {
+		var ref struct {
+			StateRef string `json:"state_ref"`
+		}
+		if json.Unmarshal(val, &ref) == nil && ref.StateRef != "" {
+			dirs[ref.StateRef] = key
+			snaps[key] = nil // signal: op has no inline state
+		}
+	}
+	if len(dirs) == 0 {
+		return nil
+	}
+	return dirs
+}
+
+// snapshotOrCheckpoint returns serialized state bytes for an operator,
+// or a state-ref marker if the backend supports native checkpointing
+// (Pebble hard-links).
+func (env *StreamExecutionEnv) snapshotOrCheckpoint(stateRoot, ownerID string, op operator.Operator) []byte {
+	// Check for native checkpointable backend.
+	if rop, ok := op.(*operator.ReduceOperator); ok {
+		if cp, ok := rop.Backend().(state.Checkpointable); ok {
+			ownerDir := filepath.Join(stateRoot, ownerID)
+			if err := cp.CheckpointTo(ownerDir); err != nil {
+				fmt.Printf("mailer: checkpoint native snapshot %s failed: %v\n", ownerID, err)
+				return nil
+			}
+			ref, _ := json.Marshal(map[string]string{"state_ref": ownerID})
+			return ref
+		}
+	}
+
+	if snap, ok := op.(operator.Snapshotable); ok {
+		snapshot, err := snap.Snapshot()
+		if err != nil {
+			fmt.Printf("mailer: checkpoint snapshot failed for %s: %v\n", ownerID, err)
+			return nil
+		}
+		return snapshot
+	}
+	return nil
 }
 
 // resolveCoordinatedRecovery implements the exactly-once recovery
@@ -713,6 +749,7 @@ func (env *StreamExecutionEnv) saveCheckpoint(id string) {
 		Source:    make(map[string][]byte),
 		Status:    checkpoint.StatusCompleted,
 	}
+	data.StateDirs = extractStateDirs(data.Operators)
 
 	if _, ok := env.source.(source.CheckpointSource); ok {
 		// Prefer the barrier-aligned offsets captured at injection;
@@ -761,9 +798,24 @@ func (env *StreamExecutionEnv) restoreWorkersFromCheckpoint(data *checkpoint.Che
 	env.workerMu.Lock()
 	defer env.workerMu.Unlock()
 	for i, op := range env.workerOps {
+		key := fmt.Sprintf("worker-%d", i)
+
+		// Native checkpoint restore (Pebble hard-links).
+		if stateDir, ok := data.StateDirs[key]; ok {
+			if rop, ok := op.(*operator.ReduceOperator); ok {
+				if cp, ok := rop.Backend().(state.Checkpointable); ok {
+					absPath := filepath.Join(env.checkpointStorage.StateDir(data.ID), stateDir)
+					if err := cp.RestoreFrom(absPath); err != nil {
+						fmt.Printf("mailer: restore worker-%d from native state failed: %v\n", i, err)
+					}
+					continue
+				}
+			}
+		}
+
+		// Inline state restore (memory / compatible Pebble).
 		if snap, ok := op.(operator.Snapshotable); ok {
-			key := fmt.Sprintf("worker-%d", i)
-			if stateData, exists := data.Operators[key]; exists {
+			if stateData, exists := data.Operators[key]; exists && len(stateData) > 0 {
 				if err := snap.Restore(stateData); err != nil {
 					fmt.Printf("mailer: restore worker-%d failed: %v\n", i, err)
 				}
