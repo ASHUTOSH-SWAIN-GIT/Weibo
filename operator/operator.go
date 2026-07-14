@@ -76,6 +76,20 @@ type StateConfigurable interface {
 	SetStateBackend(b state.StateBackend)
 }
 
+// NativeSnapshotter is implemented by stateful operators whose
+// barrier-time snapshot can be replaced by a native (backend-level)
+// checkpoint. When the engine detects a state.Checkpointable backend,
+// it injects a snapshot function that hard-links the backend's files
+// into the checkpoint's state directory and returns a small state-ref
+// marker instead of serializing all state — this is what makes
+// checkpoint cost scale with changed data instead of total state.
+// The function runs at the same race-free point as BarrierSnapshotter
+// (inside Process, as the barrier passes).
+type NativeSnapshotter interface {
+	SetNativeSnapshot(fn func(checkpointID string) (snapshot []byte, err error))
+	Backend() state.StateBackend
+}
+
 // BarrierSnapshotter is implemented by stateful operators that can
 // snapshot their state synchronously when a checkpoint barrier passes
 // through their Process loop. Snapshotting there — between two

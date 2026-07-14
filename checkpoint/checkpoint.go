@@ -155,9 +155,10 @@ func (fs *FileStorage) saveLocked(data *CheckpointData) error {
 
 	// Sync state dirs before writing the JSON — the JSON is the
 	// commit point, and a state dir that is not durable when the
-	// JSON lands is lost on crash.
+	// JSON lands is lost on crash. StateDirs values are relative to
+	// this checkpoint's StateDir root.
 	for _, rel := range data.StateDirs {
-		abs := filepath.Join(fs.dir, rel)
+		abs := filepath.Join(fs.StateDir(data.ID), rel)
 		if err := syncDir(abs); err != nil {
 			return fmt.Errorf("checkpoint: sync state dir %s: %w", rel, err)
 		}

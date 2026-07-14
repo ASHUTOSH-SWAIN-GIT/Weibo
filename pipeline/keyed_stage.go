@@ -57,6 +57,7 @@ func NewKeyedStage(kb *operator.KeyByOperator, ops []operator.Operator, hooks St
 				if err := hooks.assignBackend(clone, key); err != nil {
 					return nil, err
 				}
+				hooks.wireNativeSnapshot(clone, key)
 				if bs, ok := clone.(operator.BarrierSnapshotter); ok && hooks.OnSnapshot != nil {
 					onSnapshot := hooks.OnSnapshot
 					bs.SetBarrierSnapshot(func(id string, snap []byte, err error) {

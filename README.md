@@ -120,7 +120,16 @@ State is memory that persists across records. It's what makes a stream processor
 | **ValueState** | Single value per key | Current user score, Reduce accumulator |
 | **ListState** | Ordered list per key | Recent login timestamps |
 
-State is stored in a **State Backend** (in-memory today, behind an interface so a durable backend can be added). It is used internally by `Reduce` and `Window`; with keyed parallelism each worker gets its own isolated backend. On checkpoint, state is snapshotted so it can be restored after a failure.
+State is stored in a **State Backend**, chosen per pipeline via `WithStateBackend`:
+
+```go
+env.WithStateBackend(state.InMemory())          // default: RAM, serialized into checkpoints
+env.WithStateBackend(state.Pebble("/var/lib/mailer/state")) // durable, disk-backed (LSM)
+```
+
+Each stateful operator instance (per keyed worker) gets its own isolated backend. With Pebble, checkpoints are **native**: the operator hard-links its LSM files at the barrier instead of serializing state, so checkpoint cost scales with *changed* data, not total state, and the checkpoint file stays small.
+
+Measured at 5M keys (16-byte values): Pebble uses ~0.7 MB of heap vs 579 MB in-memory, checkpoints in ~75 ms vs ~3.3 s, and restores in ~58 ms vs ~2.9 s — at the cost of ~5.5 µs lookups (vs 0.3 µs) and ~25% pipeline throughput. Below ~100k keys the in-memory backend wins on everything except durability. Full numbers: `go test -bench . -benchtime=1x ./bench/`.
 
 ### Checkpoint
 

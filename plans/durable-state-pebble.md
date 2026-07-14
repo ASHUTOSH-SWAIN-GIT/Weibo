@@ -1,6 +1,64 @@
 # Durable State Backend (Pebble)
 
-Status: PROPOSAL.
+Status: P1–P6 IMPLEMENTED (2026-07-14). PW (Window on ListState) remains.
+
+## Phase 6 results (Apple Silicon, macOS, 16-byte values, 4 keyed workers)
+
+Checkpoint duration — the success metric (full = all keys changed,
+incr = 1,000 keys changed since last checkpoint):
+
+| keys | memory full/incr | pebble-compat full/incr | **pebble-native full/incr** |
+|------|-----------------|------------------------|----------------------------|
+| 1k   | ~0 / 0.3 ms | ~0 / 0.3 ms | 39 / 46 ms |
+| 100k | 32 / 26 ms  | 37 / 35 ms | 42 / 48 ms |
+| 5M   | 3,340 / 3,150 ms | 3,826 / 3,589 ms | **72 / 77 ms** |
+
+**Success condition MET**: native checkpoint cost is flat (~40–77 ms,
+dominated by fixed flush/fsync overhead) across three orders of
+magnitude of state — it scales with changed data. Both serialization
+modes scale with TOTAL state (3.3–3.8 s barrier stalls at 5M, even
+when only 1k keys changed, because SnapshotAll can't know what changed).
+
+Other measurements at 5M keys:
+
+| metric | memory | pebble-compat | pebble-native |
+|---|---|---|---|
+| Go heap for state | 579 MB | 0.8 MB | 0.7 MB |
+| live disk | — | 56 MB | 56 MB |
+| checkpoint artifact | 205 MB JSON | 205 MB JSON | 46 MB (hard-linked SSTs) |
+| lookup latency | 0.3 µs | 5.5 µs | 5.4 µs |
+| restore (state part of recovery) | 2.9 s | 4.2 s | **58 ms** |
+| backend write rate | 3.1 M/s | 1.2 M/s | 1.3 M/s |
+| pipeline throughput | 1.38 M rec/s | 1.03 M rec/s | 1.03 M rec/s |
+
+Trade-off summary: Pebble costs ~17× lookup latency and ~25% pipeline
+throughput at 5M keys, and buys ~700× less RAM, ~46× faster barriers,
+and ~50× faster recovery. At small state (≤100k keys) memory wins
+everything except durability; native's fixed ~40 ms flush makes it
+slower than serialization below ~1M keys.
+
+Three bugs found and fixed by Phase 6 verification:
+0. At-least-once checkpoints could become durable for records the sink
+   never received (barrier saved when it entered the sink's 256-slot
+   handoff buffer, not when the sink drained it). Uncoordinated saves
+   now happen in SinkStage, only after the sink has dequeued
+   everything ahead of the barrier. (Pre-existing; Pebble's timing
+   made the recovery test catch it.)
+1. Native checkpoints were dead code for keyed workers — barrier-time
+   full-serialization snapshots always preempted them. Fixed by
+   `NativeSnapshotter`: Checkpointable backends now hard-link at the
+   barrier inside the operator, and (also fixed) `Save`/restore
+   disagreed on the StateDirs path convention.
+2. `CheckpointTo` hard-linked an unflushed WAL: with `Sync: false`
+   writes, small states checkpointed EMPTY. `CheckpointTo` now flushes
+   the memtable first (cost ∝ data since last flush — preserves the
+   incremental property). Also added: a lifecycle guard so straggler
+   goroutines from force-aborted runs can't panic on a closed DB.
+
+Benchmarks live in `bench/state_scale_test.go`:
+`go test -bench . -benchtime=1x -timeout 30m ./bench/` (add `-short`
+to skip the 5M tier). Barrier pause == checkpoint duration (the
+snapshot runs synchronously in the operator at the barrier).
 
 Goal: keyed operator state that (1) is not bounded by RAM, (2) survives
 without re-serializing everything on every checkpoint, and (3) keeps
@@ -198,10 +256,25 @@ recovery fallback.
 - `FileStorage.StateDir(id)`, `SweepOrphans()`, `DeleteStateDirs()` for lifecycle
 - `syncDir()` ensures newly created state subdirectories are durable
 
-**P5 — Exactly-once verification + benchmarks.**
-The full EO matrix over (memory, pebble-compatible, pebble-scalable) ×
-crash points. Benchmark: throughput and barrier-stall time vs memory
-backend at 1k / 100k / 5M keys; publish numbers in the README.
+**P5 — Exactly-once integration.**
+
+- `collectSnapshots` returns both operator snaps AND native state dirs.
+- Uncoordinated path: `saveCheckpoint` stores `StateDirs` directly.
+- Coordinated path: `OnStateSnapshot` accepts `stateDirs`, coordinator
+  `finalize` includes them in the prepared checkpoint data.
+- `pendingCheckpoint` tracks `stateDirs` alongside offsets/state.
+- `abortFatal` calls `cleanupStateDirs` — failed/aborted checkpoint
+  state directories are deleted so they don't accumulate.
+- `restoreWorkersFromCheckpoint` uses `RestoreFrom` when `StateDirs`
+  exists for a worker.
+
+Crash windows tested (via existing parameterized EO suite):
+- Before state snapshot, during, after.
+- Before checkpoint JSON commit, after completion.
+- During sink/source commit.
+
+**Status:** ✅ DONE.  Full EO test matrix (7 test classes × 2 backends ×
+multiple crash points) passes with `-race`.
 
 **P6 — Metrics + docs + example.**
 `mailer_state_size_bytes{owner}`, `mailer_state_checkpoint_duration_seconds`,

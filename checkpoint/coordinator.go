@@ -73,10 +73,11 @@ type Coordinator struct {
 }
 
 type pendingCheckpoint struct {
-	offsets  []byte
-	state    map[string][]byte
-	prepared bool
-	sinkErr  error
+	offsets   []byte
+	state     map[string][]byte
+	stateDirs map[string]string
+	prepared  bool
+	sinkErr   error
 }
 
 // NewCoordinator creates a coordinator. Call Start before wiring it
@@ -130,11 +131,14 @@ func (c *Coordinator) OnBarrierInjected(id string, offsets []byte) {
 }
 
 // OnStateSnapshot records operator/worker state captured when the
-// barrier reached the pre-sink tap.
-func (c *Coordinator) OnStateSnapshot(id string, state map[string][]byte) {
+// barrier reached the pre-sink tap.  stateDirs carries native
+// (hard-link) state directory references for Checkpointable backends.
+func (c *Coordinator) OnStateSnapshot(id string, state map[string][]byte, stateDirs map[string]string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.ensure(id).state = state
+	p := c.ensure(id)
+	p.state = state
+	p.stateDirs = stateDirs
 }
 
 // OnSinkPrepared is called by the sink (via its notifier) once all
@@ -187,9 +191,10 @@ func (c *Coordinator) finalize(ctx context.Context, id string) {
 		ID:        id,
 		Timestamp: time.Now().UTC(),
 		Operators: p.state,
-		Source:    map[string][]byte{},
+		Source:    make(map[string][]byte),
 		Status:    StatusPrepared,
 		TxnID:     c.TxnID,
+		StateDirs: p.stateDirs,
 	}
 	if p.offsets != nil {
 		data.Source["offset"] = p.offsets
@@ -255,15 +260,24 @@ func (c *Coordinator) step(ctx context.Context, s Step, id string) bool {
 	}
 }
 
-// abortFatal aborts the sink transaction (pre-commit failures only)
-// and reports the pipeline-fatal error.
+// abortFatal aborts the sink transaction (pre-commit failures only),
+// deletes any native state directories, and reports the pipeline-fatal error.
 func (c *Coordinator) abortFatal(ctx context.Context, id string, err error) {
 	if c.AbortSink != nil {
 		if aerr := c.AbortSink(ctx, id); aerr != nil {
 			fmt.Printf("mailer: checkpoint %s: sink abort failed: %v\n", id, aerr)
 		}
 	}
+	c.cleanupStateDirs(id)
 	c.reportFatal(err)
+}
+
+// cleanupStateDirs deletes the native state directories for a
+// checkpoint that will never complete (aborted / failed).
+func (c *Coordinator) cleanupStateDirs(id string) {
+	if fs, ok := c.Storage.(*FileStorage); ok {
+		fs.DeleteStateDirs(id)
+	}
 }
 
 func (c *Coordinator) reportFatal(err error) {

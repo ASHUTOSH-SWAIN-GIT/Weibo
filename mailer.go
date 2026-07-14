@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"strconv"
 	"sync"
@@ -257,6 +258,7 @@ func (env *StreamExecutionEnv) Execute(ctx context.Context) error {
 			},
 			OnSnapshot:      env.addBarrierSnapshot,
 			StateBackendFor: backendFor,
+			NativeStateDir:  env.nativeStateDir(),
 		},
 	})
 	if err != nil {
@@ -348,17 +350,25 @@ func (env *StreamExecutionEnv) Execute(ctx context.Context) error {
 			in = env.injectBarriers(ctx, hardCtx, in)
 		}
 		if i == nStages-1 {
-			// Pre-sink barrier tap: uncoordinated mode persists the
-			// checkpoint here (state is consistent, sink not involved);
-			// coordinated mode only hands the state snapshot to the
-			// coordinator — persistence waits for the sink's prepare ack.
-			onBarrier := env.saveCheckpoint
 			if coordinated {
-				onBarrier = func(id string) {
-					env.coord.OnStateSnapshot(id, env.collectSnapshots(id))
+				// Coordinated mode: register the state snapshot with
+				// the coordinator BEFORE the barrier reaches the sink
+				// — the sink's prepare ack may trigger finalization
+				// immediately, and the snapshot must already be there.
+				in = barrierDetect(hardCtx, in, func(id string) {
+					snaps, dirs := env.collectSnapshots(id)
+					env.coord.OnStateSnapshot(id, snaps, dirs)
+				})
+			} else if env.checkpointInterval > 0 {
+				// Uncoordinated mode: persist only after the sink has
+				// drained everything ahead of the barrier (SinkStage
+				// waits for its handoff buffer to empty) — offsets
+				// must never be durable for records the sink never
+				// received.
+				if ss, ok := stage.(*pipeline.SinkStage); ok {
+					ss.OnBarrier = env.saveCheckpoint
 				}
 			}
-			in = barrierDetect(hardCtx, in, onBarrier)
 		}
 		var out chan<- types.Record
 		if i < len(edges) {
@@ -430,10 +440,9 @@ func barrierDetect(hardCtx context.Context, in <-chan types.Record, save func(id
 	go func() {
 		defer close(out)
 		for r := range in {
-			// Save BEFORE forwarding: once the barrier reaches the
-			// sink, the coordinator may finalize the checkpoint — the
-			// state snapshot must already be registered by then, or
-			// the checkpoint persists with empty state.
+			// Register state BEFORE forwarding — once the barrier
+			// reaches the sink, the coordinator may finalize, and the
+			// snapshot must already be there.
 			if r.IsBarrier {
 				save(r.CheckpointID)
 			}
@@ -584,6 +593,23 @@ func (env *StreamExecutionEnv) takeAlignedOffsets(id string) ([]byte, bool) {
 	return data, ok
 }
 
+// nativeStateDir returns the hook Checkpointable backends use to
+// place barrier-time native checkpoints, or nil when checkpointing is
+// off. The directory root is created eagerly so the backend's
+// hard-link call only has to create its own leaf dir.
+func (env *StreamExecutionEnv) nativeStateDir() func(checkpointID, ownerID string) string {
+	if env.checkpointStorage == nil || env.checkpointInterval <= 0 {
+		return nil
+	}
+	return func(checkpointID, ownerID string) string {
+		root := env.checkpointStorage.StateDir(checkpointID)
+		if err := os.MkdirAll(root, 0o755); err != nil {
+			fmt.Printf("mailer: create state dir %s: %v\n", root, err)
+		}
+		return filepath.Join(root, ownerID)
+	}
+}
+
 // addBarrierSnapshot stores state captured when a barrier passed
 // through a stateful operator, until the barrier reaches the end of
 // the pipeline and the checkpoint is assembled.
@@ -613,7 +639,7 @@ func (env *StreamExecutionEnv) addBarrierSnapshot(checkpointID, key string, snap
 // operators that implement BarrierSnapshotter delivered their state
 // when the barrier passed through them (race-free); anything else is
 // snapshotted here as a legacy fallback.
-func (env *StreamExecutionEnv) collectSnapshots(checkpointID string) map[string][]byte {
+func (env *StreamExecutionEnv) collectSnapshots(checkpointID string) (map[string][]byte, map[string]string) {
 	env.snapsMu.Lock()
 	snaps := env.barrierSnaps[checkpointID]
 	delete(env.barrierSnaps, checkpointID)
@@ -622,9 +648,7 @@ func (env *StreamExecutionEnv) collectSnapshots(checkpointID string) map[string]
 		snaps = make(map[string][]byte)
 	}
 
-	// Pre-allocate state dirs for any Checkpointable (native Pebble) backends.
 	stateRoot := env.checkpointStorage.StateDir(checkpointID)
-
 	for i, op := range env.operators {
 		key := fmt.Sprintf("op-%d", i)
 		if _, done := snaps[key]; done {
@@ -643,7 +667,8 @@ func (env *StreamExecutionEnv) collectSnapshots(checkpointID string) map[string]
 	}
 	env.workerMu.Unlock()
 
-	return snaps
+	dirs := extractStateDirs(snaps)
+	return snaps, dirs
 }
 
 // extractStateDirs reads state-ref markers from snapshot entries and
@@ -742,14 +767,15 @@ func (env *StreamExecutionEnv) resolveCoordinatedRecovery(ctx context.Context, c
 // saveCheckpoint captures a snapshot from all stateful operators
 // and writes it to the checkpoint storage (uncoordinated path).
 func (env *StreamExecutionEnv) saveCheckpoint(id string) {
+	snaps, dirs := env.collectSnapshots(id)
 	data := &checkpoint.CheckpointData{
 		ID:        id,
 		Timestamp: time.Now().UTC(),
-		Operators: env.collectSnapshots(id),
+		Operators: snaps,
 		Source:    make(map[string][]byte),
 		Status:    checkpoint.StatusCompleted,
+		StateDirs: dirs,
 	}
-	data.StateDirs = extractStateDirs(data.Operators)
 
 	if _, ok := env.source.(source.CheckpointSource); ok {
 		// Prefer the barrier-aligned offsets captured at injection;
