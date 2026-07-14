@@ -22,7 +22,7 @@ func TestDebugEO(t *testing.T) {
 		src := newReplaySource(eoParts3())
 		src.emitDelay = 500 * time.Microsecond
 		env := mailer.NewEnv().WithBufferSize(16).
-			WithShutdownTimeout(300 * time.Millisecond).
+			WithShutdownTimeout(300*time.Millisecond).
 			WithCheckpointing(5*time.Millisecond, storage)
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
@@ -87,7 +87,7 @@ func TestDebugEO2(t *testing.T) {
 		src := newReplaySource(eoParts3())
 		src.emitDelay = 500 * time.Microsecond
 		env := mailer.NewEnv().WithBufferSize(16).
-			WithShutdownTimeout(300 * time.Millisecond).
+			WithShutdownTimeout(300*time.Millisecond).
 			WithCheckpointing(5*time.Millisecond, storage)
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()

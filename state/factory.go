@@ -1,5 +1,11 @@
 package state
 
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+)
+
 // BackendFactory creates a StateBackend for one state owner. An owner
 // is a stateful operator instance, identified by the same stable IDs
 // the checkpoint format uses: "op-<i>" for a top-level operator,
@@ -18,5 +24,19 @@ type BackendFactory func(ownerID string) (StateBackend, error)
 func InMemory() BackendFactory {
 	return func(string) (StateBackend, error) {
 		return NewMemoryBackend(), nil
+	}
+}
+
+// Pebble returns a factory that creates a Pebble-backed state backend
+// per owner. Each owner gets its own Pebble DB directory at
+// <dir>/<ownerID>/. The working DB is disposable (DisableWAL: true);
+// durability comes from checkpoints.
+func Pebble(dir string) BackendFactory {
+	return func(ownerID string) (StateBackend, error) {
+		ownerDir := filepath.Join(dir, ownerID)
+		if err := os.MkdirAll(ownerDir, 0755); err != nil {
+			return nil, fmt.Errorf("state/pebble: mkdir %s: %w", ownerDir, err)
+		}
+		return OpenPebble(ownerDir)
 	}
 }
