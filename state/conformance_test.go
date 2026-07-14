@@ -317,6 +317,56 @@ func TestConformance_List_MultipleKeys(t *testing.T) {
 	}
 }
 
+func TestConformance_List_Keys(t *testing.T) {
+	for _, bk := range backends(t) {
+		t.Run(bk.Name, func(t *testing.T) {
+			b := newBackend(t, bk.Factory, "test")
+			defer closeBackend(t, b)
+			ls := b.ListState("windows")
+
+			if len(ls.Keys()) != 0 {
+				t.Fatalf("empty namespace should have no keys, got %v", ls.Keys())
+			}
+
+			// Keys that contain the delimiter bytes windows use, plus a
+			// NUL, to prove positional extraction is robust.
+			want := map[string]bool{
+				"alice/2026/2027": true,
+				"bob/x/y":         true,
+				"has\x00nul/1/2":  true,
+			}
+			for k := range want {
+				ls.SetKey(k)
+				ls.Append([]byte("r1"))
+				ls.Append([]byte("r2"))
+			}
+
+			got := ls.Keys()
+			if len(got) != len(want) {
+				t.Fatalf("expected %d keys, got %d: %v", len(want), len(got), got)
+			}
+			for _, k := range got {
+				if !want[k] {
+					t.Errorf("unexpected key %q", k)
+				}
+			}
+
+			// A cleared key disappears from Keys(); others remain.
+			ls.SetKey("bob/x/y")
+			ls.Clear()
+			got = ls.Keys()
+			if len(got) != 2 {
+				t.Fatalf("after clear expected 2 keys, got %d: %v", len(got), got)
+			}
+			for _, k := range got {
+				if k == "bob/x/y" {
+					t.Errorf("cleared key still present")
+				}
+			}
+		})
+	}
+}
+
 // ---- Owner isolation -------------------------------------------------------
 
 func TestConformance_OwnerIsolation(t *testing.T) {

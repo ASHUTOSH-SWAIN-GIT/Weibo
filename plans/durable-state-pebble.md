@@ -1,6 +1,51 @@
 # Durable State Backend (Pebble)
 
-Status: P1–P6 IMPLEMENTED (2026-07-14). PW (Window on ListState) remains.
+Status: P1–P6 + PW IMPLEMENTED (2026-07-14). Durable state complete.
+
+## PW — Window records on the backend (done)
+
+`WindowOperator` no longer keeps a private `map[windowKey]*windowState`
+in the Go heap. Its records and watermark now live in the injected
+state backend, so a window buffering millions of records uses disk
+(Pebble) instead of RAM, and native checkpoints hard-link window
+contents just like Reduce state.
+
+Design as built:
+- **Records** → `ListState("window_records")`, keyed by
+  `windowKey.String()` = `"<recordKey>/<start>/<end>"`. Each entry is
+  one JSON-encoded record. Window bounds are recovered by parsing the
+  key, so the set of open windows is exactly `ListState.Keys()` — no
+  separate index.
+- **Watermark** → `ValueState("window_wm")["wm"]` (8-byte UnixNano),
+  with a RAM working copy (`currentWatermark`) for the per-record
+  late-drop check (no backend read on the hot path). Updates
+  write-through; `Process` loads it at startup so it survives a native
+  restore (where the operator's `Restore([]byte)` is never called).
+- **New capability**: `ListState.Keys()` (added to the interface, both
+  backends) — the one thing Window needs that Reduce didn't:
+  enumerate open windows to fire the elapsed ones on a watermark.
+  Pebble extracts the key positionally from `l\x00<ns>\x00<key>\x00<seq8>`
+  (robust to `\x00`/`/` inside keys).
+- **Native checkpoint**: Window implements `NativeSnapshotter` +
+  `StateConfigurable`, so the planner injects a backend and wires
+  hard-link snapshots automatically — identical to Reduce.
+
+Trade-off documented in code: **session merges do a list-move**
+(get+clear+re-append) when two sessions merge and the window key
+changes. Same iteration complexity as the old map, but the record move
+is new cost; only pathological for huge sessions that merge
+repeatedly. Tumbling/sliding just append.
+
+Latent bug fixed in passing: the old `Clone()` dropped `IdleTimeout`
+(keyed windows lost their idle timeout in worker clones); the rewrite
+copies it.
+
+Tests: `test/unit_tests/window_durable_test.go` — records physically in
+the backend, JSON snapshot/restore over both backends, and native
+hard-link checkpoint restore of both window records and the watermark.
+All existing window tests pass unchanged on the rewrite.
+
+## Phase 6 results (Apple Silicon, macOS, 16-byte values, 4 keyed workers)
 
 ## Phase 6 results (Apple Silicon, macOS, 16-byte values, 4 keyed workers)
 

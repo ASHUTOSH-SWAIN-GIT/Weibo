@@ -64,6 +64,14 @@ type ListState interface {
 
 	// Clear removes all values for the current key.
 	Clear()
+
+	// Keys returns every key in this namespace that currently holds at
+	// least one entry. Order is unspecified. It is independent of the
+	// key set via SetKey. Used by operators that must iterate all their
+	// keyed lists — e.g. Window firing every window whose end has
+	// passed the watermark. Returns the keys only (small); records
+	// within a key are loaded lazily via SetKey + GetAll.
+	Keys() []string
 }
 
 // Checkpointable is an optional interface for backends that can

@@ -293,6 +293,41 @@ func (ls *pebbleListState) Clear() {
 	}
 }
 
+func (ls *pebbleListState) Keys() []string {
+	p := ls.backend
+	p.life.RLock()
+	defer p.life.RUnlock()
+	if p.closed {
+		return nil
+	}
+	// Entry keys are l\x00<ns>\x00<key>\x00<seq8>. Strip the fixed
+	// namespace prefix from the front and the \x00<seq8> (9 bytes)
+	// from the back to recover <key> exactly — robust even when a key
+	// itself contains \x00, because the structure is positional.
+	prefix := listNamespacePrefix(ls.namespace)
+	iter, _ := p.db.NewIter(&pebble.IterOptions{
+		LowerBound: prefix,
+		UpperBound: prefixUpperBound(prefix),
+	})
+	defer iter.Close()
+
+	seen := make(map[string]struct{})
+	var keys []string
+	for iter.First(); iter.Valid(); iter.Next() {
+		full := iter.Key()
+		if len(full) < len(prefix)+9 {
+			continue
+		}
+		k := string(full[len(prefix) : len(full)-9])
+		if _, ok := seen[k]; ok {
+			continue
+		}
+		seen[k] = struct{}{}
+		keys = append(keys, k)
+	}
+	return keys
+}
+
 // ---- Key encoding ----------------------------------------------------------
 
 // valueUserKey builds the Pebble key for a value state entry.
@@ -346,6 +381,19 @@ func listEntryKey(namespace, key string, seq uint64) []byte {
 // for a (namespace, key): l\x00<ns>\x00<key>\x00
 func listPrefixBytes(namespace, key string) []byte {
 	return listEntryKey(namespace, key, 0)[:len(listEntryKey(namespace, key, 0))-8]
+}
+
+// listNamespacePrefix returns the prefix covering every list entry in
+// a namespace: l\x00<ns>\x00
+func listNamespacePrefix(namespace string) []byte {
+	var buf bytes.Buffer
+	buf.WriteByte(listPrefix)
+	buf.WriteByte(0x00)
+	buf.WriteString(namespace)
+	buf.WriteByte(0x00)
+	out := make([]byte, buf.Len())
+	copy(out, buf.Bytes())
+	return out
 }
 
 // prefixStart returns the start of the namespace range for deletion.
