@@ -169,7 +169,7 @@ func runEO(t *testing.T, sk *fakeTxnSink, storage checkpoint.Storage, haltStep c
 
 	env := mailer.NewEnv().
 		WithBufferSize(16).
-		WithShutdownTimeout(300 * time.Millisecond).
+		WithShutdownTimeout(300*time.Millisecond).
 		WithCheckpointing(5*time.Millisecond, storage)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -364,7 +364,7 @@ func TestExactlyOnce_KeyedStateMultiPartition(t *testing.T) {
 
 		env := mailer.NewEnv().
 			WithBufferSize(16).
-			WithShutdownTimeout(300 * time.Millisecond).
+			WithShutdownTimeout(300*time.Millisecond).
 			WithCheckpointing(5*time.Millisecond, storage)
 
 		ctx, cancel := context.WithCancel(context.Background())
