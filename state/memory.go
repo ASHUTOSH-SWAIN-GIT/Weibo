@@ -183,3 +183,15 @@ func (ls *memoryListState) Clear() {
 		delete(ls.data, ls.key)
 	}
 }
+
+func (ls *memoryListState) Keys() []string {
+	ls.mu.Lock()
+	defer ls.mu.Unlock()
+
+	ls.data = ls.backend.list[ls.name]
+	keys := make([]string, 0, len(ls.data))
+	for k := range ls.data {
+		keys = append(keys, k)
+	}
+	return keys
+}

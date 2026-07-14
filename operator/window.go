@@ -1,101 +1,114 @@
 package operator
 
 import (
+	"encoding/binary"
 	"encoding/json"
 	"time"
 
+	"github.com/ASHUTOSH-SWAIN-GIT/mailer/state"
 	"github.com/ASHUTOSH-SWAIN-GIT/mailer/types"
 	"github.com/ASHUTOSH-SWAIN-GIT/mailer/window"
+)
+
+// State namespaces used inside the operator's injected backend.
+const (
+	windowRecordsNS   = "window_records" // ListState: windowKey -> buffered records
+	windowWatermarkNS = "window_wm"      // ValueState: "wm" -> UnixNano watermark
+	windowWatermarkK  = "wm"
 )
 
 // WindowOperator buffers records into time-based windows and fires them
 // when the watermark passes the window's end time.
 //
 // How it works:
-//  1. Data records are assigned to windows by the WindowAssigner.
+//  1. Data records are assigned to windows by the WindowAssigner and
+//     buffered in the injected state backend (Pebble when configured),
+//     so window contents live on disk instead of the Go heap.
 //  2. Watermark records advance the current watermark.
 //  3. When the watermark passes a window's end time, that window is
 //     "closed" — all its buffered records are emitted as a single result.
 //  4. Late records (timestamp < current watermark) are dropped.
-//  5. Checkpoint barriers are forwarded downstream (window buffers
-//     are captured as part of the pipeline checkpoint).
+//  5. Checkpoint barriers snapshot state (natively via the backend when
+//     it supports hard-link checkpoints, else serialized to JSON).
 //
 // Must be used after KeyBy in a keyed stream so each key gets its
 // own set of windows.
+//
+// State layout in the backend:
+//   - records:   ListState(windowRecordsNS), keyed by windowKey.String()
+//                ("<recordKey>/<start>/<end>"); each entry is one
+//                serialized record. Window bounds are recovered from the
+//                key, so the set of open windows is exactly Keys().
+//   - watermark: ValueState(windowWatermarkNS)["wm"] — 8-byte UnixNano.
+//                A RAM working copy (currentWatermark) serves the
+//                per-record late-drop check without a backend read.
 type WindowOperator struct {
-	Assigner         window.WindowAssigner
-	currentWatermark time.Time
-	windows          map[windowKey]*windowState
-	IdleTimeout      time.Duration
-	lastRecordTime   time.Time
-	timer            *time.Timer
-	Label            string
+	Assigner    window.WindowAssigner
+	IdleTimeout time.Duration
+	Label       string
 
-	// barrierSnapshot, when set, is invoked synchronously from the
-	// Process loop each time a barrier passes — the race-free
-	// snapshot point (see operator.BarrierSnapshotter).
+	backend          state.StateBackend
+	currentWatermark time.Time // RAM working copy of the durable watermark
+
+	lastRecordTime time.Time
+	timer          *time.Timer
+
+	// barrierSnapshot / nativeSnapshot are invoked synchronously from
+	// the Process loop when a barrier passes — the race-free snapshot
+	// point (see operator.BarrierSnapshotter / NativeSnapshotter).
 	barrierSnapshot func(checkpointID string, snapshot []byte, err error)
+	nativeSnapshot  func(checkpointID string) ([]byte, error)
 }
+
+// Window creates a WindowOperator with the given window assigner.
+// Supported assigners: window.Tumbling, window.Sliding, window.Session.
+// A default in-memory backend is used until one is injected.
+func Window(assigner window.WindowAssigner) *WindowOperator {
+	return &WindowOperator{
+		Assigner: assigner,
+		backend:  state.NewMemoryBackend(),
+	}
+}
+
+// SetStateBackend implements StateConfigurable: the engine injects the
+// backend created for this operator's owner ID. Called during plan
+// construction, before any record is processed or state restored.
+func (op *WindowOperator) SetStateBackend(b state.StateBackend) { op.backend = b }
 
 // SetBarrierSnapshot implements BarrierSnapshotter.
 func (op *WindowOperator) SetBarrierSnapshot(fn func(checkpointID string, snapshot []byte, err error)) {
 	op.barrierSnapshot = fn
 }
 
+// SetNativeSnapshot implements NativeSnapshotter.
+func (op *WindowOperator) SetNativeSnapshot(fn func(checkpointID string) ([]byte, error)) {
+	op.nativeSnapshot = fn
+}
+
+// Backend implements NativeSnapshotter: exposes the backend so the
+// engine can detect state.Checkpointable support.
+func (op *WindowOperator) Backend() state.StateBackend { return op.backend }
+
 func (op *WindowOperator) Name() string     { return "Window" }
 func (op *WindowOperator) GetLabel() string { return op.Label }
 func (op *WindowOperator) DescribeOp() OperatorMeta {
-	cfg := map[string]string{
-		"type": op.Assigner.Name(),
-	}
+	cfg := map[string]string{"type": op.Assigner.Name()}
 	if op.IdleTimeout > 0 {
 		cfg["idle_timeout"] = op.IdleTimeout.String()
 	}
 	return OperatorMeta{Type: "Window", Label: op.Label, Config: cfg}
 }
 
-// Clone returns a copy with the same window assigner and idle timeout
-// but fresh window buffers and watermark. Used for per-worker isolation
-// in keyed parallel execution.
+// Clone returns a copy with the same configuration but a fresh default
+// backend (the engine injects the real one afterwards). Used for
+// per-worker isolation in keyed parallel execution.
 func (op *WindowOperator) Clone() Operator {
 	return &WindowOperator{
-		Assigner: op.Assigner,
-		windows:  make(map[windowKey]*windowState),
-		Label:    op.Label,
+		Assigner:    op.Assigner,
+		IdleTimeout: op.IdleTimeout,
+		Label:       op.Label,
+		backend:     state.NewMemoryBackend(),
 	}
-}
-
-// windowKey uniquely identifies a window by key + start + end times
-// as Unix nanoseconds (so it's comparable and hashable as a map key).
-// Including the record key ensures records from different keys don't
-// get merged into the same window.
-type windowKey struct {
-	Key   string
-	Start int64
-	End   int64
-}
-
-// windowState holds the records buffered in a single window.
-type windowState struct {
-	Win     window.Window `json:"win"`
-	Records []recordJSON  `json:"records"`
-}
-
-// recordJSON is the JSON-serializable representation of a types.Record,
-// used for checkpointing window state.
-type recordJSON struct {
-	Key       []byte            `json:"key,omitempty"`
-	Value     []byte            `json:"value,omitempty"`
-	Timestamp int64             `json:"timestamp"` // UnixNano
-	Offset    int64             `json:"offset"`
-	Headers   map[string][]byte `json:"headers,omitempty"`
-}
-
-// windowOperatorSnapshotJSON is the JSON representation of WindowOperator's
-// state for checkpointing.
-type windowOperatorSnapshotJSON struct {
-	CurrentWatermark int64                  `json:"current_watermark"` // UnixNano
-	Windows          map[string]windowState `json:"windows"`
 }
 
 // WithIdleTimeout sets the idle timeout for the window operator.
@@ -107,27 +120,19 @@ func (op *WindowOperator) WithIdleTimeout(d time.Duration) *WindowOperator {
 	return op
 }
 
-// Window creates a WindowOperator with the given window assigner.
-// Supported assigners: window.Tumbling, window.Sliding, window.Session.
-func Window(assigner window.WindowAssigner) *WindowOperator {
-	return &WindowOperator{
-		Assigner: assigner,
-		windows:  make(map[windowKey]*windowState),
-	}
-}
-
 // CurrentWatermark returns the operator's current watermark timestamp.
 // Used for testing and checkpointing.
-func (op *WindowOperator) CurrentWatermark() time.Time {
-	return op.currentWatermark
-}
+func (op *WindowOperator) CurrentWatermark() time.Time { return op.currentWatermark }
 
-// Process reads records and watermarks, buffers data records into windows,
-// and emits results when watermarks indicate windows are complete.
-// If IdleTimeout is set, the operator fires remaining windows and exits
-// when no records arrive within the timeout.
+// Process reads records and watermarks, buffers data records into
+// windows (in the backend), and emits results when watermarks indicate
+// windows are complete. If IdleTimeout is set, the operator fires
+// remaining windows and exits when no records arrive within the timeout.
 func (op *WindowOperator) Process(in <-chan types.Record, out chan<- types.Record) {
 	defer close(out)
+
+	recState := op.backend.ListState(windowRecordsNS)
+	op.currentWatermark = op.loadWatermark() // recover watermark (e.g. after native restore)
 
 	if op.IdleTimeout > 0 {
 		op.timer = time.NewTimer(op.IdleTimeout)
@@ -138,21 +143,27 @@ func (op *WindowOperator) Process(in <-chan types.Record, out chan<- types.Recor
 		select {
 		case record, ok := <-in:
 			if !ok {
-				op.flushRemaining(out)
+				op.flushRemaining(recState, out)
 				return
 			}
 			if op.timer != nil {
 				op.timer.Reset(op.IdleTimeout)
 			}
 			if record.IsWatermark {
-				op.handleWatermark(record, out)
+				op.handleWatermark(recState, record, out)
 				continue
 			}
 			if record.IsBarrier {
 				// Snapshot NOW, between records: buffered windows and
 				// the watermark reflect exactly the pre-barrier stream.
 				if op.barrierSnapshot != nil {
-					snap, err := op.Snapshot()
+					var snap []byte
+					var err error
+					if op.nativeSnapshot != nil {
+						snap, err = op.nativeSnapshot(record.CheckpointID)
+					} else {
+						snap, err = op.Snapshot()
+					}
 					op.barrierSnapshot(record.CheckpointID, snap, err)
 				}
 				out <- record
@@ -164,18 +175,17 @@ func (op *WindowOperator) Process(in <-chan types.Record, out chan<- types.Recor
 				continue
 			}
 
-			op.handleDataRecord(record)
+			op.handleDataRecord(recState, record)
 
 		case <-op.timerFire():
-			op.flushRemaining(out)
+			op.flushRemaining(recState, out)
 			return
 		}
 	}
 }
 
 // timerFire returns a channel that fires when the idle timer expires,
-// or nil if no idle timeout is configured (in which case this case is
-// never selected).
+// or nil if no idle timeout is configured.
 func (op *WindowOperator) timerFire() <-chan time.Time {
 	if op.timer != nil {
 		return op.timer.C
@@ -183,94 +193,249 @@ func (op *WindowOperator) timerFire() <-chan time.Time {
 	return nil
 }
 
-// flushRemaining fires all buffered windows and clears state.
-func (op *WindowOperator) flushRemaining(out chan<- types.Record) {
-	for key, ws := range op.windows {
-		for _, r := range ws.Records {
-			out <- tagWithWindow(recordFromJSON(r), ws.Win)
-		}
-		delete(op.windows, key)
-	}
-}
-
-// handleDataRecord assigns the record to one or more windows and buffers it.
-// For session windows, overlapping sessions for the same key are merged
-// (the window bounds expand and records are collected into one entry).
-func (op *WindowOperator) handleDataRecord(record types.Record) {
+// handleDataRecord assigns the record to one or more windows and buffers
+// it in the backend.
+func (op *WindowOperator) handleDataRecord(recState state.ListState, record types.Record) {
+	recBytes := encodeRecord(record)
 	wins := op.Assigner.AssignWindows(record.Timestamp)
 	for _, win := range wins {
-		op.assignToWindow(string(record.Key), win, recordToJSON(record))
+		op.assignToWindow(recState, string(record.Key), win, recBytes)
 	}
 }
 
-// assignToWindow places a record into the appropriate window, merging
-// overlapping session windows for the same key when bounds change.
-// For tumbling and sliding windows, records are assigned to pre-aligned
-// windows that always have the same key, so no merging is needed.
-// Session windows create a unique window per record that may overlap
-// with an existing session, in which case we merge by expanding the bounds.
-func (op *WindowOperator) assignToWindow(key string, win window.Window, rec recordJSON) {
-	wk := toWindowKey(key, win)
+// assignToWindow places a record into the appropriate window list,
+// merging overlapping session windows for the same key when bounds
+// change. Tumbling/sliding windows are pre-aligned, so records append
+// straight to their window key. Session windows may overlap an existing
+// session, in which case the two are merged by expanding the bounds —
+// which changes the window key, so the existing records are moved to the
+// new key (a get+clear+re-append). Sessions that buffer many records and
+// merge repeatedly pay for those moves; bounded-size sessions do not.
+func (op *WindowOperator) assignToWindow(recState state.ListState, key string, win window.Window, recBytes []byte) {
+	wk := toWindowKey(key, win).String()
 
-	// Fast path: the exact window key exists, just append the record.
-	if ws, ok := op.windows[wk]; ok {
-		ws.Records = append(ws.Records, rec)
-		return
-	}
-
-	// For session windows, check if the new window overlaps with an existing
-	// session for the same key and merge them.
 	if op.Assigner.IsSession() {
-		for existingKey, existingWs := range op.windows {
-			if existingKey.Key != key {
+		for _, existingStr := range recState.Keys() {
+			ek := parseWindowKey(existingStr)
+			if ek.Key != key {
 				continue
 			}
-			if win.Start.Before(existingWs.Win.End) && win.End.After(existingWs.Win.Start) {
-				newStart := existingWs.Win.Start
-				newEnd := existingWs.Win.End
-				if win.Start.Before(newStart) {
-					newStart = win.Start
-				}
-				if win.End.After(newEnd) {
-					newEnd = win.End
-				}
+			eStart := time.Unix(0, ek.Start).UTC()
+			eEnd := time.Unix(0, ek.End).UTC()
+			if !win.Start.Before(eEnd) || !win.End.After(eStart) {
+				continue // no overlap
+			}
 
-				existingWs.Win = window.Window{Start: newStart, End: newEnd}
-				existingWs.Records = append(existingWs.Records, rec)
+			newStart, newEnd := eStart, eEnd
+			if win.Start.Before(newStart) {
+				newStart = win.Start
+			}
+			if win.End.After(newEnd) {
+				newEnd = win.End
+			}
+			mergedStr := toWindowKey(key, window.Window{Start: newStart, End: newEnd}).String()
 
-				// Re-key since bounds changed.
-				newWk := toWindowKey(key, existingWs.Win)
-				if newWk != existingKey {
-					op.windows[newWk] = existingWs
-					delete(op.windows, existingKey)
-				}
+			if mergedStr == existingStr {
+				// New record fits within the existing session bounds.
+				recState.SetKey(existingStr)
+				recState.Append(recBytes)
 				return
 			}
+			// Bounds expanded: move existing records under the new key.
+			recState.SetKey(existingStr)
+			moved := recState.GetAll()
+			recState.Clear()
+			recState.SetKey(mergedStr)
+			for _, r := range moved {
+				recState.Append(r)
+			}
+			recState.Append(recBytes)
+			return
 		}
 	}
 
-	// No existing window: create a new one.
-	ws := &windowState{
-		Win:     win,
-		Records: []recordJSON{rec},
-	}
-	op.windows[wk] = ws
+	recState.SetKey(wk)
+	recState.Append(recBytes)
 }
 
 // handleWatermark advances the watermark and fires all windows whose
 // end time is <= the new watermark.
-func (op *WindowOperator) handleWatermark(watermark types.Record, out chan<- types.Record) {
+func (op *WindowOperator) handleWatermark(recState state.ListState, watermark types.Record, out chan<- types.Record) {
 	if watermark.Timestamp.After(op.currentWatermark) {
 		op.currentWatermark = watermark.Timestamp
+		op.storeWatermark()
 	}
-
-	for key, ws := range op.windows {
-		if !ws.Win.End.After(op.currentWatermark) {
-			for _, r := range ws.Records {
-				out <- tagWithWindow(recordFromJSON(r), ws.Win)
-			}
-			delete(op.windows, key)
+	for _, keyStr := range recState.Keys() {
+		wk := parseWindowKey(keyStr)
+		if time.Unix(0, wk.End).UTC().After(op.currentWatermark) {
+			continue // window still open
 		}
+		op.fireWindow(recState, keyStr, out)
+	}
+}
+
+// flushRemaining fires all buffered windows and clears state.
+func (op *WindowOperator) flushRemaining(recState state.ListState, out chan<- types.Record) {
+	for _, keyStr := range recState.Keys() {
+		op.fireWindow(recState, keyStr, out)
+	}
+}
+
+// fireWindow emits every record in the window under keyStr (tagged with
+// window bounds) and clears it.
+func (op *WindowOperator) fireWindow(recState state.ListState, keyStr string, out chan<- types.Record) {
+	wk := parseWindowKey(keyStr)
+	win := window.Window{
+		Start: time.Unix(0, wk.Start).UTC(),
+		End:   time.Unix(0, wk.End).UTC(),
+	}
+	recState.SetKey(keyStr)
+	for _, rb := range recState.GetAll() {
+		out <- tagWithWindow(decodeRecord(rb), win)
+	}
+	recState.Clear()
+}
+
+// loadWatermark reads the durable watermark from the backend, or the
+// zero time if none has been stored.
+func (op *WindowOperator) loadWatermark() time.Time {
+	vs := op.backend.ValueState(windowWatermarkNS)
+	vs.SetKey(windowWatermarkK)
+	b := vs.Get()
+	if len(b) != 8 {
+		return time.Time{}
+	}
+	return time.Unix(0, int64(binary.BigEndian.Uint64(b))).UTC()
+}
+
+// storeWatermark write-throughs the RAM watermark to the backend so it
+// survives a native (backend-level) checkpoint restore.
+func (op *WindowOperator) storeWatermark() {
+	vs := op.backend.ValueState(windowWatermarkNS)
+	vs.SetKey(windowWatermarkK)
+	var buf [8]byte
+	binary.BigEndian.PutUint64(buf[:], uint64(op.currentWatermark.UnixNano()))
+	vs.Set(buf[:])
+}
+
+// windowKey uniquely identifies a window by key + start + end times as
+// Unix nanoseconds. Including the record key ensures records from
+// different keys aren't merged into the same window.
+type windowKey struct {
+	Key   string
+	Start int64
+	End   int64
+}
+
+// windowState / recordJSON / windowOperatorSnapshotJSON are the
+// JSON-serializable forms used for compatible-mode checkpointing
+// (memory backend) and as the per-record list entry encoding.
+type windowState struct {
+	Win     window.Window `json:"win"`
+	Records []recordJSON  `json:"records"`
+}
+
+type recordJSON struct {
+	Key       []byte            `json:"key,omitempty"`
+	Value     []byte            `json:"value,omitempty"`
+	Timestamp int64             `json:"timestamp"` // UnixNano
+	Offset    int64             `json:"offset"`
+	Headers   map[string][]byte `json:"headers,omitempty"`
+}
+
+type windowOperatorSnapshotJSON struct {
+	CurrentWatermark int64                  `json:"current_watermark"` // UnixNano
+	Windows          map[string]windowState `json:"windows"`
+}
+
+// Snapshot serializes the backend's window contents to JSON. Used for
+// the memory backend and any backend without native checkpoint support.
+func (op *WindowOperator) Snapshot() ([]byte, error) {
+	recState := op.backend.ListState(windowRecordsNS)
+	snapshot := windowOperatorSnapshotJSON{
+		CurrentWatermark: op.currentWatermark.UnixNano(),
+		Windows:          make(map[string]windowState),
+	}
+	for _, keyStr := range recState.Keys() {
+		wk := parseWindowKey(keyStr)
+		win := window.Window{
+			Start: time.Unix(0, wk.Start).UTC(),
+			End:   time.Unix(0, wk.End).UTC(),
+		}
+		recState.SetKey(keyStr)
+		entries := recState.GetAll()
+		recs := make([]recordJSON, 0, len(entries))
+		for _, rb := range entries {
+			recs = append(recs, decodeRecordJSON(rb))
+		}
+		snapshot.Windows[keyStr] = windowState{Win: win, Records: recs}
+	}
+	return json.Marshal(snapshot)
+}
+
+// Restore replaces the backend's window contents from JSON produced by
+// Snapshot. The backend is injected before Restore runs.
+func (op *WindowOperator) Restore(data []byte) error {
+	var snapshot windowOperatorSnapshotJSON
+	if err := json.Unmarshal(data, &snapshot); err != nil {
+		return err
+	}
+	op.currentWatermark = time.Unix(0, snapshot.CurrentWatermark).UTC()
+	op.storeWatermark()
+
+	recState := op.backend.ListState(windowRecordsNS)
+	for _, k := range recState.Keys() { // clear any pre-existing state
+		recState.SetKey(k)
+		recState.Clear()
+	}
+	for keyStr, ws := range snapshot.Windows {
+		recState.SetKey(keyStr)
+		for _, r := range ws.Records {
+			recState.Append(encodeRecordJSON(r))
+		}
+	}
+	return nil
+}
+
+// ---- record <-> bytes ------------------------------------------------------
+
+func encodeRecord(r types.Record) []byte {
+	b, _ := json.Marshal(recordToJSON(r))
+	return b
+}
+
+func encodeRecordJSON(r recordJSON) []byte {
+	b, _ := json.Marshal(r)
+	return b
+}
+
+func decodeRecord(b []byte) types.Record {
+	return recordFromJSON(decodeRecordJSON(b))
+}
+
+func decodeRecordJSON(b []byte) recordJSON {
+	var r recordJSON
+	_ = json.Unmarshal(b, &r)
+	return r
+}
+
+func recordToJSON(r types.Record) recordJSON {
+	return recordJSON{
+		Key:       r.Key,
+		Value:     r.Value,
+		Timestamp: r.Timestamp.UnixNano(),
+		Offset:    r.Offset,
+		Headers:   r.Headers,
+	}
+}
+
+func recordFromJSON(r recordJSON) types.Record {
+	return types.Record{
+		Key:       r.Key,
+		Value:     r.Value,
+		Timestamp: time.Unix(0, r.Timestamp).UTC(),
+		Offset:    r.Offset,
+		Headers:   r.Headers,
 	}
 }
 
@@ -291,7 +456,7 @@ func tagWithWindow(r types.Record, win window.Window) types.Record {
 	}
 }
 
-// toWindowKey converts a key and Window to a comparable map key.
+// toWindowKey converts a key and Window to a comparable window key.
 func toWindowKey(key string, win window.Window) windowKey {
 	return windowKey{
 		Key:   key,
@@ -300,64 +465,17 @@ func toWindowKey(key string, win window.Window) windowKey {
 	}
 }
 
-func recordToJSON(r types.Record) recordJSON {
-	return recordJSON{
-		Key:       r.Key,
-		Value:     r.Value,
-		Timestamp: r.Timestamp.UnixNano(),
-		Offset:    r.Offset,
-		Headers:   r.Headers,
-	}
-}
-
-func recordFromJSON(r recordJSON) types.Record {
-	ts := time.Unix(0, r.Timestamp).UTC()
-	return types.Record{
-		Key:       r.Key,
-		Value:     r.Value,
-		Timestamp: ts,
-		Offset:    r.Offset,
-		Headers:   r.Headers,
-	}
-}
-
-// Snapshot returns the operator's current window state as JSON bytes.
-func (op *WindowOperator) Snapshot() ([]byte, error) {
-	snapshot := windowOperatorSnapshotJSON{
-		CurrentWatermark: op.currentWatermark.UnixNano(),
-		Windows:          make(map[string]windowState),
-	}
-	for key, ws := range op.windows {
-		snapshot.Windows[key.String()] = *ws
-	}
-	return json.Marshal(snapshot)
-}
-
-// Restore replaces the operator's internal state from JSON bytes produced by Snapshot.
-func (op *WindowOperator) Restore(data []byte) error {
-	var snapshot windowOperatorSnapshotJSON
-	if err := json.Unmarshal(data, &snapshot); err != nil {
-		return err
-	}
-	op.currentWatermark = time.Unix(0, snapshot.CurrentWatermark).UTC()
-	op.windows = make(map[windowKey]*windowState)
-	for keyStr, ws := range snapshot.Windows {
-		wk := parseWindowKey(keyStr)
-		wsCopy := ws
-		op.windows[wk] = &wsCopy
-	}
-	return nil
-}
-
 func (k windowKey) String() string {
-	return k.Key + "/" + time.Unix(0, k.Start).UTC().Format(time.RFC3339Nano) + "/" + time.Unix(0, k.End).UTC().Format(time.RFC3339Nano)
+	return k.Key + "/" +
+		time.Unix(0, k.Start).UTC().Format(time.RFC3339Nano) + "/" +
+		time.Unix(0, k.End).UTC().Format(time.RFC3339Nano)
 }
 
+// parseWindowKey reverses windowKey.String(). The record key may itself
+// contain "/", so the two window-bound timestamps are taken from the
+// last two "/"-separated fields.
 func parseWindowKey(s string) windowKey {
-	// Format: "key/startRFC3339Nano/endRFC3339Nano"
-	// Find the last two "/" delimiters
-	lastSlash := -1
-	secondLastSlash := -1
+	lastSlash, secondLastSlash := -1, -1
 	for i := len(s) - 1; i >= 0; i-- {
 		if s[i] == '/' {
 			if lastSlash == -1 {
@@ -371,13 +489,10 @@ func parseWindowKey(s string) windowKey {
 	if secondLastSlash == -1 || lastSlash == -1 {
 		return windowKey{}
 	}
-	key := s[:secondLastSlash]
-	startStr := s[secondLastSlash+1 : lastSlash]
-	endStr := s[lastSlash+1:]
-	start, _ := time.Parse(time.RFC3339Nano, startStr)
-	end, _ := time.Parse(time.RFC3339Nano, endStr)
+	start, _ := time.Parse(time.RFC3339Nano, s[secondLastSlash+1:lastSlash])
+	end, _ := time.Parse(time.RFC3339Nano, s[lastSlash+1:])
 	return windowKey{
-		Key:   key,
+		Key:   s[:secondLastSlash],
 		Start: start.UnixNano(),
 		End:   end.UnixNano(),
 	}
