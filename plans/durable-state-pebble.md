@@ -168,6 +168,8 @@ run against both MemoryBackend and PebbleBackend (same behavioral
 spec: get/set/clear, key scoping, list ordering, snapshot/restore
 roundtrip, concurrent owners).
 
+**Status:** ✅ DONE.
+
 **P3 — Drop-in durability (compatible mode).**
 Nothing new to build beyond P2's `SnapshotAll`/`RestoreAll`; the work
 is verification: run the entire recovery + exactly-once test matrix
