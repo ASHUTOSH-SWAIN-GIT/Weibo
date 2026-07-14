@@ -35,41 +35,44 @@ type KeyedStage struct {
 }
 
 // NewKeyedStage clones the stateful operator chain once per partition.
-// onClone registers every clone for checkpoint restore and returns its
-// global index; onSnapshot receives each clone's state captured
-// synchronously when a barrier passes through it — the race-free
-// snapshot point (snapshotting later, at the end of the pipeline,
-// races with the clone processing post-barrier records).
-func NewKeyedStage(
-	kb *operator.KeyByOperator,
-	ops []operator.Operator,
-	onClone func(operator.Operator) int,
-	onSnapshot func(checkpointID, key string, snapshot []byte),
-) *KeyedStage {
+// hooks.OnClone registers every clone for checkpoint restore and
+// returns its global index; hooks.OnSnapshot receives each clone's
+// state captured synchronously when a barrier passes through it — the
+// race-free snapshot point (snapshotting later, at the end of the
+// pipeline, races with the clone processing post-barrier records);
+// hooks.StateBackendFor injects each clone's state backend, keyed by
+// the same "worker-<idx>" owner ID the checkpoint format uses.
+func NewKeyedStage(kb *operator.KeyByOperator, ops []operator.Operator, hooks StageHooks) (*KeyedStage, error) {
 	workers := make([][]operator.Operator, kb.Partitions)
 	for w := range workers {
 		chain := make([]operator.Operator, 0, len(ops))
 		for _, op := range ops {
 			clone := op.(operator.Cloneable).Clone()
 			idx := -1
-			if onClone != nil {
-				idx = onClone(clone)
+			if hooks.OnClone != nil {
+				idx = hooks.OnClone(clone)
 			}
-			if bs, ok := clone.(operator.BarrierSnapshotter); ok && onSnapshot != nil && idx >= 0 {
+			if idx >= 0 {
 				key := fmt.Sprintf("worker-%d", idx)
-				bs.SetBarrierSnapshot(func(id string, snap []byte, err error) {
-					if err != nil {
-						fmt.Printf("mailer: barrier snapshot failed for %s: %v\n", key, err)
-						return
-					}
-					onSnapshot(id, key, snap)
-				})
+				if err := hooks.assignBackend(clone, key); err != nil {
+					return nil, err
+				}
+				if bs, ok := clone.(operator.BarrierSnapshotter); ok && hooks.OnSnapshot != nil {
+					onSnapshot := hooks.OnSnapshot
+					bs.SetBarrierSnapshot(func(id string, snap []byte, err error) {
+						if err != nil {
+							fmt.Printf("mailer: barrier snapshot failed for %s: %v\n", key, err)
+							return
+						}
+						onSnapshot(id, key, snap)
+					})
+				}
 			}
 			chain = append(chain, clone)
 		}
 		workers[w] = chain
 	}
-	return &KeyedStage{KeyBy: kb, workers: workers}
+	return &KeyedStage{KeyBy: kb, workers: workers}, nil
 }
 
 func (s *KeyedStage) Name() string {

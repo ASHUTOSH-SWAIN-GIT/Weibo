@@ -64,7 +64,10 @@ func runKeyedStage(t *testing.T, partitions int, proto *alignTestOp, records []t
 	t.Helper()
 
 	kb := operator.KeyBy(func(r types.Record) []byte { return r.Key }).WithPartitions(partitions)
-	stage := pipeline.NewKeyedStage(kb, []operator.Operator{proto}, nil, nil)
+	stage, err := pipeline.NewKeyedStage(kb, []operator.Operator{proto}, pipeline.StageHooks{})
+	if err != nil {
+		t.Fatalf("NewKeyedStage: %v", err)
+	}
 
 	in := make(chan types.Record, len(records))
 	for _, r := range records {
@@ -224,10 +227,15 @@ func TestKeyedStage_ClonesCreatedEagerlyWithCallback(t *testing.T) {
 	kb := operator.KeyBy(func(r types.Record) []byte { return r.Key }).WithPartitions(3)
 
 	var registered []operator.Operator
-	pipeline.NewKeyedStage(kb, []operator.Operator{proto}, func(op operator.Operator) int {
-		registered = append(registered, op)
-		return len(registered) - 1
-	}, nil)
+	_, err := pipeline.NewKeyedStage(kb, []operator.Operator{proto}, pipeline.StageHooks{
+		OnClone: func(op operator.Operator) int {
+			registered = append(registered, op)
+			return len(registered) - 1
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewKeyedStage: %v", err)
+	}
 
 	// Clones must exist before Run so checkpoint restore can happen
 	// between planning and execution.

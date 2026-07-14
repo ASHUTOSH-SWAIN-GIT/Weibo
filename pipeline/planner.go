@@ -7,6 +7,7 @@ import (
 	"github.com/ASHUTOSH-SWAIN-GIT/mailer/operator"
 	"github.com/ASHUTOSH-SWAIN-GIT/mailer/sink"
 	"github.com/ASHUTOSH-SWAIN-GIT/mailer/source"
+	"github.com/ASHUTOSH-SWAIN-GIT/mailer/state"
 )
 
 // PlanConfig is the input to BuildPlan.
@@ -19,6 +20,12 @@ type PlanConfig struct {
 	// DrainTimeout bounds the source offset flush on shutdown.
 	DrainTimeout time.Duration
 
+	// StageHooks are forwarded to the stages the planner builds.
+	StageHooks
+}
+
+// StageHooks are engine callbacks wired into stateful stages.
+type StageHooks struct {
 	// OnClone is called for every stateful operator clone a keyed
 	// stage creates, so the caller can register it for checkpointing.
 	// It returns the clone's global worker index ("worker-<idx>" in
@@ -30,6 +37,27 @@ type PlanConfig struct {
 	// snapshot point). key is the checkpoint-data key ("worker-<idx>"
 	// or "op-<idx>").
 	OnSnapshot func(checkpointID, key string, snapshot []byte)
+
+	// StateBackendFor creates the state backend for a stateful
+	// operator instance, keyed by its owner ID ("op-<i>" or
+	// "worker-<idx>"). Nil means operators keep their self-created
+	// default (in-memory) backends.
+	StateBackendFor func(ownerID string) (state.StateBackend, error)
+}
+
+// assignBackend injects an engine-created state backend into op when
+// both the operator and the configuration support it.
+func (h StageHooks) assignBackend(op operator.Operator, ownerID string) error {
+	sc, ok := op.(operator.StateConfigurable)
+	if !ok || h.StateBackendFor == nil {
+		return nil
+	}
+	b, err := h.StateBackendFor(ownerID)
+	if err != nil {
+		return fmt.Errorf("pipeline: state backend for %s: %w", ownerID, err)
+	}
+	sc.SetStateBackend(b)
+	return nil
 }
 
 // BuildPlan groups the flat operator list into execution stages:
@@ -88,7 +116,10 @@ func BuildPlan(cfg PlanConfig) ([]Stage, error) {
 			flush()
 			stateful, skip := takeStateful(cfg.Operators[i+1:])
 			i += skip
-			ks := NewKeyedStage(kb, stateful, cfg.OnClone, cfg.OnSnapshot)
+			ks, err := NewKeyedStage(kb, stateful, cfg.StageHooks)
+			if err != nil {
+				return nil, err
+			}
 			ks.StageName = fmt.Sprintf("keyed-%d", keyedCount)
 			keyedCount++
 			stages = append(stages, ks)
@@ -112,6 +143,9 @@ func BuildPlan(cfg PlanConfig) ([]Stage, error) {
 		// Channel-based operator outside a keyed stage (e.g. Window
 		// or Reduce without KeyBy): runs alone with the old model.
 		flush()
+		if err := cfg.assignBackend(op, fmt.Sprintf("op-%d", i)); err != nil {
+			return nil, err
+		}
 		// Wire the race-free barrier-time snapshot for top-level
 		// stateful operators too ("op-<idx>" in checkpoint data).
 		if bs, ok := op.(operator.BarrierSnapshotter); ok && cfg.OnSnapshot != nil {
