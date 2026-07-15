@@ -17,13 +17,17 @@ and references user logic **by name**:
 ```yaml
 pipeline:
   - type: map
-    ref: parseOrder      # a Go func registered under "parseOrder"
+    map: { ref: parseOrder }        # a Go func registered under "parseOrder"
   - type: keyBy
-    ref: byCustomer
-    partitions: 8
+    keyBy: { ref: byCustomer, partitions: 8 }
   - type: reduce
-    ref: sumAmount
+    reduce: { ref: sumAmount }
 ```
+
+Each operator is a discriminated union: `type` + a matching **typed
+config block**. No `map[string]any` anywhere — every component (source,
+each operator, sink) decodes into its own typed struct, and the strict
+decoder rejects fields that don't belong to that component.
 
 The user registers those functions in Go (a `workflow.Registry`), then
 loads + compiles + runs the YAML. The format never contains logic —
