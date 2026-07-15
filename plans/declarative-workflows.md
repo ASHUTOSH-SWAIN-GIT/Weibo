@@ -89,10 +89,19 @@ user Go — added in the compile phase, not the format.
   coerced exactly; DSN `${VAR}` expanded). `json` format serializes the
   declaratively-modified record.
 
-- **2.7/2.10 Compile operators + run**: `Registry` (typed
+- **2.10 Runtime compilation** (DONE): `workflow/compiler/runtime.go` —
+  `CompileRuntime(name, dataRoot, EnvSpec) (*mailer.StreamExecutionEnv, error)`
+  applies bufferSize/shutdownTimeout/checkpointing/state-backend, and
+  roots state + checkpoints in job-specific dirs
+  (`<dataRoot>/<name>/{state,checkpoints}`, name sanitized against
+  traversal) so two workflows never share a Pebble DB. Verified
+  behaviorally: a real pipeline run populates the isolated dirs and
+  writes a checkpoint.
+
+- **2.7/2.11 Compile operators + assemble + run**: `Registry` (typed
   `RegisterMap`/… + the built-ins, selected by the operator's
-  declarative config) → resolve refs → compile the pipeline →
-  assemble `*mailer.StreamExecutionEnv` → `Run`.
+  declarative config) → resolve refs → compile the pipeline → wire
+  CompileRuntime + CompileSource + operators + CompileSink → `Run`.
 - **2.4 Execute + tooling**: `workflow.Run(path, registry, ctx)`, a CLI
   entrypoint, round-trip example workflows for each connector.
 
