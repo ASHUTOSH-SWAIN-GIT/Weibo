@@ -49,14 +49,24 @@ user Go — added in the compile phase, not the format.
   yaml/json tags), a `Duration` type, `Parse`/`Load` (structural decode,
   strict on unknown fields), the spec doc, and example documents. No
   semantic validation, no compilation, no execution.
-- **2.2 Validate**: semantic checks the schema can't express — required
-  fields per source/sink type, `keyBy` precedes `window`/`reduce`,
-  window kind vs its size/slide/gap fields, exactly-once requires a
-  txn sink + exactly-once source, refs are non-empty, etc. Returns a
-  multierror pointing at document paths.
-- **2.3 Compile**: `Registry` (typed `RegisterMap`/`RegisterReduce`/… +
-  built-ins) → resolve refs → build `source.Source`, `[]operator`,
-  `sink.Sink`, and env config into a `*mailer.StreamExecutionEnv`.
+- **2.4 Validate** (DONE): offline semantic checks the schema can't
+  express — structural (version/name/ids/types), configuration
+  (brokers/topics/durations/dirs/positive intervals), pipeline ordering
+  (keyBy before reduce/window), and delivery-guarantee (exactly-once
+  requires the full source+sink+checkpoint+txn-id set). Accumulates all
+  problems into one `ValidationErrors`; opens no external connections
+  (only MkdirAll to confirm dirs are creatable). `workflow/validate.go`.
+- **2.5 JSON record model** (DONE): `workflow/record` — `JSONRecord`
+  (`map[string]any`) cached on `types.Record.Parsed`, with
+  `DecodeJSON`/`EncodeJSON` and dotted-path `GetField`/`SetField`/
+  `DeleteField`. Numbers decode as `json.Number` (exact, no float
+  rounding). This is the data model built-in field operators read and
+  modify.
+
+- **2.6 Compile**: `Registry` (typed `RegisterMap`/`RegisterReduce`/… +
+  built-ins that operate on `record.JSONRecord` fields) → resolve refs →
+  build `source.Source`, `[]operator`, `sink.Sink`, and env config into
+  a `*mailer.StreamExecutionEnv`.
 - **2.4 Execute + tooling**: `workflow.Run(path, registry, ctx)`, a CLI
   entrypoint, round-trip example workflows for each connector.
 
