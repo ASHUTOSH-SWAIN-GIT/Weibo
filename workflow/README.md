@@ -170,13 +170,24 @@ sink:
 sink:
   type: postgres
   postgres:
-    dsn: postgres://user:pass@host:5432/db
-    mapper: orderRowMapper   # registered RecordMapper ref
+    dsn: ${POSTGRES_DSN}     # ${VAR}/$VAR expanded from the environment
+    table: customer_totals   # single fixed table (no per-record tables)
+    mapping:                 # jsonField → column
+      customer_id: customer_id
+      payment.total: total_amount
     batchSize: 100
     flushInterval: 5s
     maxRetries: 3
     onError: drop
 ```
+
+The Postgres row mapping is fully declarative: a single fixed `table`
+and a `mapping` of JSON field paths to column names. A workflow cannot
+generate arbitrary table names per record, and table/column names are
+validated as safe SQL identifiers. Mapped numbers keep exact precision
+(json.Number → int64/float64); a missing field becomes SQL NULL; a
+nested object/array is stored as JSON. Constructing a Postgres sink
+opens its connection pool (unlike Kafka/test sinks, which are lazy).
 
 ## Parsing
 

@@ -61,16 +61,32 @@ func DecodeJSON(r types.Record) (JSONRecord, error) {
 	case map[string]any:
 		return JSONRecord(p), nil
 	}
-	if len(bytes.TrimSpace(r.Value)) == 0 {
+	return decodeJSONBytes(r.Value)
+}
+
+// decodeJSONBytes decodes raw JSON object bytes into a JSONRecord with
+// numbers as json.Number. Empty input yields an empty object.
+func decodeJSONBytes(data []byte) (JSONRecord, error) {
+	if len(bytes.TrimSpace(data)) == 0 {
 		return JSONRecord{}, nil
 	}
-	dec := json.NewDecoder(bytes.NewReader(r.Value))
+	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.UseNumber()
 	var jr JSONRecord
 	if err := dec.Decode(&jr); err != nil {
 		return nil, fmt.Errorf("record: decode json object: %w", err)
 	}
 	return jr, nil
+}
+
+// DeserializeJSON matches source.Deserializer's function shape: it
+// decodes a record's JSON value into a JSONRecord (numbers as
+// json.Number, consistent with DecodeJSON). Wire it into a Kafka source
+// with:
+//
+//	source.KafkaDeserialize(source.DeserializerFunc(record.DeserializeJSON))
+func DeserializeJSON(data []byte, _ map[string][]byte) (any, error) {
+	return decodeJSONBytes(data)
 }
 
 // EncodeJSON serializes a JSONRecord back to JSON bytes. json.Number

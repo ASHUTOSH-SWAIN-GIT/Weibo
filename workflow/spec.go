@@ -332,10 +332,18 @@ type TxnKafkaSinkSpec struct {
 // PostgresSinkSpec mirrors the PostgresSink options. The record→row
 // mapping is logic, so Mapper is a registered ref.
 type PostgresSinkSpec struct {
+	// DSN is the connection string. ${VAR} / $VAR are expanded from
+	// the environment at compile time.
 	DSN string `yaml:"dsn" json:"dsn"`
 
-	// Mapper names a registered RecordMapper. Required.
-	Mapper string `yaml:"mapper" json:"mapper"`
+	// Table is the single destination table (optionally schema.table).
+	// Fixed for the whole workflow — a workflow cannot generate
+	// per-record table names. Required.
+	Table string `yaml:"table" json:"table"`
+
+	// Mapping maps JSON field paths to column names
+	// (jsonField → column). Required and non-empty.
+	Mapping map[string]string `yaml:"mapping" json:"mapping"`
 
 	BatchSize     int      `yaml:"batchSize,omitempty" json:"batchSize,omitempty"`
 	FlushInterval Duration `yaml:"flushInterval,omitempty" json:"flushInterval,omitempty"`
