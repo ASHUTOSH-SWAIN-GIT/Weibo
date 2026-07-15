@@ -1,0 +1,53 @@
+# Exactly-once Kafka → keyed windowed aggregation → transactional Kafka.
+# Logic (parseOrder, isValidOrder, byCustomer, sumAmount) is referenced
+# by name and resolved against a registry at compile time.
+name: order-totals
+version: "1"
+
+env:
+  bufferSize: 2048
+  shutdownTimeout: 30s
+  checkpointing:
+    interval: 30s
+    dir: /var/lib/mailer/checkpoints
+  state:
+    backend: pebble
+    dir: /var/lib/mailer/state
+
+source:
+  type: kafka
+  kafka:
+    brokers: [localhost:9092]
+    topic: orders
+    groupID: order-totals
+    startFrom: earliest
+    exactlyOnce: true
+    deserialize: json
+    watermark:
+      maxOutOfOrderness: 1s
+      interval: 500ms
+
+pipeline:
+  - type: map
+    ref: parseOrder
+    label: parse
+  - type: filter
+    ref: isValidOrder
+  - type: keyBy
+    ref: byCustomer
+    partitions: 8
+  - type: window
+    window:
+      type: tumbling
+      size: 5m
+  - type: reduce
+    ref: sumAmount
+    label: running-total
+
+sink:
+  type: txnKafka
+  txnKafka:
+    brokers: [localhost:9092]
+    topic: order-totals
+    transactionalID: order-totals-pipeline
+    serialize: json
