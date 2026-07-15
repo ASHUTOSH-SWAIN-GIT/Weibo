@@ -16,6 +16,10 @@
 // execution are separate phases.
 package workflow
 
+// WorkflowSpec is an alias for Workflow — the name the compiler API
+// uses for a parsed workflow document.
+type WorkflowSpec = Workflow
+
 // Workflow is a complete declarative pipeline definition: the root of a
 // workflow YAML/JSON document.
 type Workflow struct {
@@ -184,73 +188,95 @@ type TLSSpec struct {
 //	  - type: window
 //	    window: { type: tumbling, size: 5m }
 type Operator struct {
-	// ID optionally names this operator (for cross-references and
-	// duplicate detection during validation). Optional and unique.
+	// ID names this operator (required and unique — used for graph
+	// nodes, error paths, and cross-references).
 	ID string `yaml:"id,omitempty" json:"id,omitempty"`
 
-	// Type is one of: map, filter, flatMap, process, keyBy, reduce, window.
+	// Type is one of the declarative operator kinds:
+	//   filter, selectFields, renameFields, setFields, keyBy, reduce,
+	//   window (fully declarative — no user code), or
+	//   map, flatMap, process (ref-based — require a function registry,
+	//   not compilable by the declarative compiler).
 	// It must match the single config block that is set.
 	Type string `yaml:"type" json:"type"`
 
-	Map     *MapConfig     `yaml:"map,omitempty" json:"map,omitempty"`
-	Filter  *FilterConfig  `yaml:"filter,omitempty" json:"filter,omitempty"`
-	FlatMap *FlatMapConfig `yaml:"flatMap,omitempty" json:"flatMap,omitempty"`
-	Process *ProcessConfig `yaml:"process,omitempty" json:"process,omitempty"`
-	KeyBy   *KeyByConfig   `yaml:"keyBy,omitempty" json:"keyBy,omitempty"`
-	Reduce  *ReduceConfig  `yaml:"reduce,omitempty" json:"reduce,omitempty"`
-	Window  *WindowConfig  `yaml:"window,omitempty" json:"window,omitempty"`
+	// Declarative built-ins (compilable without user code).
+	Filter       *FilterConfig `yaml:"filter,omitempty" json:"filter,omitempty"`
+	SelectFields *SelectConfig `yaml:"selectFields,omitempty" json:"selectFields,omitempty"`
+	RenameFields *RenameConfig `yaml:"renameFields,omitempty" json:"renameFields,omitempty"`
+	SetFields    *SetConfig    `yaml:"setFields,omitempty" json:"setFields,omitempty"`
+	KeyBy        *KeyByConfig  `yaml:"keyBy,omitempty" json:"keyBy,omitempty"`
+	Reduce       *ReduceConfig `yaml:"reduce,omitempty" json:"reduce,omitempty"`
+	Window       *WindowConfig `yaml:"window,omitempty" json:"window,omitempty"`
+
+	// Ref-based (need a registered Go function; not declaratively
+	// compilable yet).
+	Map     *RefConfig `yaml:"map,omitempty" json:"map,omitempty"`
+	FlatMap *RefConfig `yaml:"flatMap,omitempty" json:"flatMap,omitempty"`
+	Process *RefConfig `yaml:"process,omitempty" json:"process,omitempty"`
 }
 
-// MapConfig configures a map operator (1:1 transform).
-type MapConfig struct {
-	// Ref names the registered map function. "builtin:<name>" selects
-	// a built-in. Required.
-	Ref string `yaml:"ref" json:"ref"`
-	// Label is the metrics/dashboard label (defaults to "Map").
-	Label string `yaml:"label,omitempty" json:"label,omitempty"`
-	// Parallelism is the stateless worker count (order not preserved
-	// when > 1). 0 = 1 worker.
-	Parallelism int `yaml:"parallelism,omitempty" json:"parallelism,omitempty"`
+// RefConfig is a map/flatMap/process operator that references a
+// registered Go function by name. Compiling it requires a function
+// registry (not part of the declarative compiler).
+type RefConfig struct {
+	Ref         string `yaml:"ref" json:"ref"`
+	Label       string `yaml:"label,omitempty" json:"label,omitempty"`
+	Parallelism int    `yaml:"parallelism,omitempty" json:"parallelism,omitempty"`
 }
 
-// FilterConfig configures a filter operator (predicate).
+// FilterConfig keeps records where the value at Field satisfies
+// Operator against Value (declarative — no code).
+//
+//	filter: { field: status, operator: equals, value: completed }
 type FilterConfig struct {
-	Ref         string `yaml:"ref" json:"ref"`
-	Label       string `yaml:"label,omitempty" json:"label,omitempty"`
-	Parallelism int    `yaml:"parallelism,omitempty" json:"parallelism,omitempty"`
+	Field    string `yaml:"field" json:"field"`
+	Operator string `yaml:"operator" json:"operator"` // equals, greater_than, contains, exists, …
+	Value    any    `yaml:"value,omitempty" json:"value,omitempty"`
 }
 
-// FlatMapConfig configures a flatMap operator (1:many).
-type FlatMapConfig struct {
-	Ref         string `yaml:"ref" json:"ref"`
-	Label       string `yaml:"label,omitempty" json:"label,omitempty"`
-	Parallelism int    `yaml:"parallelism,omitempty" json:"parallelism,omitempty"`
+// SelectConfig keeps only the listed fields (projection).
+type SelectConfig struct {
+	Fields []string `yaml:"fields" json:"fields"`
 }
 
-// ProcessConfig configures a process operator (error-aware transform).
-type ProcessConfig struct {
-	Ref         string `yaml:"ref" json:"ref"`
-	Label       string `yaml:"label,omitempty" json:"label,omitempty"`
-	Parallelism int    `yaml:"parallelism,omitempty" json:"parallelism,omitempty"`
-	// OnError is the failure policy: "drop" (default), "dlq", or "fail".
-	OnError string `yaml:"onError,omitempty" json:"onError,omitempty"`
-	// DLQ is the dead-letter sink, used only when OnError == "dlq".
-	DLQ *SinkSpec `yaml:"dlq,omitempty" json:"dlq,omitempty"`
+// RenameConfig renames fields in order.
+type RenameConfig struct {
+	Renames []RenameSpec `yaml:"renames" json:"renames"`
 }
 
-// KeyByConfig configures a keyBy operator (partition by key selector).
+// RenameSpec moves a field from one dotted path to another.
+type RenameSpec struct {
+	From string `yaml:"from" json:"from"`
+	To   string `yaml:"to" json:"to"`
+}
+
+// SetConfig assigns constant values to fields.
+type SetConfig struct {
+	Sets []SetSpec `yaml:"sets" json:"sets"`
+}
+
+// SetSpec assigns a constant value to a dotted field path.
+type SetSpec struct {
+	Field string `yaml:"field" json:"field"`
+	Value any    `yaml:"value" json:"value"`
+}
+
+// KeyByConfig partitions the stream by a record field (declarative).
 type KeyByConfig struct {
-	// Ref names the registered key selector. Required.
-	Ref string `yaml:"ref" json:"ref"`
+	// Field is the dotted path whose value is the partition key. Required.
+	Field string `yaml:"field" json:"field"`
 	// Partitions is the keyed-worker count. 0 = SDK default (16).
 	Partitions int    `yaml:"partitions,omitempty" json:"partitions,omitempty"`
 	Label      string `yaml:"label,omitempty" json:"label,omitempty"`
 }
 
-// ReduceConfig configures a reduce operator (keyed aggregation).
+// ReduceConfig is a built-in keyed aggregation (declarative).
 type ReduceConfig struct {
-	// Ref names the registered reduce function. Required (after keyBy).
-	Ref   string `yaml:"ref" json:"ref"`
+	// Function is the built-in aggregation: "count" or "sum".
+	Function string `yaml:"function" json:"function"`
+	// Field is the numeric field to aggregate (required for "sum").
+	Field string `yaml:"field,omitempty" json:"field,omitempty"`
 	Label string `yaml:"label,omitempty" json:"label,omitempty"`
 }
 

@@ -28,25 +28,27 @@ source:
       interval: 500ms
 
 pipeline:
-  - type: map
-    map:
-      ref: parseOrder
-      label: parse
-  - type: filter
+  - id: completed-only
+    type: filter
     filter:
-      ref: isValidOrder
-  - type: keyBy
+      field: status
+      operator: equals
+      value: completed
+  - id: by-customer
+    type: keyBy
     keyBy:
-      ref: byCustomer
+      field: customer_id
       partitions: 8
-  - type: window
+  - id: window
+    type: window
     window:
       type: tumbling
       size: 5m
-  - type: reduce
+  - id: totals
+    type: reduce
     reduce:
-      ref: sumAmount
-      label: running-total
+      function: sum
+      field: amount
 
 sink:
   type: txnKafka

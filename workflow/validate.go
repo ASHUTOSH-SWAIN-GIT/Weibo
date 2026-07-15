@@ -60,9 +60,12 @@ var (
 	supportedVersions      = map[string]bool{"": true, "1": true}
 	supportedSourceTypes   = map[string]bool{"kafka": true, "slice": true, "generator": true}
 	supportedSinkTypes     = map[string]bool{"kafka": true, "txnKafka": true, "postgres": true, "stdout": true, "blackhole": true}
-	supportedOperatorTypes = map[string]bool{"map": true, "filter": true, "flatMap": true, "process": true, "keyBy": true, "reduce": true, "window": true}
+	supportedOperatorTypes = map[string]bool{
+		"filter": true, "selectFields": true, "renameFields": true, "setFields": true,
+		"keyBy": true, "reduce": true, "window": true,
+		"map": true, "flatMap": true, "process": true,
+	}
 	supportedWindowTypes   = map[string]bool{"tumbling": true, "sliding": true, "session": true}
-	supportedOnError       = map[string]bool{"": true, "drop": true, "dlq": true, "fail": true}
 
 	nameRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]*$`)
 )
@@ -90,17 +93,17 @@ func opPath(i int, op Operator) string {
 // configBlocks returns the names of the operator's set config blocks.
 func (o Operator) configBlocks() []string {
 	var b []string
-	if o.Map != nil {
-		b = append(b, "map")
-	}
 	if o.Filter != nil {
 		b = append(b, "filter")
 	}
-	if o.FlatMap != nil {
-		b = append(b, "flatMap")
+	if o.SelectFields != nil {
+		b = append(b, "selectFields")
 	}
-	if o.Process != nil {
-		b = append(b, "process")
+	if o.RenameFields != nil {
+		b = append(b, "renameFields")
+	}
+	if o.SetFields != nil {
+		b = append(b, "setFields")
 	}
 	if o.KeyBy != nil {
 		b = append(b, "keyBy")
@@ -110,6 +113,15 @@ func (o Operator) configBlocks() []string {
 	}
 	if o.Window != nil {
 		b = append(b, "window")
+	}
+	if o.Map != nil {
+		b = append(b, "map")
+	}
+	if o.FlatMap != nil {
+		b = append(b, "flatMap")
+	}
+	if o.Process != nil {
+		b = append(b, "process")
 	}
 	return b
 }
@@ -183,48 +195,62 @@ func (v *validator) configuration(wf *Workflow) {
 	for i, op := range wf.Pipeline {
 		path := opPath(i, op)
 		switch {
-		case op.Map != nil:
-			v.statelessConfig(path+".map", op.Map.Ref, op.Map.Parallelism)
 		case op.Filter != nil:
-			v.statelessConfig(path+".filter", op.Filter.Ref, op.Filter.Parallelism)
-		case op.FlatMap != nil:
-			v.statelessConfig(path+".flatMap", op.FlatMap.Ref, op.FlatMap.Parallelism)
-		case op.Process != nil:
-			v.statelessConfig(path+".process", op.Process.Ref, op.Process.Parallelism)
-			if !supportedOnError[op.Process.OnError] {
-				v.addf(path+".process.onError", "unsupported failure policy %q (drop|dlq|fail)", op.Process.OnError)
+			if op.Filter.Field == "" {
+				v.add(path+".filter.field", "a field is required")
 			}
-			if op.Process.OnError == "dlq" && op.Process.DLQ == nil {
-				v.add(path+".process.dlq", "a dlq sink is required when onError is \"dlq\"")
+			if op.Filter.Operator == "" {
+				v.add(path+".filter.operator", "an operator is required")
 			}
-			if op.Process.DLQ != nil {
-				v.sinkConfig(path+".process.dlq", *op.Process.DLQ)
+		case op.SelectFields != nil:
+			if len(op.SelectFields.Fields) == 0 {
+				v.add(path+".selectFields.fields", "at least one field is required")
+			}
+		case op.RenameFields != nil:
+			if len(op.RenameFields.Renames) == 0 {
+				v.add(path+".renameFields.renames", "at least one rename is required")
+			}
+		case op.SetFields != nil:
+			if len(op.SetFields.Sets) == 0 {
+				v.add(path+".setFields.sets", "at least one set is required")
 			}
 		case op.KeyBy != nil:
-			if op.KeyBy.Ref == "" {
-				v.add(path+".keyBy.ref", "a key selector ref is required")
+			if op.KeyBy.Field == "" {
+				v.add(path+".keyBy.field", "a key field is required")
 			}
 			if op.KeyBy.Partitions < 0 {
 				v.add(path+".keyBy.partitions", "partitions must be greater than zero")
 			}
 		case op.Reduce != nil:
-			if op.Reduce.Ref == "" {
-				v.add(path+".reduce.ref", "a reduce ref is required")
+			switch op.Reduce.Function {
+			case "count":
+			case "sum":
+				if op.Reduce.Field == "" {
+					v.add(path+".reduce.field", "sum requires a field")
+				}
+			case "":
+				v.add(path+".reduce.function", "a function is required (count or sum)")
+			default:
+				v.addf(path+".reduce.function", "unsupported reduce function %q (count or sum)", op.Reduce.Function)
 			}
 		case op.Window != nil:
 			v.windowConfig(path+".window", op.Window)
+		case op.Process != nil:
+			if op.Process.Ref == "" {
+				v.add(path+".process.ref", "a function ref is required")
+			}
+		case op.Map != nil:
+			if op.Map.Ref == "" {
+				v.add(path+".map.ref", "a function ref is required")
+			}
+		case op.FlatMap != nil:
+			if op.FlatMap.Ref == "" {
+				v.add(path+".flatMap.ref", "a function ref is required")
+			}
 		}
 	}
 }
 
-func (v *validator) statelessConfig(path, ref string, parallelism int) {
-	if ref == "" {
-		v.add(path+".ref", "a function ref is required")
-	}
-	if parallelism < 0 {
-		v.add(path+".parallelism", "parallelism must be greater than zero")
-	}
-}
 
 func (v *validator) envConfig(env *EnvSpec) {
 	if env == nil {
@@ -237,9 +263,9 @@ func (v *validator) envConfig(env *EnvSpec) {
 		if env.Checkpointing.Interval <= 0 {
 			v.add("env.checkpointing.interval", "checkpoint interval must be greater than zero")
 		}
-		if env.Checkpointing.Dir == "" {
-			v.add("env.checkpointing.dir", "a checkpoint directory is required")
-		} else {
+		// Dir is optional: the compiler derives a job-specific
+		// directory when it is omitted. If set, it must be creatable.
+		if env.Checkpointing.Dir != "" {
 			v.ensureDir("env.checkpointing.dir", env.Checkpointing.Dir)
 		}
 	}
@@ -247,9 +273,7 @@ func (v *validator) envConfig(env *EnvSpec) {
 		switch env.State.Backend {
 		case "memory":
 		case "pebble":
-			if env.State.Dir == "" {
-				v.add("env.state.dir", "a directory is required for the pebble backend")
-			} else {
+			if env.State.Dir != "" {
 				v.ensureDir("env.state.dir", env.State.Dir)
 			}
 		case "":

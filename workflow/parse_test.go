@@ -51,23 +51,21 @@ func TestLoad_YAML_OrderTotals(t *testing.T) {
 		t.Errorf("watermark: got %+v", k.Watermark)
 	}
 
-	if len(wf.Pipeline) != 5 {
-		t.Fatalf("pipeline: got %d operators, want 5", len(wf.Pipeline))
+	if len(wf.Pipeline) != 4 {
+		t.Fatalf("pipeline: got %d operators, want 4", len(wf.Pipeline))
 	}
 	// Each operator decodes into its own typed config block.
-	if m := wf.Pipeline[0]; m.Type != "map" || m.Map == nil || m.Map.Ref != "parseOrder" || m.Map.Label != "parse" {
-		t.Errorf("map op: got %+v", m)
+	if f := wf.Pipeline[0]; f.Type != "filter" || f.Filter == nil || f.Filter.Field != "status" ||
+		f.Filter.Operator != "equals" || f.Filter.Value != "completed" {
+		t.Errorf("filter op: got %+v", f.Filter)
 	}
-	if f := wf.Pipeline[1]; f.Type != "filter" || f.Filter == nil || f.Filter.Ref != "isValidOrder" {
-		t.Errorf("filter op: got %+v", f)
-	}
-	if k := wf.Pipeline[2]; k.Type != "keyBy" || k.KeyBy == nil || k.KeyBy.Ref != "byCustomer" || k.KeyBy.Partitions != 8 {
+	if k := wf.Pipeline[1]; k.Type != "keyBy" || k.KeyBy == nil || k.KeyBy.Field != "customer_id" || k.KeyBy.Partitions != 8 {
 		t.Errorf("keyBy op: got %+v", k)
 	}
-	if w := wf.Pipeline[3]; w.Type != "window" || w.Window == nil || w.Window.Type != "tumbling" || w.Window.Size.Std() != 5*time.Minute {
+	if w := wf.Pipeline[2]; w.Type != "window" || w.Window == nil || w.Window.Type != "tumbling" || w.Window.Size.Std() != 5*time.Minute {
 		t.Errorf("window op: got %+v", w)
 	}
-	if r := wf.Pipeline[4]; r.Type != "reduce" || r.Reduce == nil || r.Reduce.Ref != "sumAmount" {
+	if r := wf.Pipeline[3]; r.Type != "reduce" || r.Reduce == nil || r.Reduce.Function != "sum" || r.Reduce.Field != "amount" {
 		t.Errorf("reduce op: got %+v", r)
 	}
 
@@ -91,11 +89,11 @@ func TestLoad_JSON_Wordcount(t *testing.T) {
 	if wf.Source.Records[0].Value != "hello world" {
 		t.Errorf("record 0: got %+v", wf.Source.Records[0])
 	}
-	if len(wf.Pipeline) != 3 || wf.Pipeline[2].Reduce == nil || wf.Pipeline[2].Reduce.Ref != "builtin:count" {
+	if len(wf.Pipeline) != 2 || wf.Pipeline[1].Reduce == nil || wf.Pipeline[1].Reduce.Function != "count" {
 		t.Errorf("pipeline: got %+v", wf.Pipeline)
 	}
-	if wf.Pipeline[0].FlatMap == nil || wf.Pipeline[0].FlatMap.Ref != "splitWords" {
-		t.Errorf("flatMap op: got %+v", wf.Pipeline[0])
+	if wf.Pipeline[0].KeyBy == nil || wf.Pipeline[0].KeyBy.Field != "word" {
+		t.Errorf("keyBy op: got %+v", wf.Pipeline[0])
 	}
 	if wf.Sink.Type != "stdout" {
 		t.Errorf("sink: got %+v", wf.Sink)
@@ -122,11 +120,11 @@ pipeline:
   - type: map
     map: { ref: parse, parallelism: 4 }
   - type: keyBy
-    keyBy: { ref: byKey, partitions: 8 }
+    keyBy: { field: k, partitions: 8 }
   - type: window
     window: { type: sliding, size: 10m, slide: 1m }
   - type: reduce
-    reduce: { ref: sum }
+    reduce: { function: sum, field: amount }
 sink:
   type: txnKafka
   txnKafka: { brokers: [b1:9092], topic: out, transactionalID: t1 }
@@ -148,9 +146,9 @@ sink:
   },
   "pipeline": [
     { "type": "map", "map": { "ref": "parse", "parallelism": 4 } },
-    { "type": "keyBy", "keyBy": { "ref": "byKey", "partitions": 8 } },
+    { "type": "keyBy", "keyBy": { "field": "k", "partitions": 8 } },
     { "type": "window", "window": { "type": "sliding", "size": "10m", "slide": "1m" } },
-    { "type": "reduce", "reduce": { "ref": "sum" } }
+    { "type": "reduce", "reduce": { "function": "sum", "field": "amount" } }
   ],
   "sink": {
     "type": "txnKafka",
@@ -285,7 +283,7 @@ func TestRoundTrip_YAMLAndJSON(t *testing.T) {
 	if err != nil {
 		t.Fatalf("re-parse json: %v", err)
 	}
-	if fromJSON.Pipeline[3].Window.Size.Std() != 5*time.Minute {
-		t.Errorf("json round-trip lost window size: %s", fromJSON.Pipeline[3].Window.Size)
+	if fromJSON.Pipeline[2].Window.Size.Std() != 5*time.Minute {
+		t.Errorf("json round-trip lost window size: %s", fromJSON.Pipeline[2].Window.Size)
 	}
 }
