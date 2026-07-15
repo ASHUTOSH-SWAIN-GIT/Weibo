@@ -29,20 +29,24 @@ source:
 
 pipeline:
   - type: map
-    ref: parseOrder
-    label: parse
+    map:
+      ref: parseOrder
+      label: parse
   - type: filter
-    ref: isValidOrder
+    filter:
+      ref: isValidOrder
   - type: keyBy
-    ref: byCustomer
-    partitions: 8
+    keyBy:
+      ref: byCustomer
+      partitions: 8
   - type: window
     window:
       type: tumbling
       size: 5m
   - type: reduce
-    ref: sumAmount
-    label: running-total
+    reduce:
+      ref: sumAmount
+      label: running-total
 
 sink:
   type: txnKafka

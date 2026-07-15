@@ -22,6 +22,14 @@ against a registry at compile time. The document carries only which
 registered logic to wire where, plus pure configuration (brokers,
 topics, window sizes, checkpoint dirs, partition counts, …).
 
+```yaml
+pipeline:
+  - type: map
+    map: { ref: parseOrder }   # a Go func registered under "parseOrder"
+  - type: reduce
+    reduce: { ref: builtin:count }
+```
+
 A `builtin:<name>` ref (e.g. `builtin:count`) selects a built-in
 provided by the registry, so the simplest pipelines need no user Go.
 
@@ -88,36 +96,44 @@ source:
 
 ## `pipeline`
 
-An ordered list of steps. `type` selects the operator; other fields
-configure it.
+An ordered list of operators. Each operator is a **discriminated
+union**: `type` names the kind, and a matching **typed config block**
+(named after the kind) carries its configuration. There is no shared
+bag of fields — each kind decodes into its own struct, so a field that
+belongs to another kind, or is misspelled, is rejected rather than
+silently ignored. An optional `id` names the operator (must be unique).
 
-| `type` | Uses `ref` | Extra fields |
-|---|---|---|
-| `map` | map fn | `parallelism`, `label` |
-| `filter` | predicate | `parallelism`, `label` |
-| `flatMap` | flatmap fn | `parallelism`, `label` |
-| `process` | fn returning error | `parallelism`, `onError` (drop\|dlq\|fail), `dlq` |
-| `keyBy` | key selector | `partitions` (default 16) |
-| `reduce` | reduce fn | `label` (after keyBy) |
-| `window` | — | `window` block (after keyBy) |
+| `type` | Config block | Uses `ref` | Fields |
+|---|---|---|---|
+| `map` | `map` | map fn | `ref`, `label`, `parallelism` |
+| `filter` | `filter` | predicate | `ref`, `label`, `parallelism` |
+| `flatMap` | `flatMap` | flatmap fn | `ref`, `label`, `parallelism` |
+| `process` | `process` | fn returning error | `ref`, `parallelism`, `onError` (drop\|dlq\|fail), `dlq` |
+| `keyBy` | `keyBy` | key selector | `ref`, `partitions` (default 16) |
+| `reduce` | `reduce` | reduce fn | `ref`, `label` (after keyBy) |
+| `window` | `window` | — | window fields (after keyBy) |
 
 ```yaml
 pipeline:
   - type: map
-    ref: parseOrder
+    map:
+      ref: parseOrder
+      parallelism: 4        # order not preserved when > 1
   - type: keyBy
-    ref: byCustomer
-    partitions: 8
+    keyBy:
+      ref: byCustomer
+      partitions: 8
   - type: window
     window:
-      type: tumbling      # tumbling | sliding | session
-      size: 5m            # tumbling/sliding
-      slide: 1m           # sliding only (<= size)
-      gap: 30s            # session only
-      offset: 0s          # tumbling/sliding
-      idleTimeout: 0s     # fire remaining windows after inactivity
+      type: tumbling        # tumbling | sliding | session
+      size: 5m              # tumbling/sliding
+      slide: 1m             # sliding only (<= size)
+      gap: 30s              # session only
+      offset: 0s            # tumbling/sliding
+      idleTimeout: 0s       # fire remaining windows after inactivity
   - type: reduce
-    ref: sumAmount
+    reduce:
+      ref: sumAmount
 ```
 
 ## `sink`

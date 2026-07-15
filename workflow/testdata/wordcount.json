@@ -9,9 +9,9 @@
     ]
   },
   "pipeline": [
-    { "type": "flatMap", "ref": "splitWords" },
-    { "type": "keyBy", "ref": "byWord", "partitions": 4 },
-    { "type": "reduce", "ref": "builtin:count" }
+    { "type": "flatMap", "flatMap": { "ref": "splitWords" } },
+    { "type": "keyBy", "keyBy": { "ref": "byWord", "partitions": 4 } },
+    { "type": "reduce", "reduce": { "ref": "builtin:count" } }
   ],
   "sink": {
     "type": "stdout"

@@ -36,7 +36,7 @@ type Workflow struct {
 
 	// Pipeline is the ordered list of operators between source and
 	// sink. May be empty (source → sink passthrough).
-	Pipeline []StepSpec `yaml:"pipeline,omitempty" json:"pipeline,omitempty"`
+	Pipeline []Operator `yaml:"pipeline,omitempty" json:"pipeline,omitempty"`
 
 	// Sink is where results leave the pipeline. Required.
 	Sink SinkSpec `yaml:"sink" json:"sink"`
@@ -167,46 +167,95 @@ type TLSSpec struct {
 	InsecureSkipVerify bool   `yaml:"insecureSkipVerify,omitempty" json:"insecureSkipVerify,omitempty"`
 }
 
-// ---- Pipeline steps --------------------------------------------------------
+// ---- Pipeline operators ----------------------------------------------------
 
-// StepSpec is one operator in the pipeline. Type selects the operator
-// kind; the remaining fields carry that kind's configuration. Fields
-// not relevant to a given Type are ignored (validation flags misuse in
-// a later phase).
-type StepSpec struct {
+// Operator is one operator in the pipeline: a discriminated union.
+// Type names the operator kind and exactly one matching typed config
+// block carries its configuration. There is no shared bag of fields —
+// each kind decodes into its own typed struct, so a field that belongs
+// to another kind (or is misspelled) is rejected by the strict decoder
+// rather than silently ignored.
+//
+//	pipeline:
+//	  - type: map
+//	    map: { ref: parseOrder }
+//	  - type: keyBy
+//	    keyBy: { ref: byCustomer, partitions: 8 }
+//	  - type: window
+//	    window: { type: tumbling, size: 5m }
+type Operator struct {
+	// ID optionally names this operator (for cross-references and
+	// duplicate detection during validation). Optional and unique.
+	ID string `yaml:"id,omitempty" json:"id,omitempty"`
+
 	// Type is one of: map, filter, flatMap, process, keyBy, reduce, window.
+	// It must match the single config block that is set.
 	Type string `yaml:"type" json:"type"`
 
-	// Ref names the registered function implementing this operator's
-	// logic (map/filter/flatMap/process/reduce fn, or keyBy selector).
-	// A "builtin:<name>" ref selects a built-in provided by the
-	// registry. Not used by window.
-	Ref string `yaml:"ref,omitempty" json:"ref,omitempty"`
+	Map     *MapConfig     `yaml:"map,omitempty" json:"map,omitempty"`
+	Filter  *FilterConfig  `yaml:"filter,omitempty" json:"filter,omitempty"`
+	FlatMap *FlatMapConfig `yaml:"flatMap,omitempty" json:"flatMap,omitempty"`
+	Process *ProcessConfig `yaml:"process,omitempty" json:"process,omitempty"`
+	KeyBy   *KeyByConfig   `yaml:"keyBy,omitempty" json:"keyBy,omitempty"`
+	Reduce  *ReduceConfig  `yaml:"reduce,omitempty" json:"reduce,omitempty"`
+	Window  *WindowConfig  `yaml:"window,omitempty" json:"window,omitempty"`
+}
 
-	// Label is the dashboard/metrics label (defaults to the operator
-	// type name).
+// MapConfig configures a map operator (1:1 transform).
+type MapConfig struct {
+	// Ref names the registered map function. "builtin:<name>" selects
+	// a built-in. Required.
+	Ref string `yaml:"ref" json:"ref"`
+	// Label is the metrics/dashboard label (defaults to "Map").
 	Label string `yaml:"label,omitempty" json:"label,omitempty"`
-
-	// Partitions is the keyed-worker count for keyBy (SDK default 16).
-	Partitions int `yaml:"partitions,omitempty" json:"partitions,omitempty"`
-
-	// Parallelism is the worker count for a stateless operator
-	// (map/filter/flatMap/process). Order is not preserved when > 1.
+	// Parallelism is the stateless worker count (order not preserved
+	// when > 1). 0 = 1 worker.
 	Parallelism int `yaml:"parallelism,omitempty" json:"parallelism,omitempty"`
+}
 
-	// Window configures a window step (Type == "window").
-	Window *WindowSpec `yaml:"window,omitempty" json:"window,omitempty"`
+// FilterConfig configures a filter operator (predicate).
+type FilterConfig struct {
+	Ref         string `yaml:"ref" json:"ref"`
+	Label       string `yaml:"label,omitempty" json:"label,omitempty"`
+	Parallelism int    `yaml:"parallelism,omitempty" json:"parallelism,omitempty"`
+}
 
-	// OnError is the process-operator failure policy: "drop" (default),
-	// "dlq", or "fail". Only used by Type == "process".
+// FlatMapConfig configures a flatMap operator (1:many).
+type FlatMapConfig struct {
+	Ref         string `yaml:"ref" json:"ref"`
+	Label       string `yaml:"label,omitempty" json:"label,omitempty"`
+	Parallelism int    `yaml:"parallelism,omitempty" json:"parallelism,omitempty"`
+}
+
+// ProcessConfig configures a process operator (error-aware transform).
+type ProcessConfig struct {
+	Ref         string `yaml:"ref" json:"ref"`
+	Label       string `yaml:"label,omitempty" json:"label,omitempty"`
+	Parallelism int    `yaml:"parallelism,omitempty" json:"parallelism,omitempty"`
+	// OnError is the failure policy: "drop" (default), "dlq", or "fail".
 	OnError string `yaml:"onError,omitempty" json:"onError,omitempty"`
-
-	// DLQ is the dead-letter sink used when OnError == "dlq".
+	// DLQ is the dead-letter sink, used only when OnError == "dlq".
 	DLQ *SinkSpec `yaml:"dlq,omitempty" json:"dlq,omitempty"`
 }
 
-// WindowSpec configures a window operator.
-type WindowSpec struct {
+// KeyByConfig configures a keyBy operator (partition by key selector).
+type KeyByConfig struct {
+	// Ref names the registered key selector. Required.
+	Ref string `yaml:"ref" json:"ref"`
+	// Partitions is the keyed-worker count. 0 = SDK default (16).
+	Partitions int    `yaml:"partitions,omitempty" json:"partitions,omitempty"`
+	Label      string `yaml:"label,omitempty" json:"label,omitempty"`
+}
+
+// ReduceConfig configures a reduce operator (keyed aggregation).
+type ReduceConfig struct {
+	// Ref names the registered reduce function. Required (after keyBy).
+	Ref   string `yaml:"ref" json:"ref"`
+	Label string `yaml:"label,omitempty" json:"label,omitempty"`
+}
+
+// WindowConfig configures a window operator (after keyBy).
+type WindowConfig struct {
 	// Type is "tumbling", "sliding", or "session".
 	Type string `yaml:"type" json:"type"`
 
@@ -225,6 +274,8 @@ type WindowSpec struct {
 	// IdleTimeout fires remaining windows after this much inactivity
 	// (WindowWithIdleTimeout). 0 = disabled.
 	IdleTimeout Duration `yaml:"idleTimeout,omitempty" json:"idleTimeout,omitempty"`
+
+	Label string `yaml:"label,omitempty" json:"label,omitempty"`
 }
 
 // ---- Sink ------------------------------------------------------------------

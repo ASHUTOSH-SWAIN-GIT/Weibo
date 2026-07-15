@@ -2,6 +2,7 @@ package workflow_test
 
 import (
 	"encoding/json"
+	"reflect"
 	"testing"
 	"time"
 
@@ -50,30 +51,24 @@ func TestLoad_YAML_OrderTotals(t *testing.T) {
 		t.Errorf("watermark: got %+v", k.Watermark)
 	}
 
-	wantSteps := []struct {
-		typ, ref string
-	}{
-		{"map", "parseOrder"},
-		{"filter", "isValidOrder"},
-		{"keyBy", "byCustomer"},
-		{"window", ""},
-		{"reduce", "sumAmount"},
+	if len(wf.Pipeline) != 5 {
+		t.Fatalf("pipeline: got %d operators, want 5", len(wf.Pipeline))
 	}
-	if len(wf.Pipeline) != len(wantSteps) {
-		t.Fatalf("pipeline: got %d steps, want %d", len(wf.Pipeline), len(wantSteps))
+	// Each operator decodes into its own typed config block.
+	if m := wf.Pipeline[0]; m.Type != "map" || m.Map == nil || m.Map.Ref != "parseOrder" || m.Map.Label != "parse" {
+		t.Errorf("map op: got %+v", m)
 	}
-	for i, w := range wantSteps {
-		if wf.Pipeline[i].Type != w.typ || wf.Pipeline[i].Ref != w.ref {
-			t.Errorf("step %d: got {%s %s}, want {%s %s}",
-				i, wf.Pipeline[i].Type, wf.Pipeline[i].Ref, w.typ, w.ref)
-		}
+	if f := wf.Pipeline[1]; f.Type != "filter" || f.Filter == nil || f.Filter.Ref != "isValidOrder" {
+		t.Errorf("filter op: got %+v", f)
 	}
-	if p := wf.Pipeline[2]; p.Partitions != 8 {
-		t.Errorf("keyBy partitions: got %d", p.Partitions)
+	if k := wf.Pipeline[2]; k.Type != "keyBy" || k.KeyBy == nil || k.KeyBy.Ref != "byCustomer" || k.KeyBy.Partitions != 8 {
+		t.Errorf("keyBy op: got %+v", k)
 	}
-	win := wf.Pipeline[3].Window
-	if win == nil || win.Type != "tumbling" || win.Size.Std() != 5*time.Minute {
-		t.Errorf("window: got %+v", win)
+	if w := wf.Pipeline[3]; w.Type != "window" || w.Window == nil || w.Window.Type != "tumbling" || w.Window.Size.Std() != 5*time.Minute {
+		t.Errorf("window op: got %+v", w)
+	}
+	if r := wf.Pipeline[4]; r.Type != "reduce" || r.Reduce == nil || r.Reduce.Ref != "sumAmount" {
+		t.Errorf("reduce op: got %+v", r)
 	}
 
 	if wf.Sink.Type != "txnKafka" || wf.Sink.TxnKafka == nil ||
@@ -96,11 +91,112 @@ func TestLoad_JSON_Wordcount(t *testing.T) {
 	if wf.Source.Records[0].Value != "hello world" {
 		t.Errorf("record 0: got %+v", wf.Source.Records[0])
 	}
-	if len(wf.Pipeline) != 3 || wf.Pipeline[2].Ref != "builtin:count" {
+	if len(wf.Pipeline) != 3 || wf.Pipeline[2].Reduce == nil || wf.Pipeline[2].Reduce.Ref != "builtin:count" {
 		t.Errorf("pipeline: got %+v", wf.Pipeline)
+	}
+	if wf.Pipeline[0].FlatMap == nil || wf.Pipeline[0].FlatMap.Ref != "splitWords" {
+		t.Errorf("flatMap op: got %+v", wf.Pipeline[0])
 	}
 	if wf.Sink.Type != "stdout" {
 		t.Errorf("sink: got %+v", wf.Sink)
+	}
+}
+
+// Success condition for typed component configs: the same workflow,
+// written once as YAML and once as JSON, decodes into byte-for-byte
+// identical typed specs.
+func TestParse_YAMLAndJSON_IdenticalSpec(t *testing.T) {
+	yamlDoc := `
+name: totals
+env:
+  bufferSize: 512
+  checkpointing: { interval: 10s, dir: /ckpt }
+source:
+  type: kafka
+  kafka:
+    brokers: [b1:9092, b2:9092]
+    topic: in
+    exactlyOnce: true
+    watermark: { maxOutOfOrderness: 2s }
+pipeline:
+  - type: map
+    map: { ref: parse, parallelism: 4 }
+  - type: keyBy
+    keyBy: { ref: byKey, partitions: 8 }
+  - type: window
+    window: { type: sliding, size: 10m, slide: 1m }
+  - type: reduce
+    reduce: { ref: sum }
+sink:
+  type: txnKafka
+  txnKafka: { brokers: [b1:9092], topic: out, transactionalID: t1 }
+`
+	jsonDoc := `{
+  "name": "totals",
+  "env": {
+    "bufferSize": 512,
+    "checkpointing": { "interval": "10s", "dir": "/ckpt" }
+  },
+  "source": {
+    "type": "kafka",
+    "kafka": {
+      "brokers": ["b1:9092", "b2:9092"],
+      "topic": "in",
+      "exactlyOnce": true,
+      "watermark": { "maxOutOfOrderness": "2s" }
+    }
+  },
+  "pipeline": [
+    { "type": "map", "map": { "ref": "parse", "parallelism": 4 } },
+    { "type": "keyBy", "keyBy": { "ref": "byKey", "partitions": 8 } },
+    { "type": "window", "window": { "type": "sliding", "size": "10m", "slide": "1m" } },
+    { "type": "reduce", "reduce": { "ref": "sum" } }
+  ],
+  "sink": {
+    "type": "txnKafka",
+    "txnKafka": { "brokers": ["b1:9092"], "topic": "out", "transactionalID": "t1" }
+  }
+}`
+
+	fromYAML, err := workflow.ParseYAML([]byte(yamlDoc))
+	if err != nil {
+		t.Fatalf("ParseYAML: %v", err)
+	}
+	fromJSON, err := workflow.ParseJSON([]byte(jsonDoc))
+	if err != nil {
+		t.Fatalf("ParseJSON: %v", err)
+	}
+	if !reflect.DeepEqual(fromYAML, fromJSON) {
+		t.Errorf("YAML and JSON produced different specs:\nYAML: %+v\nJSON: %+v", fromYAML, fromJSON)
+	}
+}
+
+// A field that belongs to a different operator kind (or is misspelled)
+// inside a component's typed config block is rejected, not ignored.
+func TestParse_RejectsMisplacedComponentField(t *testing.T) {
+	// "partitions" belongs to keyBy, not map — map's typed config has
+	// no such field, so it must be rejected.
+	misplaced := `
+source: { type: stdout }
+pipeline:
+  - type: map
+    map: { ref: parse, partitions: 8 }
+sink: { type: stdout }
+`
+	if _, err := workflow.ParseYAML([]byte(misplaced)); err == nil {
+		t.Error("expected rejection of 'partitions' inside a map config")
+	}
+
+	// Misspelled field inside a typed config block.
+	typo := `
+source: { type: stdout }
+pipeline:
+  - type: window
+    window: { type: tumbling, siZe: 5m }
+sink: { type: stdout }
+`
+	if _, err := workflow.ParseYAML([]byte(typo)); err == nil {
+		t.Error("expected rejection of misspelled 'siZe' inside a window config")
 	}
 }
 
