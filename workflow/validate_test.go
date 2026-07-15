@@ -36,10 +36,10 @@ func validEO(t *testing.T) *workflow.Workflow {
 			},
 		},
 		Pipeline: []workflow.Operator{
-			{ID: "parse", Type: "map", Map: &workflow.MapConfig{Ref: "parseOrder"}},
-			{ID: "key", Type: "keyBy", KeyBy: &workflow.KeyByConfig{Ref: "byCustomer", Partitions: 8}},
+			{ID: "filter", Type: "filter", Filter: &workflow.FilterConfig{Field: "status", Operator: "equals", Value: "completed"}},
+			{ID: "key", Type: "keyBy", KeyBy: &workflow.KeyByConfig{Field: "customer_id", Partitions: 8}},
 			{ID: "win", Type: "window", Window: &workflow.WindowConfig{Type: "tumbling", Size: workflow.Duration(300e9)}},
-			{ID: "totals", Type: "reduce", Reduce: &workflow.ReduceConfig{Ref: "sum"}},
+			{ID: "totals", Type: "reduce", Reduce: &workflow.ReduceConfig{Function: "sum", Field: "amount"}},
 		},
 		Sink: workflow.SinkSpec{
 			Type: "txnKafka",
@@ -106,7 +106,7 @@ func TestValidate_UnsupportedTypes(t *testing.T) {
 func TestValidate_TypeConfigMismatch(t *testing.T) {
 	wf := validEO(t)
 	// type says map, but a keyBy block is set instead.
-	wf.Pipeline[0] = workflow.Operator{ID: "x", Type: "map", KeyBy: &workflow.KeyByConfig{Ref: "k"}}
+	wf.Pipeline[0] = workflow.Operator{ID: "x", Type: "map", KeyBy: &workflow.KeyByConfig{Field: "k"}}
 	msg := errmsg(t, wf)
 	mustContain(t, msg, "does not match config block")
 }
@@ -130,12 +130,11 @@ func TestValidate_WindowDurations(t *testing.T) {
 	mustContain(t, errmsg(t, wf2), "window size must be greater than zero")
 }
 
-func TestValidate_PartitionsAndParallelism(t *testing.T) {
+func TestValidate_Partitions(t *testing.T) {
 	wf := validEO(t)
 	wf.Pipeline[1].KeyBy.Partitions = -1
-	wf.Pipeline[0].Map.Parallelism = -4
 	msg := errmsg(t, wf)
-	mustContain(t, msg, "partitions must be greater than zero", "parallelism must be greater than zero")
+	mustContain(t, msg, "partitions must be greater than zero")
 }
 
 func TestValidate_CheckpointInterval(t *testing.T) {
@@ -162,8 +161,8 @@ func TestValidate_PipelineOrdering_KeyByBeforeReduce(t *testing.T) {
 	wf := validEO(t)
 	// Reorder so reduce comes before any keyBy.
 	wf.Pipeline = []workflow.Operator{
-		{ID: "totals", Type: "reduce", Reduce: &workflow.ReduceConfig{Ref: "sum"}},
-		{ID: "key", Type: "keyBy", KeyBy: &workflow.KeyByConfig{Ref: "k"}},
+		{ID: "totals", Type: "reduce", Reduce: &workflow.ReduceConfig{Function: "count"}},
+		{ID: "key", Type: "keyBy", KeyBy: &workflow.KeyByConfig{Field: "k"}},
 	}
 	msg := errmsg(t, wf)
 	mustContain(t, msg, `pipeline[0] "totals"`, "reduce requires a keyBy before it")
@@ -172,8 +171,8 @@ func TestValidate_PipelineOrdering_KeyByBeforeReduce(t *testing.T) {
 func TestValidate_PipelineOrdering_WindowBeforeReduce(t *testing.T) {
 	wf := validEO(t)
 	wf.Pipeline = []workflow.Operator{
-		{ID: "key", Type: "keyBy", KeyBy: &workflow.KeyByConfig{Ref: "k"}},
-		{ID: "totals", Type: "reduce", Reduce: &workflow.ReduceConfig{Ref: "sum"}},
+		{ID: "key", Type: "keyBy", KeyBy: &workflow.KeyByConfig{Field: "k"}},
+		{ID: "totals", Type: "reduce", Reduce: &workflow.ReduceConfig{Function: "count"}},
 		{ID: "win", Type: "window", Window: &workflow.WindowConfig{Type: "tumbling", Size: workflow.Duration(60e9)}},
 	}
 	msg := errmsg(t, wf)
@@ -204,7 +203,7 @@ func TestValidate_ReportsMultipleErrorsTogether(t *testing.T) {
 	wf.Env.Checkpointing.Interval = 0                  // checkpoint interval
 	wf.Sink.TxnKafka.TransactionalID = ""              // txn id
 	wf.Pipeline = []workflow.Operator{                 // reduce before keyBy
-		{ID: "totals", Type: "reduce", Reduce: &workflow.ReduceConfig{Ref: "sum"}},
+		{ID: "totals", Type: "reduce", Reduce: &workflow.ReduceConfig{Function: "count"}},
 	}
 
 	msg := errmsg(t, wf)

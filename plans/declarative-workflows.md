@@ -98,10 +98,21 @@ user Go — added in the compile phase, not the format.
   behaviorally: a real pipeline run populates the isolated dirs and
   writes a checkpoint.
 
-- **2.7/2.11 Compile operators + assemble + run**: `Registry` (typed
-  `RegisterMap`/… + the built-ins, selected by the operator's
-  declarative config) → resolve refs → compile the pipeline → wire
-  CompileRuntime + CompileSource + operators + CompileSink → `Run`.
+- **2.11 Workflow compiler** (DONE): `workflow/compiler/compiler.go` —
+  `Compiler{Connections, BaseDataDir}.Compile(*WorkflowSpec) →
+  *mailer.StreamExecutionEnv` (and `CompileWorkflow → CompiledWorkflow`
+  with graph + delivery guarantee). Order: validate → resolve
+  connections (`${VAR}`) → source → runtime env → operators → sink.
+  Operators are now **fully declarative** (no registry): filter
+  (field/op/value), selectFields, renameFields, setFields, keyBy (by
+  field), reduce (count/sum), window. Ref-based map/flatMap/process are
+  rejected (no function registry). Produces a complete pipeline without
+  starting it.
+
+Note: the operator schema changed from ref-based (2.3) to declarative in
+2.11, because the compiler API carries no function registry — logic must
+be expressible as config. map/flatMap/process remain in the schema as
+ref-based but are not compilable declaratively.
 - **2.4 Execute + tooling**: `workflow.Run(path, registry, ctx)`, a CLI
   entrypoint, round-trip example workflows for each connector.
 
