@@ -63,10 +63,18 @@ user Go — added in the compile phase, not the format.
   rounding). This is the data model built-in field operators read and
   modify.
 
-- **2.6 Compile**: `Registry` (typed `RegisterMap`/`RegisterReduce`/… +
-  built-ins that operate on `record.JSONRecord` fields) → resolve refs →
-  build `source.Source`, `[]operator`, `sink.Sink`, and env config into
-  a `*mailer.StreamExecutionEnv`.
+- **2.6 Built-in stateless operators** (DONE): `workflow/operators` —
+  declarative filter (9 comparison ops), select_fields, rename_fields,
+  set_fields. Each `BuildX(cfg)` returns an ordinary Mailer function
+  (`func(Record) bool` / `func(Record) Record`) over the JSON record
+  model, so a YAML operator behaves like a hand-written SDK function.
+  Robust numeric coercion (json.Number-aware) makes YAML-int and
+  JSON-float configs behave identically.
+
+- **2.7 Compile**: `Registry` (typed `RegisterMap`/`RegisterReduce`/… +
+  the built-ins above, selected by the operator's declarative config) →
+  resolve refs → build `source.Source`, `[]operator`, `sink.Sink`, and
+  env config into a `*mailer.StreamExecutionEnv`.
 - **2.4 Execute + tooling**: `workflow.Run(path, registry, ctx)`, a CLI
   entrypoint, round-trip example workflows for each connector.
 
