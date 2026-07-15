@@ -317,8 +317,11 @@ func (v *validator) sinkConfig(path string, snk SinkSpec) {
 		if snk.Postgres.DSN == "" {
 			v.add(path+".postgres.dsn", "a dsn is required")
 		}
-		if snk.Postgres.Mapper == "" {
-			v.add(path+".postgres.mapper", "a record-mapper ref is required")
+		if snk.Postgres.Table == "" {
+			v.add(path+".postgres.table", "a table is required")
+		}
+		if len(snk.Postgres.Mapping) == 0 {
+			v.add(path+".postgres.mapping", "a non-empty field→column mapping is required")
 		}
 	case "stdout", "blackhole":
 		// no configuration

@@ -71,10 +71,28 @@ user Go — added in the compile phase, not the format.
   Robust numeric coercion (json.Number-aware) makes YAML-int and
   JSON-float configs behave identically.
 
-- **2.7 Compile**: `Registry` (typed `RegisterMap`/`RegisterReduce`/… +
-  the built-ins above, selected by the operator's declarative config) →
-  resolve refs → build `source.Source`, `[]operator`, `sink.Sink`, and
-  env config into a `*mailer.StreamExecutionEnv`.
+- **2.8 Source compilation** (DONE): `workflow/compiler/source.go` —
+  `CompileSource(SourceSpec) (source.Source, error)` maps Kafka config
+  to the functional options (brokers/topic/groupID/startFrom/
+  deserialize/watermarks/exactlyOnce/commitBatch/fetch/SASL/TLS) and
+  builds slice/generator test sources from inline records. Constructs
+  only, never connects: parallel Kafka (which dials at construction) is
+  rejected; consumer-group readers are lazy. `json` format wires
+  `record.DeserializeJSON`.
+
+- **2.9 Sink compilation** (DONE): `workflow/compiler/sink.go` —
+  `CompileSink(SinkSpec) (sink.Sink, error)` for kafka (acks/serialize/
+  retries/failure-policy/SASL/TLS), transactional_kafka, postgres,
+  stdout, blackhole. Postgres is fully declarative: fixed `table` +
+  `field→column` mapping compiled into a `RecordMapper` (no per-record
+  tables; table/column names validated as safe SQL identifiers; numbers
+  coerced exactly; DSN `${VAR}` expanded). `json` format serializes the
+  declaratively-modified record.
+
+- **2.7/2.10 Compile operators + run**: `Registry` (typed
+  `RegisterMap`/… + the built-ins, selected by the operator's
+  declarative config) → resolve refs → compile the pipeline →
+  assemble `*mailer.StreamExecutionEnv` → `Run`.
 - **2.4 Execute + tooling**: `workflow.Run(path, registry, ctx)`, a CLI
   entrypoint, round-trip example workflows for each connector.
 
