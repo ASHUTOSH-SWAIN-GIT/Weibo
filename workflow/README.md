@@ -187,7 +187,47 @@ wf, err := workflow.Load("pipeline.yaml")   // dispatches on .yaml/.yml/.json
 
 Parsing is **strict**: unknown keys are rejected (typo protection) and
 durations are validated. It does not check that the document is a
-runnable pipeline — required fields, `keyBy` ordering, exactly-once
-consistency, and ref existence are checked in the validation phase.
+runnable pipeline — that is validation.
+
+## Validation
+
+```go
+if err := workflow.Validate(wf); err != nil {
+    log.Fatal(err) // every problem, reported together
+}
+```
+
+`Validate` runs entirely offline — it opens **no** Kafka, Postgres, or
+Pebble connection (its only side effect is creating the configured
+state/checkpoint directories to confirm they can be created). An
+invalid workflow therefore never reaches the runtime. It accumulates
+**all** problems into one error:
+
+```
+Workflow validation failed:
+  - pipeline[2] "totals": reduce requires a keyBy before it
+  - env.checkpointing.interval: checkpoint interval must be greater than zero
+  - sink.txnKafka.transactionalID: a transactional id is required for transactional Kafka
+```
+
+Checks:
+
+- **Structural** — supported version; valid, present workflow name;
+  source and sink present and of supported type; operator ids present
+  and unique; every operator's config block matches its type.
+- **Configuration** — Kafka brokers non-empty and topic present
+  (source and sink); window durations valid per kind (size/slide/gap);
+  parallelism and keyBy partitions not negative; checkpoint interval
+  positive; state/checkpoint directories creatable; a txnKafka sink has
+  a transactional id.
+- **Pipeline ordering** — `keyBy` before `reduce`/`window`; `window`
+  before the aggregation that consumes it. (Only stateless operators
+  *can* set `parallelism` — that's guaranteed by the schema, since the
+  field exists only on stateless config blocks.)
+- **Delivery guarantee** — if either the source declares
+  `exactlyOnce: true` or the sink is `txnKafka`, the full set is
+  required: exactly-once Kafka source **+** txnKafka sink **+**
+  checkpointing enabled **+** a stable transactional id. A
+  half-configured exactly-once pipeline is rejected before it can run.
 
 See `testdata/` for complete example documents.
