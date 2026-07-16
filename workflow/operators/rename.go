@@ -15,12 +15,12 @@ type FieldRename struct {
 
 // RenameConfig configures a built-in rename: apply each rename in order.
 //
-//	- id: normalize
-//	  type: rename_fields
-//	  config:
-//	    renames:
-//	      - { from: cust_id, to: customer_id }
-//	      - { from: amt, to: payment.amount }
+//   - id: normalize
+//     type: rename_fields
+//     config:
+//     renames:
+//   - { from: cust_id, to: customer_id }
+//   - { from: amt, to: payment.amount }
 type RenameConfig struct {
 	Renames []FieldRename `yaml:"renames" json:"renames"`
 }

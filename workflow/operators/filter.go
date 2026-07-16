@@ -10,12 +10,12 @@ import (
 // FilterConfig configures a built-in filter: keep records where the
 // value at Field satisfies Operator against Value.
 //
-//	- id: completed-orders
-//	  type: filter
-//	  config:
-//	    field: status
-//	    operator: equals
-//	    value: completed
+//   - id: completed-orders
+//     type: filter
+//     config:
+//     field: status
+//     operator: equals
+//     value: completed
 type FilterConfig struct {
 	Field    string `yaml:"field" json:"field"`
 	Operator string `yaml:"operator" json:"operator"`

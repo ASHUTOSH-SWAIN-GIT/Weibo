@@ -383,10 +383,14 @@ func TestExactlyOnce_KeyedStateMultiPartition(t *testing.T) {
 					occurrences := 0
 					var once sync.Once
 					env.WithCheckpointHook(func(step checkpoint.Step, id string) checkpoint.HookAction {
-						if step != halt { return checkpoint.HookContinue }
+						if step != halt {
+							return checkpoint.HookContinue
+						}
 						occurrences++
-						if occurrences < occ { return checkpoint.HookContinue }
-						once.Do(func() { go func() { time.Sleep(20*time.Millisecond); cancel() }() })
+						if occurrences < occ {
+							return checkpoint.HookContinue
+						}
+						once.Do(func() { go func() { time.Sleep(20 * time.Millisecond); cancel() }() })
 						return checkpoint.HookHalt
 					})
 				}
@@ -403,15 +407,22 @@ func TestExactlyOnce_KeyedStateMultiPartition(t *testing.T) {
 			for p := 0; p < eoParts; p++ {
 				key := "key-" + strconv.Itoa(p)
 				v, ok := last[key]
-				if !ok { t.Errorf("key %s: no committed output", key); continue }
+				if !ok {
+					t.Errorf("key %s: no committed output", key)
+					continue
+				}
 				if got := binary.BigEndian.Uint64(v); got != eoPerPart {
 					t.Errorf("key %s: final count %d, want %d", key, got, eoPerPart)
 				}
 			}
 			final, err := storage.LoadLatestCompleted()
-			if err != nil || final == nil { t.Fatalf("no completed checkpoint after recovery: %v", err) }
+			if err != nil || final == nil {
+				t.Fatalf("no completed checkpoint after recovery: %v", err)
+			}
 			offs := checkpointOffsets(storage)
-			if len(offs) != eoParts { t.Errorf("expected offsets for %d partitions, got %v", eoParts, offs) }
+			if len(offs) != eoParts {
+				t.Errorf("expected offsets for %d partitions, got %v", eoParts, offs)
+			}
 			for p := 0; p < eoParts; p++ {
 				if offs[strconv.Itoa(p)] != eoPerPart {
 					t.Errorf("partition %d: final checkpointed offset %d, want %d", p, offs[strconv.Itoa(p)], eoPerPart)

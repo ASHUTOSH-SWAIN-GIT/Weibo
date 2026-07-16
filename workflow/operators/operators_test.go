@@ -93,8 +93,8 @@ func TestFilter_AllOperators(t *testing.T) {
 // and a JSON config (float64) for the same threshold behave identically.
 func TestFilter_YAMLIntAndJSONFloatParity(t *testing.T) {
 	r := rec(`{"amount":100}`)
-	yamlCfg := operators.BuildFilter(operators.FilterConfig{Field: "amount", Operator: "greater_than_or_equal", Value: 100})       // YAML → int
-	jsonCfg := operators.BuildFilter(operators.FilterConfig{Field: "amount", Operator: "greater_than_or_equal", Value: 100.0})     // JSON → float64
+	yamlCfg := operators.BuildFilter(operators.FilterConfig{Field: "amount", Operator: "greater_than_or_equal", Value: 100})   // YAML → int
+	jsonCfg := operators.BuildFilter(operators.FilterConfig{Field: "amount", Operator: "greater_than_or_equal", Value: 100.0}) // JSON → float64
 	if yamlCfg(r) != jsonCfg(r) || !yamlCfg(r) {
 		t.Errorf("YAML-int and JSON-float configs diverged: yaml=%v json=%v", yamlCfg(r), jsonCfg(r))
 	}

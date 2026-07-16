@@ -36,7 +36,7 @@ type CheckpointData struct {
 	Operators map[string][]byte `json:"operators"` // operator index -> state bytes
 	Source    map[string][]byte `json:"source"`    // source-specific offset data
 	Status    Status            `json:"status,omitempty"`
-	TxnID     string            `json:"txn_id,omitempty"` // sink transactional id (diagnostics)
+	TxnID     string            `json:"txn_id,omitempty"`     // sink transactional id (diagnostics)
 	StateDirs map[string]string `json:"state_dirs,omitempty"` // ownerID -> relative path
 }
 

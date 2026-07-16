@@ -16,12 +16,12 @@ type FieldSet struct {
 // SetConfig configures a built-in set_fields: assign each field in order
 // (creating nested objects as needed).
 //
-//	- id: tag
-//	  type: set_fields
-//	  config:
-//	    sets:
-//	      - { field: source, value: web }
-//	      - { field: flags.processed, value: true }
+//   - id: tag
+//     type: set_fields
+//     config:
+//     sets:
+//   - { field: source, value: web }
+//   - { field: flags.processed, value: true }
 type SetConfig struct {
 	Sets []FieldSet `yaml:"sets" json:"sets"`
 }
