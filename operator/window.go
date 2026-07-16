@@ -36,12 +36,12 @@ const (
 //
 // State layout in the backend:
 //   - records:   ListState(windowRecordsNS), keyed by windowKey.String()
-//                ("<recordKey>/<start>/<end>"); each entry is one
-//                serialized record. Window bounds are recovered from the
-//                key, so the set of open windows is exactly Keys().
+//     ("<recordKey>/<start>/<end>"); each entry is one
+//     serialized record. Window bounds are recovered from the
+//     key, so the set of open windows is exactly Keys().
 //   - watermark: ValueState(windowWatermarkNS)["wm"] — 8-byte UnixNano.
-//                A RAM working copy (currentWatermark) serves the
-//                per-record late-drop check without a backend read.
+//     A RAM working copy (currentWatermark) serves the
+//     per-record late-drop check without a backend read.
 type WindowOperator struct {
 	Assigner    window.WindowAssigner
 	IdleTimeout time.Duration

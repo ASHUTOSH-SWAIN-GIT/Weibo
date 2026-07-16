@@ -11,12 +11,12 @@ import (
 // only the listed fields, dropping everything else. Fields are dotted
 // paths, so nested fields can be projected too.
 //
-//	- id: output-fields
-//	  type: select_fields
-//	  config:
-//	    fields:
-//	      - customer_id
-//	      - amount
+//   - id: output-fields
+//     type: select_fields
+//     config:
+//     fields:
+//   - customer_id
+//   - amount
 type SelectConfig struct {
 	Fields []string `yaml:"fields" json:"fields"`
 }

@@ -59,10 +59,10 @@ func TestGetField_NestedPaths(t *testing.T) {
 		{"customer.id", "c-1", true},
 		{"customer.name", "Ada", true},
 		{"address.country", "UK", true},
-		{"customer.missing", nil, false},   // absent leaf
-		{"customer.id.deep", nil, false},   // traverse through a string
-		{"nope.here", nil, false},          // absent intermediate
-		{"tags.0", nil, false},             // arrays aren't path-indexable
+		{"customer.missing", nil, false}, // absent leaf
+		{"customer.id.deep", nil, false}, // traverse through a string
+		{"nope.here", nil, false},        // absent intermediate
+		{"tags.0", nil, false},           // arrays aren't path-indexable
 	}
 	for _, c := range cases {
 		got, ok := record.GetField(jr, c.path)
