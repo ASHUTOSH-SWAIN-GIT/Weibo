@@ -189,6 +189,9 @@ sink:
     mapping:                 # jsonField → column
       customer_id: customer_id
       payment.total: total_amount
+    mode: upsert             # insert | upsert
+    conflictColumns: [customer_id]
+    updateColumns: [total_amount]  # optional; default = non-conflict mapped columns
     batchSize: 100
     flushInterval: 5s
     maxRetries: 3
@@ -202,6 +205,9 @@ validated as safe SQL identifiers. Mapped numbers keep exact precision
 (json.Number → int64/float64); a missing field becomes SQL NULL; a
 nested object/array is stored as JSON. Constructing a Postgres sink
 opens its connection pool (unlike Kafka/test sinks, which are lazy).
+`mode: upsert` compiles to `INSERT ... ON CONFLICT ... DO UPDATE`;
+conflict/update columns must be safe identifiers and present in the
+declarative mapping.
 
 ## Parsing
 

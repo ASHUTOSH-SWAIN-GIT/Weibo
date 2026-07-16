@@ -75,7 +75,8 @@ building blocks, not arbitrary code.
   stdout, blackhole. Postgres is fully declarative: fixed `table` +
   `field→column` mapping compiled into a `RecordMapper` (no per-record
   tables; table/column names validated as safe SQL identifiers; numbers
-  coerced exactly; DSN `${VAR}` expanded). `json` format serializes the
+  coerced exactly; DSN `${VAR}` expanded; optional `mode: upsert` emits
+  `INSERT ... ON CONFLICT ... DO UPDATE`). `json` format serializes the
   declaratively-modified record.
 
 - **2.10 Runtime compilation** (DONE): `workflow/compiler/runtime.go` —

@@ -65,7 +65,7 @@ var (
 		"keyBy": true, "reduce": true, "window": true,
 		"map": true, "flatMap": true, "process": true,
 	}
-	supportedWindowTypes   = map[string]bool{"tumbling": true, "sliding": true, "session": true}
+	supportedWindowTypes = map[string]bool{"tumbling": true, "sliding": true, "session": true}
 
 	nameRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]*$`)
 )
@@ -251,7 +251,6 @@ func (v *validator) configuration(wf *Workflow) {
 	}
 }
 
-
 func (v *validator) envConfig(env *EnvSpec) {
 	if env == nil {
 		return
@@ -347,6 +346,32 @@ func (v *validator) sinkConfig(path string, snk SinkSpec) {
 		if len(snk.Postgres.Mapping) == 0 {
 			v.add(path+".postgres.mapping", "a non-empty field→column mapping is required")
 		}
+		switch snk.Postgres.Mode {
+		case "", "insert":
+			if len(snk.Postgres.ConflictColumns) > 0 || len(snk.Postgres.UpdateColumns) > 0 {
+				v.add(path+".postgres.mode", "conflict/update columns require upsert mode")
+			}
+		case "upsert":
+			if len(snk.Postgres.ConflictColumns) == 0 {
+				v.add(path+".postgres.conflictColumns", "upsert requires at least one conflict column")
+			}
+		default:
+			v.addf(path+".postgres.mode", "unsupported postgres mode %q (insert or upsert)", snk.Postgres.Mode)
+		}
+		mapped := map[string]bool{}
+		for _, col := range snk.Postgres.Mapping {
+			mapped[col] = true
+		}
+		for _, col := range snk.Postgres.ConflictColumns {
+			if !mapped[col] {
+				v.addf(path+".postgres.conflictColumns", "conflict column %q is not present in mapping", col)
+			}
+		}
+		for _, col := range snk.Postgres.UpdateColumns {
+			if !mapped[col] {
+				v.addf(path+".postgres.updateColumns", "update column %q is not present in mapping", col)
+			}
+		}
 	case "stdout", "blackhole":
 		// no configuration
 	}
@@ -389,7 +414,7 @@ func (v *validator) windowConfig(path string, w *WindowConfig) {
 // operator structurally cannot carry it, so there is no runtime check.
 
 func (v *validator) pipeline(wf *Workflow) {
-	sawKeyBy := false      // a keyBy has appeared at all
+	sawKeyBy := false         // a keyBy has appeared at all
 	sawReduceInGroup := false // a reduce has appeared since the last keyBy
 
 	for i, op := range wf.Pipeline {

@@ -60,7 +60,7 @@ Where results leave the pipeline. A Sink receives processed Records and writes t
 |--------|-------------|
 | `KafkaSink` | Produces to a Kafka topic (SASL/TLS, batch writes, serializer); at-least-once |
 | `TxnKafkaSink` | Transactional Kafka producer for end-to-end exactly-once (franz-go, per-checkpoint transactions) |
-| `PostgresSink` | Batch inserts into Postgres tables (pgx, retry, full mapper) |
+| `PostgresSink` | Batch inserts/upserts into Postgres tables (pgx, retry, full mapper) |
 | `StdoutSink` | Prints records to stdout (debugging) |
 | `BlackholeSink` | Discards everything (benchmarking) |
 
@@ -329,6 +329,12 @@ sink:
   type: postgres
   postgres:
     dsn: ${POSTGRES_DSN}
+    table: customer_totals
+    mapping:
+      customer.id: customer_id
+      sum: total_amount
+    mode: upsert
+    conflictColumns: [customer_id]
 ```
 
 The runner resolves those placeholders at compile time and does not
@@ -401,7 +407,7 @@ All originally planned phases are implemented:
 - ✅ **Core pipeline** — Record, fluent Stream API, Map/Filter/FlatMap/Process, sources and sinks.
 - ✅ **Stateful processing** — per-key state, Reduce, `Process` with failure policies + DLQ.
 - ✅ **Windowing & watermarks** — tumbling/sliding/session windows, bounded out-of-orderness watermarks, late-record dropping.
-- ✅ **Kafka & Postgres connectors** — multi-partition Kafka source (consumer groups, SASL/TLS, deserializers, per-partition offset checkpointing), Kafka + Postgres sinks with batching, retries, serializers.
+- ✅ **Kafka & Postgres connectors** — multi-partition Kafka source (consumer groups, SASL/TLS, deserializers, per-partition offset checkpointing), Kafka + Postgres sinks with batching, retries, serializers, and Postgres upserts.
 - ✅ **Checkpointing & recovery** — barrier-based snapshots, file storage, restore of operator state + per-partition source offsets on restart.
 - ✅ **Keyed parallelism** — `WithPartitions(n)`: router → N stateful workers with cloned operators and isolated state; barriers/watermarks broadcast and re-aligned so checkpoints stay consistent.
 - ✅ **Stage-based execution & backpressure** — operators grouped into stages, direct function-call chaining inside a stage, bounded edges between stages, `WithParallelism(n)` for stateless workers, two-phase graceful shutdown.
@@ -409,7 +415,7 @@ All originally planned phases are implemented:
 - ✅ **End-to-end exactly-once (Kafka → Kafka)** — coordinated two-phase checkpoints: barrier-aligned source offsets, synchronous operator snapshots at barrier passage, transactional sink (`TxnKafkaSink` on franz-go) with per-checkpoint transaction markers for crash recovery. See Delivery Guarantees.
 - ✅ **Durable state backend (Pebble)** — per-worker disk-backed LSM state selected via `WithStateBackend`; Reduce accumulators and Window records/watermark both live in the backend, so state is bounded by disk, not RAM. Native hard-link checkpoints make checkpoint cost scale with changed data, not total state. See State above.
 
-Up next (roughly in order): idempotent-upsert Postgres sink, allowed-lateness + side outputs for late data, multi-stream joins, typed `Stream[T]` API.
+Up next (roughly in order): allowed-lateness + side outputs for late data, multi-stream joins, typed `Stream[T]` API.
 
 ---
 

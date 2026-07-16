@@ -54,6 +54,9 @@ func NewPostgresSink(opts ...PostgresSinkOption) *PostgresSink {
 	if cfg.mapper == nil {
 		panic("mailer/sink: PostgresSink requires PostgresMapper(...)")
 	}
+	if err := cfg.validateWriteMode(); err != nil {
+		panic(fmt.Sprintf("mailer/sink: %v", err))
+	}
 
 	pool, err := pgxpool.New(context.Background(), cfg.dsn)
 	if err != nil {
@@ -209,7 +212,14 @@ func (p *PostgresSink) insertBatch(ctx context.Context, rows []pendingRow) error
 // using a single multi-value INSERT, retrying on failure. After all retries
 // are exhausted, the failure policy is applied to each row.
 func (p *PostgresSink) insertGroupWithRetry(ctx context.Context, table string, columns []string, rows []pendingRow) error {
-	query := buildInsertQuery(table, columns, len(rows))
+	query := buildPostgresWriteQuery(postgresWriteQuery{
+		Table:           table,
+		Columns:         columns,
+		RowCount:        len(rows),
+		Mode:            p.cfg.mode,
+		ConflictColumns: p.cfg.conflictCols,
+		UpdateColumns:   p.cfg.updateCols,
+	})
 
 	args := make([]any, 0, len(rows)*len(columns))
 	for _, row := range rows {
@@ -242,24 +252,51 @@ func (p *PostgresSink) insertGroupWithRetry(ctx context.Context, table string, c
 	return nil
 }
 
-// buildInsertQuery constructs a multi-value INSERT statement.
-// Example: INSERT INTO "orders" ("order_id","customer","amount") VALUES ($1,$2,$3),($4,$5,$6)
-func buildInsertQuery(table string, columns []string, rowCount int) string {
-	quotedCols := make([]string, len(columns))
-	for i, c := range columns {
+type postgresWriteQuery struct {
+	Table           string
+	Columns         []string
+	RowCount        int
+	Mode            PostgresWriteMode
+	ConflictColumns []string
+	UpdateColumns   []string
+}
+
+// BuildPostgresWriteQuery constructs the SQL used by PostgresSink.
+// It is exported for tests and SQL inspection; callers should still use
+// NewPostgresSink for actual writes.
+func BuildPostgresWriteQuery(table string, columns []string, rowCount int, mode PostgresWriteMode, conflictColumns, updateColumns []string) string {
+	return buildPostgresWriteQuery(postgresWriteQuery{
+		Table:           table,
+		Columns:         columns,
+		RowCount:        rowCount,
+		Mode:            mode,
+		ConflictColumns: conflictColumns,
+		UpdateColumns:   updateColumns,
+	})
+}
+
+// buildPostgresWriteQuery constructs a multi-value INSERT/UPSERT statement.
+// Example: INSERT INTO "orders" ("order_id","amount") VALUES ($1,$2)
+// ON CONFLICT ("order_id") DO UPDATE SET "amount"=EXCLUDED."amount"
+func buildPostgresWriteQuery(q postgresWriteQuery) string {
+	if q.Mode == "" {
+		q.Mode = PostgresInsert
+	}
+	quotedCols := make([]string, len(q.Columns))
+	for i, c := range q.Columns {
 		quotedCols[i] = fmt.Sprintf(`"%s"`, c)
 	}
 
 	var sb strings.Builder
-	fmt.Fprintf(&sb, `INSERT INTO "%s" (%s) VALUES `, table, strings.Join(quotedCols, ","))
+	fmt.Fprintf(&sb, `INSERT INTO "%s" (%s) VALUES `, q.Table, strings.Join(quotedCols, ","))
 
 	placeholder := 1
-	for i := 0; i < rowCount; i++ {
+	for i := 0; i < q.RowCount; i++ {
 		if i > 0 {
 			sb.WriteString(",")
 		}
 		sb.WriteString("(")
-		for j := range columns {
+		for j := range q.Columns {
 			if j > 0 {
 				sb.WriteString(",")
 			}
@@ -267,6 +304,41 @@ func buildInsertQuery(table string, columns []string, rowCount int) string {
 			placeholder++
 		}
 		sb.WriteString(")")
+	}
+
+	if q.Mode == PostgresUpsert {
+		sb.WriteString(" ON CONFLICT (")
+		for i, col := range q.ConflictColumns {
+			if i > 0 {
+				sb.WriteString(",")
+			}
+			fmt.Fprintf(&sb, `"%s"`, col)
+		}
+		sb.WriteString(")")
+
+		updates := q.UpdateColumns
+		if len(updates) == 0 {
+			conflicts := map[string]bool{}
+			for _, col := range q.ConflictColumns {
+				conflicts[col] = true
+			}
+			for _, col := range q.Columns {
+				if !conflicts[col] {
+					updates = append(updates, col)
+				}
+			}
+		}
+		if len(updates) == 0 {
+			sb.WriteString(" DO NOTHING")
+		} else {
+			sb.WriteString(" DO UPDATE SET ")
+			for i, col := range updates {
+				if i > 0 {
+					sb.WriteString(",")
+				}
+				fmt.Fprintf(&sb, `"%s"=EXCLUDED."%s"`, col, col)
+			}
+		}
 	}
 
 	return sb.String()

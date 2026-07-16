@@ -366,6 +366,16 @@ type PostgresSinkSpec struct {
 	// (jsonField → column). Required and non-empty.
 	Mapping map[string]string `yaml:"mapping" json:"mapping"`
 
+	// Mode is "insert" or "upsert". Empty = insert.
+	Mode string `yaml:"mode,omitempty" json:"mode,omitempty"`
+
+	// ConflictColumns is the ON CONFLICT target for upsert mode.
+	ConflictColumns []string `yaml:"conflictColumns,omitempty" json:"conflictColumns,omitempty"`
+
+	// UpdateColumns are set to EXCLUDED values on conflict. Empty in
+	// upsert mode updates every non-conflict inserted column.
+	UpdateColumns []string `yaml:"updateColumns,omitempty" json:"updateColumns,omitempty"`
+
 	BatchSize     int      `yaml:"batchSize,omitempty" json:"batchSize,omitempty"`
 	FlushInterval Duration `yaml:"flushInterval,omitempty" json:"flushInterval,omitempty"`
 	MaxRetries    int      `yaml:"maxRetries,omitempty" json:"maxRetries,omitempty"`
