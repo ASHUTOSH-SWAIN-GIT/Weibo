@@ -1,0 +1,34 @@
+name: postgres-order-totals
+version: "1"
+
+source:
+  type: kafka
+  kafka:
+    brokers: [localhost:9092]
+    topic: orders
+    groupID: postgres-order-totals
+    startFrom: earliest
+    deserialize: json
+    sasl:
+      mechanism: plain
+      username: ${KAFKA_USERNAME}
+      password: ${KAFKA_PASSWORD}
+
+pipeline:
+  - id: completed
+    type: filter
+    filter: {field: status, operator: equals, value: completed}
+  - id: by-customer
+    type: keyBy
+    keyBy: {field: customer.id, partitions: 8}
+  - id: totals
+    type: reduce
+    reduce: {function: sum, field: amount}
+
+sink:
+  type: postgres
+  postgres:
+    dsn: ${POSTGRES_DSN}
+    table: customer_totals
+    mapping:
+      sum: total_amount

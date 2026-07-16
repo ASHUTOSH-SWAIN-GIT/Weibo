@@ -1,19 +1,14 @@
 // Package workflow defines a declarative format for Mailer pipelines.
 //
-// A workflow document (YAML or JSON) describes a pipeline's shape and
-// configuration — source, ordered operators, sink, and environment
-// settings — mirroring the fluent SDK in mailer/stream.go. It is
-// compiled into the same SDK objects and run by the same engine.
+// A workflow document (YAML or JSON) describes a pipeline's source,
+// ordered operators, sink, and runtime settings. Supported built-in
+// operators are fully declarative over the JSON record model: filters,
+// field projection/rename/set, key-by-field, count/sum reduce, and
+// windows compile into the same SDK objects as hand-written Go pipelines.
 //
-// Logic by reference. Transformation logic (map/filter/reduce
-// functions, key selectors) is Go code and cannot live in YAML. Steps
-// therefore reference logic by name (the Ref field); the names are
-// resolved against a registry at compile time (a later phase). The
-// document itself carries only topology and pure configuration.
-//
-// Phase 2.1 provides the schema and structural parsing only. Semantic
-// validation, ref resolution, compilation to SDK objects, and
-// execution are separate phases.
+// Arbitrary Go transforms (map/flatMap/process refs) remain in the
+// schema for a future registry, but the declarative compiler rejects
+// them today.
 package workflow
 
 // WorkflowSpec is an alias for Workflow — the name the compiler API

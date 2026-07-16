@@ -1,0 +1,26 @@
+name: order-totals
+version: "1"
+
+source:
+  type: generator
+  records:
+    - key: order-1
+      value: '{"customer":{"id":"c1"},"status":"completed","amount":10}'
+    - key: order-2
+      value: '{"customer":{"id":"c1"},"status":"pending","amount":15}'
+    - key: order-3
+      value: '{"customer":{"id":"c2"},"status":"completed","amount":7}'
+
+pipeline:
+  - id: completed
+    type: filter
+    filter: {field: status, operator: equals, value: completed}
+  - id: by-customer
+    type: keyBy
+    keyBy: {field: customer.id, partitions: 1}
+  - id: totals
+    type: reduce
+    reduce: {function: sum, field: amount}
+
+sink:
+  type: stdout
