@@ -222,6 +222,40 @@ func TestKeyedStage_SinglePartitionStillWorks(t *testing.T) {
 	}
 }
 
+func TestKeyedStage_RekeysRecordsWithSelectedKey(t *testing.T) {
+	proto := &alignTestOp{}
+	kb := operator.KeyBy(func(r types.Record) []byte { return r.Value }).WithPartitions(2)
+	stage, err := pipeline.NewKeyedStage(kb, []operator.Operator{proto}, pipeline.StageHooks{})
+	if err != nil {
+		t.Fatalf("NewKeyedStage: %v", err)
+	}
+
+	in := make(chan types.Record, 2)
+	in <- types.Record{Key: []byte("order-1"), Value: []byte("customer-1")}
+	in <- types.Record{Key: []byte("order-2"), Value: []byte("customer-1")}
+	close(in)
+
+	out := make(chan types.Record, 2)
+	errc := make(chan error, 1)
+	go func() { errc <- stage.Run(context.Background(), context.Background(), in, out) }()
+
+	var got [][]byte
+	for r := range out {
+		got = append(got, append([]byte(nil), r.Key...))
+	}
+	if err := <-errc; err != nil {
+		t.Fatalf("stage.Run returned error: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("expected 2 records, got %d", len(got))
+	}
+	for i, key := range got {
+		if string(key) != "customer-1" {
+			t.Fatalf("record %d kept source key %q, want selected key customer-1", i, key)
+		}
+	}
+}
+
 func TestKeyedStage_ClonesCreatedEagerlyWithCallback(t *testing.T) {
 	proto := &alignTestOp{}
 	kb := operator.KeyBy(func(r types.Record) []byte { return r.Key }).WithPartitions(3)

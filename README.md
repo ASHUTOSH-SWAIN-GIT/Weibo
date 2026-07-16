@@ -314,8 +314,9 @@ access is on the roadmap.
 
 Common pipelines can also be defined in YAML/JSON and run without Go
 code. The declarative path supports built-in JSON-field filters,
-projection/rename/set, key-by-field, count/sum reduce, windows, sources,
-sinks, state, checkpointing, and environment-backed secrets.
+projection/rename/set, key-by-field keyed state, count/sum reduce,
+windows, sources, sinks, state, checkpointing, and environment-backed
+secrets.
 
 ```sh
 go run ./cmd/mailer-workflow --file examples/workflows/order-totals.yaml

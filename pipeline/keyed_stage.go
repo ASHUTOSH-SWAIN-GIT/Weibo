@@ -124,7 +124,9 @@ func (s *KeyedStage) Run(runCtx, hardCtx context.Context, in <-chan types.Record
 				}
 				continue
 			}
-			if sendRecord(stageCtx, workerIns[s.KeyBy.Route(r)], r) != nil {
+			key := s.KeyBy.SelectKey(r)
+			r.Key = append([]byte(nil), key...)
+			if sendRecord(stageCtx, workerIns[s.KeyBy.RouteKey(key)], r) != nil {
 				return
 			}
 		}

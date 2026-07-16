@@ -63,9 +63,19 @@ func (op *KeyByOperator) Process(in <-chan types.Record, out chan<- types.Record
 	}
 }
 
-// Route hashes the record key and returns the target worker index.
+// SelectKey extracts the key used by the keyed stage. The router writes this
+// key onto the record before downstream stateful operators process it.
+func (op *KeyByOperator) SelectKey(r types.Record) []byte {
+	return op.KeySelector(r)
+}
+
+// Route hashes the selected key and returns the target worker index.
 func (op *KeyByOperator) Route(r types.Record) int {
-	key := op.KeySelector(r)
+	return op.RouteKey(op.SelectKey(r))
+}
+
+// RouteKey hashes key and returns the target worker index.
+func (op *KeyByOperator) RouteKey(key []byte) int {
 	if len(key) == 0 || op.Partitions <= 1 {
 		return 0
 	}
