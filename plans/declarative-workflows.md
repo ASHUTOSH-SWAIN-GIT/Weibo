@@ -6,22 +6,20 @@ Goal: define and run common Mailer pipelines from YAML/JSON instead of Go.
 workflow.yaml → Parse → Validate → Compile → Execute
 ```
 
-## The load-bearing design decision: logic-by-reference
+## The load-bearing design decision: declarative built-ins
 
-Map/Filter/FlatMap/Process/Reduce and KeyBy selectors all take **Go
-closures** (`func(Record) Record`, `func(accum []byte, curr Record) []byte`,
-…). Closures cannot be serialized to YAML, and Mailer is a library, not
-a DSL runtime. So the declarative format expresses **topology + config**
-and references user logic **by name**:
+The initial design considered logic-by-reference for every transform,
+but the shipped compiler is intentionally narrower and more portable:
+common operators are declarative built-ins over the JSON record model.
+The workflow file expresses topology plus config, and the compiler turns
+that config into ordinary Mailer SDK objects.
 
 ```yaml
 pipeline:
-  - type: map
-    map: { ref: parseOrder }        # a Go func registered under "parseOrder"
   - type: keyBy
-    keyBy: { ref: byCustomer, partitions: 8 }
+    keyBy: { field: customer.id, partitions: 8 }
   - type: reduce
-    reduce: { ref: sumAmount }
+    reduce: { function: sum, field: amount }
 ```
 
 Each operator is a discriminated union: `type` + a matching **typed
@@ -29,19 +27,10 @@ config block**. No `map[string]any` anywhere — every component (source,
 each operator, sink) decodes into its own typed struct, and the strict
 decoder rejects fields that don't belong to that component.
 
-The user registers those functions in Go (a `workflow.Registry`), then
-loads + compiles + runs the YAML. The format never contains logic —
-only which registered logic to wire where, plus everything that IS pure
-config (brokers, topics, window sizes, checkpoint dirs, partition
-counts, failure policies).
-
-Consequence: a workflow is portable config over a fixed set of
-registered building blocks — not arbitrary code. Pipelines that need
-novel logic register a new named function; they don't edit a DSL.
-
-A small set of **built-in refs** (e.g. `builtin:count`, `builtin:passthrough`,
-key-by-record-key) will let the simplest pipelines run with zero
-user Go — added in the compile phase, not the format.
+Ref-based `map`/`flatMap`/`process` remain in the schema for a future
+function registry, but the current declarative compiler rejects them.
+Consequence: a workflow is portable config over a fixed set of built-in
+building blocks, not arbitrary code.
 
 ## Phase breakdown
 
@@ -113,8 +102,19 @@ Note: the operator schema changed from ref-based (2.3) to declarative in
 2.11, because the compiler API carries no function registry — logic must
 be expressible as config. map/flatMap/process remain in the schema as
 ref-based but are not compilable declaratively.
-- **2.4 Execute + tooling**: `workflow.Run(path, registry, ctx)`, a CLI
-  entrypoint, round-trip example workflows for each connector.
+- **2.12 Secret and environment resolution** (DONE):
+  `workflow/secrets` provides `SecretResolver` plus environment-backed
+  `${VAR}` resolution for sensitive fields such as Postgres DSN and
+  Kafka SASL credentials. Resolved secrets are kept out of errors,
+  pipeline descriptions, and dashboard metadata.
+- **2.13 Integration tests** (DONE): `test/workflow` verifies parse,
+  validation, compilation, execution parity with SDK pipelines,
+  memory/Pebble parity, window restore behavior, exactly-once
+  validation, secret redaction, isolated state dirs, and fuzz targets.
+- **2.14 Runner + CLI** (DONE): `workflow/runner` exposes
+  `CompileFile`/`RunFile`, `cmd/mailer-workflow` runs YAML/JSON files
+  with `--dry-run`, `--describe`, `--data-dir`, and examples live under
+  `examples/workflows/`.
 
 ## Scope of 2.1 (this deliverable)
 

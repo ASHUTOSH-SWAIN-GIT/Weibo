@@ -1,0 +1,20 @@
+name: wordcount
+version: "1"
+
+source:
+  type: generator
+  records:
+    - {key: hello, value: '{"word":"hello"}'}
+    - {key: mailer, value: '{"word":"mailer"}'}
+    - {key: hello, value: '{"word":"hello"}'}
+
+pipeline:
+  - id: by-word
+    type: keyBy
+    keyBy: {field: word, partitions: 1}
+  - id: count
+    type: reduce
+    reduce: {function: count}
+
+sink:
+  type: stdout

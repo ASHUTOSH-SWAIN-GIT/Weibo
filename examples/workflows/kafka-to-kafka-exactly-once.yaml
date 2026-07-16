@@ -1,0 +1,41 @@
+name: kafka-order-totals-eo
+version: "1"
+
+env:
+  checkpointing:
+    interval: 30s
+  state:
+    backend: pebble
+
+source:
+  type: kafka
+  kafka:
+    brokers: [localhost:9092]
+    topic: orders
+    groupID: kafka-order-totals-eo
+    startFrom: earliest
+    exactlyOnce: true
+    deserialize: json
+    sasl:
+      mechanism: plain
+      username: ${KAFKA_USERNAME}
+      password: ${KAFKA_PASSWORD}
+
+pipeline:
+  - id: completed
+    type: filter
+    filter: {field: status, operator: equals, value: completed}
+  - id: by-customer
+    type: keyBy
+    keyBy: {field: customer.id, partitions: 8}
+  - id: totals
+    type: reduce
+    reduce: {function: sum, field: amount}
+
+sink:
+  type: txnKafka
+  txnKafka:
+    brokers: [localhost:9092]
+    topic: order-totals
+    transactionalID: kafka-order-totals-eo
+    serialize: json

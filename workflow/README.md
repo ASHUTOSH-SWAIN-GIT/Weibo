@@ -6,11 +6,12 @@ parsed, validated, compiled into the same SDK objects the fluent API
 produces, and run by the same engine.
 
 ```
-workflow.yaml → Parse → Validate → Compile → Execute
+workflow.yaml → Parse → Validate → Resolve Secrets → Compile → Execute
 ```
 
-> Status: **Phase 2.1 (format definition + structural parsing)**.
-> Validation, ref resolution, compilation, and execution are later
+The workflow compiler and runner are implemented for the declarative
+built-ins described below. Ref-based `map`/`flatMap`/`process` remain
+reserved for a future function registry.
 ## No user code
 
 The operators are **declarative built-ins** — filtering, field
@@ -128,7 +129,7 @@ registry, but the declarative compiler cannot build them yet.
 ## Compiling and running
 
 ```go
-c := &compiler.Compiler{BaseDataDir: "./data"}   // Connections defaults to env-var resolution
+c := &compiler.Compiler{BaseDataDir: "./data"}   // Secrets defaults to environment lookup
 env, err := c.Compile(wf)                         // validate → resolve → source → env → operators → sink
 // ... then env.Execute(ctx) to run
 ```
@@ -137,6 +138,17 @@ env, err := c.Compile(wf)                         // validate → resolve → so
 starting it** and without connecting (except a Postgres sink's pool).
 `CompileWorkflow` additionally returns the pipeline graph and the
 derived delivery guarantee (at-most-once / at-least-once / exactly-once).
+
+For files, use the runner package or CLI:
+
+```go
+result, err := runner.RunFile(ctx, "workflow.yaml", runner.Options{BaseDataDir: "./data"})
+```
+
+```sh
+go run ./cmd/mailer-workflow --file examples/workflows/order-totals.yaml
+go run ./cmd/mailer-workflow --file examples/workflows/order-totals.yaml --dry-run --describe
+```
 
 ## `sink`
 
@@ -172,7 +184,7 @@ sink:
 sink:
   type: postgres
   postgres:
-    dsn: ${POSTGRES_DSN}     # ${VAR}/$VAR expanded from the environment
+    dsn: ${POSTGRES_DSN}     # ${VAR} resolved by the configured secret resolver
     table: customer_totals   # single fixed table (no per-record tables)
     mapping:                 # jsonField → column
       customer_id: customer_id

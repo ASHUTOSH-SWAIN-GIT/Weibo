@@ -310,6 +310,30 @@ engine inside `Reduce` and `Window` — there is no user-facing state
 API yet; a Flink-style stateful ProcessFunction with direct state
 access is on the roadmap.
 
+## Declarative Workflows
+
+Common pipelines can also be defined in YAML/JSON and run without Go
+code. The declarative path supports built-in JSON-field filters,
+projection/rename/set, key-by-field, count/sum reduce, windows, sources,
+sinks, state, checkpointing, and environment-backed secrets.
+
+```sh
+go run ./cmd/mailer-workflow --file examples/workflows/order-totals.yaml
+go run ./cmd/mailer-workflow --file examples/workflows/order-totals.yaml --dry-run --describe
+```
+
+Secrets use `${VAR}` placeholders in sensitive fields:
+
+```yaml
+sink:
+  type: postgres
+  postgres:
+    dsn: ${POSTGRES_DSN}
+```
+
+The runner resolves those placeholders at compile time and does not
+include resolved values in summaries, errors, or pipeline descriptions.
+
 ---
 
 ## Package Structure
