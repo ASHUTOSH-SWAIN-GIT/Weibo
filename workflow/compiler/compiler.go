@@ -2,48 +2,20 @@ package compiler
 
 import (
 	"fmt"
-	"os"
-	"strings"
 
 	"github.com/ASHUTOSH-SWAIN-GIT/mailer"
 	"github.com/ASHUTOSH-SWAIN-GIT/mailer/workflow"
+	"github.com/ASHUTOSH-SWAIN-GIT/mailer/workflow/secrets"
 )
-
-// ConnectionResolver expands connection/secret references in string
-// configuration values (broker lists, DSNs, credentials). The default
-// resolves ${VAR}/$VAR from the OS environment.
-type ConnectionResolver interface {
-	Resolve(value string) (string, error)
-}
-
-// EnvResolver resolves ${VAR}/$VAR from the process environment and
-// fails if any referenced variable is unset.
-type EnvResolver struct{}
-
-func (EnvResolver) Resolve(value string) (string, error) {
-	var missing []string
-	out := os.Expand(value, func(k string) string {
-		v, ok := os.LookupEnv(k)
-		if !ok {
-			missing = append(missing, k)
-			return ""
-		}
-		return v
-	})
-	if len(missing) > 0 {
-		return "", fmt.Errorf("unresolved environment variable(s): %s", strings.Join(missing, ", "))
-	}
-	return out, nil
-}
 
 // Compiler turns a declarative workflow into an executable Mailer
 // environment. It does not start the pipeline and, apart from creating
 // job directories and (for a Postgres sink) opening a connection pool,
 // establishes no connections.
 type Compiler struct {
-	// Connections resolves ${VAR} references in connection strings.
-	// Defaults to EnvResolver.
-	Connections ConnectionResolver
+	// Secrets resolves ${VAR} references in sensitive connection fields.
+	// Defaults to secrets.Environment.
+	Secrets secrets.SecretResolver
 
 	// BaseDataDir is the root for per-workflow state/checkpoint
 	// directories. Defaults to DefaultDataRoot ("./data").
@@ -95,7 +67,7 @@ func (c *Compiler) Compile(spec *workflow.WorkflowSpec) (*mailer.StreamExecution
 
 // CompileWorkflow is Compile with the full compiled description.
 //
-// Order: validate → resolve connections → create source → create env
+// Order: validate → resolve secrets → create source → create env
 // (runtime config) → apply operators → create sink → return.
 func (c *Compiler) CompileWorkflow(spec *workflow.WorkflowSpec) (*CompiledWorkflow, error) {
 	if spec == nil {
@@ -107,14 +79,14 @@ func (c *Compiler) CompileWorkflow(spec *workflow.WorkflowSpec) (*CompiledWorkfl
 		return nil, err
 	}
 
-	// 2. Resolve connections/env vars into a working copy.
-	resolver := c.Connections
+	// 2. Resolve secret references into a working copy.
+	resolver := c.Secrets
 	if resolver == nil {
-		resolver = EnvResolver{}
+		resolver = secrets.Environment{}
 	}
-	resolved, err := resolveConnections(spec, resolver)
+	resolved, err := resolveSecrets(spec, resolver)
 	if err != nil {
-		return nil, fmt.Errorf("compiler: resolve connections: %w", err)
+		return nil, fmt.Errorf("compiler: resolve secrets: %w", err)
 	}
 
 	// 3. Create source (no connection for consumer-group Kafka / test sources).

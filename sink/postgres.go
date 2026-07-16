@@ -282,28 +282,9 @@ func (p *PostgresSink) Describe() SinkInfo {
 		"flush_interval": p.cfg.flushInterval.String(),
 		"max_retries":    fmt.Sprintf("%d", p.cfg.maxRetries),
 	}
-	if u, err := parseDSNHost(p.cfg.dsn); err == nil {
-		props["host"] = u
-	}
 
 	return SinkInfo{
 		Type:  "Postgres",
 		Props: props,
 	}
-}
-
-// parseDSNHost extracts a host:port/dbname string from a Postgres DSN
-// without exposing credentials.
-func parseDSNHost(dsn string) (string, error) {
-	// Simple heuristic: strip password from postgres://... URIs.
-	// e.g. "postgres://user:pass@localhost:5432/db?sslmode=disable" -> "localhost:5432/db"
-	u := dsn
-	// Find @ to strip user:pass@
-	if at := strings.Index(u, "@"); at != -1 {
-		// Find scheme:// prefix
-		if scheme := strings.Index(u, "://"); scheme != -1 {
-			u = u[:scheme+3] + u[at+1:]
-		}
-	}
-	return u, nil
 }

@@ -3,7 +3,6 @@ package compiler
 import (
 	"encoding/json"
 	"fmt"
-	"os"
 	"regexp"
 	"sort"
 	"strings"
@@ -139,9 +138,11 @@ func compilePostgresSink(p *workflow.PostgresSinkSpec) (sink.Sink, error) {
 	if p == nil {
 		return nil, fmt.Errorf("compiler: postgres sink configuration is required")
 	}
-	dsn := os.ExpandEnv(p.DSN)
-	if dsn == "" {
+	if p.DSN == "" {
 		return nil, fmt.Errorf("compiler: postgres sink requires a dsn")
+	}
+	if strings.Contains(p.DSN, "${") {
+		return nil, fmt.Errorf("compiler: postgres sink dsn contains an unresolved secret reference")
 	}
 	if p.Table == "" {
 		return nil, fmt.Errorf("compiler: postgres sink requires a table")
@@ -158,7 +159,7 @@ func compilePostgresSink(p *workflow.PostgresSinkSpec) (sink.Sink, error) {
 	}
 
 	opts := []sink.PostgresSinkOption{
-		sink.PostgresDSN(dsn),
+		sink.PostgresDSN(p.DSN),
 		sink.PostgresMapper(mapper),
 	}
 	if p.BatchSize > 0 {
