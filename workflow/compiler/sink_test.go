@@ -74,6 +74,13 @@ func TestCompileSink_Errors(t *testing.T) {
 		{"pg unsafe table", workflow.SinkSpec{Type: "postgres", Postgres: &workflow.PostgresSinkSpec{DSN: "x", Table: "t; DROP TABLE u", Mapping: map[string]string{"a": "a"}}}},
 		{"pg no mapping", workflow.SinkSpec{Type: "postgres", Postgres: &workflow.PostgresSinkSpec{DSN: "x", Table: "t"}}},
 		{"pg unsafe column", workflow.SinkSpec{Type: "postgres", Postgres: &workflow.PostgresSinkSpec{DSN: "x", Table: "t", Mapping: map[string]string{"a": "a; DROP"}}}},
+		{"pg bad mode", workflow.SinkSpec{Type: "postgres", Postgres: &workflow.PostgresSinkSpec{DSN: "x", Table: "t", Mapping: map[string]string{"a": "a"}, Mode: "merge"}}},
+		{"pg upsert no conflict", workflow.SinkSpec{Type: "postgres", Postgres: &workflow.PostgresSinkSpec{DSN: "x", Table: "t", Mapping: map[string]string{"a": "a"}, Mode: "upsert"}}},
+		{"pg unsafe conflict", workflow.SinkSpec{Type: "postgres", Postgres: &workflow.PostgresSinkSpec{DSN: "x", Table: "t", Mapping: map[string]string{"a": "a"}, Mode: "upsert", ConflictColumns: []string{"a;drop"}}}},
+		{"pg unsafe update", workflow.SinkSpec{Type: "postgres", Postgres: &workflow.PostgresSinkSpec{DSN: "x", Table: "t", Mapping: map[string]string{"a": "a"}, Mode: "upsert", ConflictColumns: []string{"a"}, UpdateColumns: []string{"b;drop"}}}},
+		{"pg unmapped conflict", workflow.SinkSpec{Type: "postgres", Postgres: &workflow.PostgresSinkSpec{DSN: "x", Table: "t", Mapping: map[string]string{"a": "a"}, Mode: "upsert", ConflictColumns: []string{"missing"}}}},
+		{"pg unmapped update", workflow.SinkSpec{Type: "postgres", Postgres: &workflow.PostgresSinkSpec{DSN: "x", Table: "t", Mapping: map[string]string{"a": "a"}, Mode: "upsert", ConflictColumns: []string{"a"}, UpdateColumns: []string{"missing"}}}},
+		{"pg conflict in insert mode", workflow.SinkSpec{Type: "postgres", Postgres: &workflow.PostgresSinkSpec{DSN: "x", Table: "t", Mapping: map[string]string{"a": "a"}, ConflictColumns: []string{"a"}}}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -89,10 +96,10 @@ func TestCompileSink_Errors(t *testing.T) {
 // values — including exact numeric coercion and a fixed table name.
 func TestPostgresMapper_Correctness(t *testing.T) {
 	mapper, err := compiler.BuildPostgresMapper("customer_totals", map[string]string{
-		"customer_id":         "customer_id",
-		"payment.total":       "total_amount",
-		"missing_field":       "note",
-		"nested.obj":          "meta",
+		"customer_id":   "customer_id",
+		"payment.total": "total_amount",
+		"missing_field": "note",
+		"nested.obj":    "meta",
 	})
 	if err != nil {
 		t.Fatal(err)

@@ -31,4 +31,8 @@ sink:
     dsn: ${POSTGRES_DSN}
     table: customer_totals
     mapping:
+      customer.id: customer_id
       sum: total_amount
+    mode: upsert
+    conflictColumns: [customer_id]
+    updateColumns: [total_amount]

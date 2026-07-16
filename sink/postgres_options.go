@@ -1,9 +1,21 @@
 package sink
 
 import (
+	"fmt"
+	"regexp"
 	"time"
 
 	"github.com/ASHUTOSH-SWAIN-GIT/mailer/types"
+)
+
+var postgresIdentRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+// PostgresWriteMode selects how rows are written.
+type PostgresWriteMode string
+
+const (
+	PostgresInsert PostgresWriteMode = "insert"
+	PostgresUpsert PostgresWriteMode = "upsert"
 )
 
 // RecordMapper extracts the table name, column names, and values from a Record.
@@ -29,6 +41,9 @@ type postgresSinkConfig struct {
 	batchSize     int
 	flushInterval time.Duration
 	maxRetries    int
+	mode          PostgresWriteMode
+	conflictCols  []string
+	updateCols    []string
 
 	failurePolicy FailurePolicy
 	dlq           DLQ
@@ -68,6 +83,24 @@ func PostgresMaxRetries(n int) PostgresSinkOption {
 	return func(c *postgresSinkConfig) { c.maxRetries = n }
 }
 
+// PostgresMode sets whether writes use plain INSERT or INSERT ... ON
+// CONFLICT DO UPDATE. Default is PostgresInsert.
+func PostgresMode(mode PostgresWriteMode) PostgresSinkOption {
+	return func(c *postgresSinkConfig) { c.mode = mode }
+}
+
+// PostgresConflictColumns sets the ON CONFLICT target for upserts.
+func PostgresConflictColumns(cols ...string) PostgresSinkOption {
+	return func(c *postgresSinkConfig) { c.conflictCols = append([]string(nil), cols...) }
+}
+
+// PostgresUpdateColumns sets the columns updated from EXCLUDED values
+// on conflict. If omitted in upsert mode, all non-conflict inserted
+// columns are updated.
+func PostgresUpdateColumns(cols ...string) PostgresSinkOption {
+	return func(c *postgresSinkConfig) { c.updateCols = append([]string(nil), cols...) }
+}
+
 // PostgresFailurePolicy sets what happens when a row fails after all retries.
 // Default is FailurePolicyDrop (row is silently discarded).
 func PostgresFailurePolicy(p FailurePolicy) PostgresSinkOption {
@@ -90,5 +123,35 @@ func (c *postgresSinkConfig) applyDefaults() {
 	}
 	if c.maxRetries == 0 {
 		c.maxRetries = 3
+	}
+	if c.mode == "" {
+		c.mode = PostgresInsert
+	}
+}
+
+func (c postgresSinkConfig) validateWriteMode() error {
+	switch c.mode {
+	case PostgresInsert:
+		if len(c.conflictCols) > 0 || len(c.updateCols) > 0 {
+			return fmt.Errorf("postgres conflict/update columns require upsert mode")
+		}
+		return nil
+	case PostgresUpsert:
+		if len(c.conflictCols) == 0 {
+			return fmt.Errorf("postgres upsert requires at least one conflict column")
+		}
+		for _, col := range c.conflictCols {
+			if !postgresIdentRe.MatchString(col) {
+				return fmt.Errorf("unsafe postgres conflict column %q", col)
+			}
+		}
+		for _, col := range c.updateCols {
+			if !postgresIdentRe.MatchString(col) {
+				return fmt.Errorf("unsafe postgres update column %q", col)
+			}
+		}
+		return nil
+	default:
+		return fmt.Errorf("unsupported postgres write mode %q", c.mode)
 	}
 }

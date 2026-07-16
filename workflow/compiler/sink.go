@@ -153,6 +153,25 @@ func compilePostgresSink(p *workflow.PostgresSinkSpec) (sink.Sink, error) {
 	if len(p.Mapping) == 0 {
 		return nil, fmt.Errorf("compiler: postgres sink requires a non-empty field→column mapping")
 	}
+	mode, err := compilePostgresMode(p.Mode)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateColumnList("postgres conflict column", p.ConflictColumns); err != nil {
+		return nil, err
+	}
+	if err := validateColumnList("postgres update column", p.UpdateColumns); err != nil {
+		return nil, err
+	}
+	if mode == sink.PostgresUpsert && len(p.ConflictColumns) == 0 {
+		return nil, fmt.Errorf("compiler: postgres upsert requires at least one conflict column")
+	}
+	if mode == sink.PostgresInsert && (len(p.ConflictColumns) > 0 || len(p.UpdateColumns) > 0) {
+		return nil, fmt.Errorf("compiler: postgres conflict/update columns require upsert mode")
+	}
+	if err := validatePostgresUpsertColumns(p.Mapping, p.ConflictColumns, p.UpdateColumns); err != nil {
+		return nil, err
+	}
 	mapper, err := BuildPostgresMapper(p.Table, p.Mapping)
 	if err != nil {
 		return nil, err
@@ -161,6 +180,13 @@ func compilePostgresSink(p *workflow.PostgresSinkSpec) (sink.Sink, error) {
 	opts := []sink.PostgresSinkOption{
 		sink.PostgresDSN(p.DSN),
 		sink.PostgresMapper(mapper),
+		sink.PostgresMode(mode),
+	}
+	if len(p.ConflictColumns) > 0 {
+		opts = append(opts, sink.PostgresConflictColumns(p.ConflictColumns...))
+	}
+	if len(p.UpdateColumns) > 0 {
+		opts = append(opts, sink.PostgresUpdateColumns(p.UpdateColumns...))
 	}
 	if p.BatchSize > 0 {
 		opts = append(opts, sink.PostgresBatchSize(p.BatchSize))
@@ -179,6 +205,44 @@ func compilePostgresSink(p *workflow.PostgresSinkSpec) (sink.Sink, error) {
 
 	// NewPostgresSink opens the connection pool eagerly (SDK behavior).
 	return sink.NewPostgresSink(opts...), nil
+}
+
+func compilePostgresMode(mode string) (sink.PostgresWriteMode, error) {
+	switch mode {
+	case "", "insert":
+		return sink.PostgresInsert, nil
+	case "upsert":
+		return sink.PostgresUpsert, nil
+	default:
+		return "", fmt.Errorf("compiler: unsupported postgres mode %q (insert or upsert)", mode)
+	}
+}
+
+func validateColumnList(label string, cols []string) error {
+	for _, col := range cols {
+		if !columnRe.MatchString(col) {
+			return fmt.Errorf("compiler: unsafe %s %q", label, col)
+		}
+	}
+	return nil
+}
+
+func validatePostgresUpsertColumns(mapping map[string]string, conflictCols, updateCols []string) error {
+	mapped := make(map[string]bool, len(mapping))
+	for _, col := range mapping {
+		mapped[col] = true
+	}
+	for _, col := range conflictCols {
+		if !mapped[col] {
+			return fmt.Errorf("compiler: postgres conflict column %q is not present in mapping", col)
+		}
+	}
+	for _, col := range updateCols {
+		if !mapped[col] {
+			return fmt.Errorf("compiler: postgres update column %q is not present in mapping", col)
+		}
+	}
+	return nil
 }
 
 // BuildPostgresMapper builds a fixed-table RecordMapper from a

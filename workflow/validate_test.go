@@ -88,8 +88,8 @@ func TestValidate_Structural(t *testing.T) {
 
 func TestValidate_OperatorIDsRequiredAndUnique(t *testing.T) {
 	wf := validEO(t)
-	wf.Pipeline[0].ID = ""       // missing id
-	wf.Pipeline[3].ID = "key"    // duplicate of pipeline[1]
+	wf.Pipeline[0].ID = ""    // missing id
+	wf.Pipeline[3].ID = "key" // duplicate of pipeline[1]
 	msg := errmsg(t, wf)
 	mustContain(t, msg, "operator id is required", `duplicate operator id "key"`)
 }
@@ -197,12 +197,48 @@ func TestValidate_TxnSink_RequiresTransactionalID(t *testing.T) {
 	mustContain(t, msg, "sink.txnKafka.transactionalID", "transactional id is required for transactional Kafka")
 }
 
+func TestValidate_PostgresUpsert(t *testing.T) {
+	wf := validEO(t)
+	wf.Source.Kafka.ExactlyOnce = false
+	wf.Env.Checkpointing = nil
+	wf.Sink = workflow.SinkSpec{
+		Type: "postgres",
+		Postgres: &workflow.PostgresSinkSpec{
+			DSN:             "${POSTGRES_DSN}",
+			Table:           "customer_totals",
+			Mapping:         map[string]string{"customer_id": "customer_id", "sum": "total_amount"},
+			Mode:            "upsert",
+			ConflictColumns: []string{"missing_id"},
+			UpdateColumns:   []string{"missing_total"},
+		},
+	}
+	msg := errmsg(t, wf)
+	mustContain(t, msg,
+		`conflict column "missing_id" is not present in mapping`,
+		`update column "missing_total" is not present in mapping`,
+	)
+
+	wf.Sink.Postgres.ConflictColumns = nil
+	wf.Sink.Postgres.UpdateColumns = nil
+	msg = errmsg(t, wf)
+	mustContain(t, msg, "upsert requires at least one conflict column")
+
+	wf.Sink.Postgres.Mode = "merge"
+	msg = errmsg(t, wf)
+	mustContain(t, msg, `unsupported postgres mode "merge"`)
+
+	wf.Sink.Postgres.Mode = "insert"
+	wf.Sink.Postgres.ConflictColumns = []string{"customer_id"}
+	msg = errmsg(t, wf)
+	mustContain(t, msg, "conflict/update columns require upsert mode")
+}
+
 // The headline: several unrelated problems are reported together.
 func TestValidate_ReportsMultipleErrorsTogether(t *testing.T) {
 	wf := validEO(t)
-	wf.Env.Checkpointing.Interval = 0                  // checkpoint interval
-	wf.Sink.TxnKafka.TransactionalID = ""              // txn id
-	wf.Pipeline = []workflow.Operator{                 // reduce before keyBy
+	wf.Env.Checkpointing.Interval = 0     // checkpoint interval
+	wf.Sink.TxnKafka.TransactionalID = "" // txn id
+	wf.Pipeline = []workflow.Operator{    // reduce before keyBy
 		{ID: "totals", Type: "reduce", Reduce: &workflow.ReduceConfig{Function: "count"}},
 	}
 
