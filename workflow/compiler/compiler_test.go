@@ -2,6 +2,7 @@ package compiler_test
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/ASHUTOSH-SWAIN-GIT/mailer/workflow"
@@ -131,5 +132,61 @@ func TestCompile_UnresolvedConnectionFails(t *testing.T) {
 	}
 	if _, err := c.Compile(wf); err == nil {
 		t.Fatal("expected unresolved ${VAR} in DSN to fail compilation")
+	}
+}
+
+func TestCompileWorkflow_SecretsDoNotLeakToDescriptions(t *testing.T) {
+	t.Setenv("KAFKA_USERNAME", "actual-user")
+	t.Setenv("KAFKA_PASSWORD", "actual-password")
+
+	wf := &workflow.Workflow{
+		Name:    "secret-kafka",
+		Version: "1",
+		Source: workflow.SourceSpec{
+			Type: "kafka",
+			Kafka: &workflow.KafkaSourceSpec{
+				Brokers: []string{"localhost:9092"},
+				Topic:   "orders",
+				GroupID: "secret-kafka",
+				SASL: &workflow.SASLSpec{
+					Mechanism: "plain",
+					Username:  "${KAFKA_USERNAME}",
+					Password:  "${KAFKA_PASSWORD}",
+				},
+			},
+		},
+		Pipeline: []workflow.Operator{
+			{ID: "by-key", Type: "keyBy", KeyBy: &workflow.KeyByConfig{Field: "customer_id"}},
+			{ID: "count", Type: "reduce", Reduce: &workflow.ReduceConfig{Function: "count"}},
+		},
+		Sink: workflow.SinkSpec{
+			Type: "kafka",
+			Kafka: &workflow.KafkaSinkSpec{
+				Brokers: []string{"localhost:9092"},
+				Topic:   "counts",
+				SASL: &workflow.SASLSpec{
+					Mechanism: "plain",
+					Username:  "${KAFKA_USERNAME}",
+					Password:  "${KAFKA_PASSWORD}",
+				},
+			},
+		},
+	}
+
+	cw, err := (&compiler.Compiler{BaseDataDir: t.TempDir()}).CompileWorkflow(wf)
+	if err != nil {
+		t.Fatalf("CompileWorkflow: %v", err)
+	}
+
+	graph := cw.Graph
+	if strings.Contains(graph.Source, "actual-user") || strings.Contains(graph.Sink, "actual-password") {
+		t.Fatalf("compiled graph leaked a secret: %+v", graph)
+	}
+
+	desc := cw.Env.DescribeJSON()
+	for _, secret := range []string{"actual-user", "actual-password"} {
+		if strings.Contains(desc, secret) {
+			t.Fatalf("pipeline description leaked %q: %s", secret, desc)
+		}
 	}
 }

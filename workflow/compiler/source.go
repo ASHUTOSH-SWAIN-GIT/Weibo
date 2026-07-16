@@ -133,6 +133,13 @@ func compileDeserializer(format string) (source.Deserializer, error) {
 // compileSASL maps a SASL spec to auth.SASLConfig, validating the
 // mechanism up front so construction cannot panic on an unknown one.
 func compileSASL(s *workflow.SASLSpec) (auth.SASLConfig, error) {
+	if strings.Contains(s.Username, "${") {
+		return auth.SASLConfig{}, fmt.Errorf("compiler: SASL username contains an unresolved secret reference")
+	}
+	if strings.Contains(s.Password, "${") {
+		return auth.SASLConfig{}, fmt.Errorf("compiler: SASL password contains an unresolved secret reference")
+	}
+
 	var mech auth.SASLMechanism
 	switch strings.ToUpper(strings.TrimSpace(s.Mechanism)) {
 	case string(auth.SASLPlain):
