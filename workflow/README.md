@@ -12,6 +12,7 @@ workflow.yaml → Parse → Validate → Resolve Secrets → Compile → Execute
 The workflow compiler and runner are implemented for the declarative
 built-ins described below. Ref-based `map`/`flatMap`/`process` remain
 reserved for a future function registry.
+
 ## No user code
 
 The operators are **declarative built-ins** — filtering, field
@@ -99,7 +100,7 @@ them from config over the JSON record model:
 | `selectFields` | `{ fields: [...] }` — keep only these fields |
 | `renameFields` | `{ renames: [{from, to}] }` |
 | `setFields` | `{ sets: [{field, value}] }` |
-| `keyBy` | `{ field, partitions }` — partition by a record field |
+| `keyBy` | `{ field, partitions }` — set the keyed-state key from a record field |
 | `reduce` | `{ function: count\|sum, field }` — built-in aggregations |
 | `window` | `{ type, size, slide, gap, offset, idleTimeout }` |
 

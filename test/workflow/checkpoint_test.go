@@ -19,7 +19,7 @@ func TestWindowStateMemoryAndPebbleCheckpointParity(t *testing.T) {
 
 func TestWindowStateRecoversCorrectOutputShape(t *testing.T) {
 	out := runWorkflowWindow(t, "pebble", t.TempDir(), t.TempDir())
-	assertSameValues(t, out, []string{`{"sum":2}`, `{"sum":3}`})
+	assertSameValues(t, out, []string{`{"sum":2}`, `{"sum":5}`})
 }
 
 func TestWindowStateSnapshotRestore(t *testing.T) {

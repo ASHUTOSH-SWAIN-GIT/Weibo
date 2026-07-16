@@ -9,6 +9,8 @@ source:
     - key: order-2
       value: '{"customer":{"id":"c1"},"status":"pending","amount":15}'
     - key: order-3
+      value: '{"customer":{"id":"c1"},"status":"completed","amount":5}'
+    - key: order-4
       value: '{"customer":{"id":"c2"},"status":"completed","amount":7}'
 
 pipeline:

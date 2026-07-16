@@ -17,7 +17,7 @@ func TestYAMLAndSDKPipelinesProduceIdenticalResults(t *testing.T) {
 
 func TestNestedJSONFieldsAndNumericAggregation(t *testing.T) {
 	out := runWorkflowYAML(t, baseWorkflowYAML("memory", "", ""), t.TempDir())
-	assertSameValues(t, out, []string{`{"sum":10}`, `{"sum":5}`})
+	assertSameValues(t, out, []string{`{"sum":10}`, `{"sum":15}`})
 }
 
 func TestMemoryAndPebbleStateProduceIdenticalResults(t *testing.T) {
