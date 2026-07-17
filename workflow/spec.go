@@ -348,6 +348,12 @@ type TxnKafkaSinkSpec struct {
 	MarkerTopic string `yaml:"markerTopic,omitempty" json:"markerTopic,omitempty"`
 
 	Serialize string `yaml:"serialize,omitempty" json:"serialize,omitempty"`
+
+	// SASL/TLS authenticate against hosted or secured clusters. Both
+	// the transactional producer and the recovery marker probe use
+	// the same credentials.
+	SASL *SASLSpec `yaml:"sasl,omitempty" json:"sasl,omitempty"`
+	TLS  *TLSSpec  `yaml:"tls,omitempty" json:"tls,omitempty"`
 }
 
 // PostgresSinkSpec mirrors the PostgresSink options. The record→row

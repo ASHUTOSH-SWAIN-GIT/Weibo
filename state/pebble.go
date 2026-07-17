@@ -20,7 +20,8 @@ const (
 // PebbleBackend implements StateBackend on a CockroachDB Pebble LSM.
 // Each owner gets its own Pebble DB (one owner per stateful operator
 // instance — per-worker isolation).  The working DB is disposable;
-// durability comes from checkpoints (DisableWAL: true).
+// durability comes from checkpoints (writes are unsynced; the WAL is
+// never fsynced on the hot path).
 type PebbleBackend struct {
 	db   *pebble.DB
 	dir  string

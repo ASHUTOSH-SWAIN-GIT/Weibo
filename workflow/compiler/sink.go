@@ -131,6 +131,16 @@ func compileTxnKafkaSink(t *workflow.TxnKafkaSinkSpec) (sink.Sink, error) {
 	if ser != nil {
 		opts = append(opts, sink.TxnKafkaSerialize(ser))
 	}
+	if t.SASL != nil {
+		cfg, err := compileSASL(t.SASL)
+		if err != nil {
+			return nil, err
+		}
+		opts = append(opts, sink.TxnKafkaSASL(cfg))
+	}
+	if t.TLS != nil {
+		opts = append(opts, sink.TxnKafkaTLS(compileTLS(t.TLS)))
+	}
 	return sink.NewTxnKafkaSink(opts...), nil
 }
 

@@ -29,7 +29,7 @@ func InMemory() BackendFactory {
 
 // Pebble returns a factory that creates a Pebble-backed state backend
 // per owner. Each owner gets its own Pebble DB directory at
-// <dir>/<ownerID>/. The working DB is disposable (DisableWAL: true);
+// <dir>/<ownerID>/. The working DB is disposable (unsynced writes);
 // durability comes from checkpoints.
 func Pebble(dir string) BackendFactory {
 	return func(ownerID string) (StateBackend, error) {

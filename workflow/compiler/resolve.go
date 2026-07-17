@@ -46,6 +46,13 @@ func resolveSecrets(wf *workflow.Workflow, r secrets.SecretResolver) (*workflow.
 	case "txnKafka", "transactional_kafka":
 		if out.Sink.TxnKafka != nil {
 			k := *out.Sink.TxnKafka
+			if k.SASL != nil {
+				sasl, err := resolveSASL(r, k.SASL)
+				if err != nil {
+					return nil, err
+				}
+				k.SASL = sasl
+			}
 			out.Sink.TxnKafka = &k
 		}
 	case "postgres":
