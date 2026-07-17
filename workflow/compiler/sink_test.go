@@ -46,6 +46,43 @@ func TestCompileSink_TxnKafka(t *testing.T) {
 	}
 }
 
+// A hosted-cluster txn sink: SASL + TLS compile into the sink and show
+// in Describe (construction never connects — no broker is running).
+func TestCompileSink_TxnKafkaWithAuth(t *testing.T) {
+	s, err := compiler.CompileSink(workflow.SinkSpec{
+		Type: "txnKafka",
+		TxnKafka: &workflow.TxnKafkaSinkSpec{
+			Brokers:         []string{"broker.hosted.example:9092"},
+			Topic:           "out",
+			TransactionalID: "pipeline-1",
+			SASL:            &workflow.SASLSpec{Mechanism: "scram-sha-512", Username: "u", Password: "p"},
+			TLS:             &workflow.TLSSpec{},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CompileSink: %v", err)
+	}
+	info := s.(*sink.TxnKafkaSink).Describe()
+	if info.Props["sasl"] != "SCRAM-SHA-512" || info.Props["tls"] != "enabled" {
+		t.Errorf("auth props not wired: %+v", info.Props)
+	}
+}
+
+func TestCompileSink_TxnKafkaBadSASLMechanism(t *testing.T) {
+	_, err := compiler.CompileSink(workflow.SinkSpec{
+		Type: "txnKafka",
+		TxnKafka: &workflow.TxnKafkaSinkSpec{
+			Brokers:         []string{"b:9092"},
+			Topic:           "t",
+			TransactionalID: "id",
+			SASL:            &workflow.SASLSpec{Mechanism: "kerberos"},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected error for unsupported SASL mechanism on txn sink")
+	}
+}
+
 func TestCompileSink_StdoutBlackhole(t *testing.T) {
 	if s, err := compiler.CompileSink(workflow.SinkSpec{Type: "stdout"}); err != nil || s == nil {
 		t.Fatalf("stdout: %v", err)

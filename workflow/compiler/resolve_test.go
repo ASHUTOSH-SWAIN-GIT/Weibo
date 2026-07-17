@@ -73,6 +73,49 @@ func TestResolveSecrets_DSNAndSASL(t *testing.T) {
 	}
 }
 
+// The transactional sink's SASL credentials resolve like every other
+// connector's, and the original spec is not mutated.
+func TestResolveSecrets_TxnKafkaSASL(t *testing.T) {
+	wf := &workflow.Workflow{
+		Name:   "txn-secrets",
+		Source: workflow.SourceSpec{Type: "generator"},
+		Sink: workflow.SinkSpec{
+			Type: "txnKafka",
+			TxnKafka: &workflow.TxnKafkaSinkSpec{
+				Brokers:         []string{"broker:9092"},
+				Topic:           "out",
+				TransactionalID: "id",
+				SASL: &workflow.SASLSpec{
+					Mechanism: "plain",
+					Username:  "${TXN_USER}",
+					Password:  "${TXN_PASS}",
+				},
+			},
+		},
+	}
+
+	resolved, err := resolveSecrets(wf, mapSecretResolver{
+		"TXN_USER": "svc",
+		"TXN_PASS": "hunter2",
+	})
+	if err != nil {
+		t.Fatalf("resolveSecrets: %v", err)
+	}
+	got := resolved.Sink.TxnKafka.SASL
+	if got.Username != "svc" || got.Password != "hunter2" {
+		t.Errorf("txn sasl not resolved: %+v", got)
+	}
+	// Original untouched.
+	if wf.Sink.TxnKafka.SASL.Username != "${TXN_USER}" {
+		t.Errorf("original spec mutated: %+v", wf.Sink.TxnKafka.SASL)
+	}
+
+	// An unresolvable reference fails.
+	if _, err := resolveSecrets(wf, mapSecretResolver{}); err == nil {
+		t.Error("expected error for unresolvable txn sasl reference")
+	}
+}
+
 func TestResolveSecrets_ErrorDoesNotIncludeResolvedSecret(t *testing.T) {
 	_, err := resolveOne(leakySecretResolver{}, "password", "${KAFKA_PASSWORD}")
 	if err == nil {

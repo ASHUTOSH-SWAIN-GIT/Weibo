@@ -9,6 +9,7 @@ import (
 	"github.com/twmb/franz-go/pkg/kadm"
 	"github.com/twmb/franz-go/pkg/kgo"
 
+	"github.com/ASHUTOSH-SWAIN-GIT/mailer/auth"
 	"github.com/ASHUTOSH-SWAIN-GIT/mailer/types"
 )
 
@@ -58,6 +59,8 @@ type txnKafkaConfig struct {
 	txnID       string
 	markerTopic string
 	serializer  Serializer
+	sasl        *auth.SASLConfig
+	tls         *auth.TLSConfig
 }
 
 // TxnKafkaOption configures a TxnKafkaSink.
@@ -92,6 +95,20 @@ func TxnKafkaSerialize(s Serializer) TxnKafkaOption {
 	return func(c *txnKafkaConfig) { c.serializer = s }
 }
 
+// TxnKafkaSASL enables SASL authentication (PLAIN, SCRAM-SHA-256, or
+// SCRAM-SHA-512) for hosted/secured clusters. Applies to both the
+// transactional producer and the recovery marker-probe consumer.
+func TxnKafkaSASL(cfg auth.SASLConfig) TxnKafkaOption {
+	return func(c *txnKafkaConfig) { c.sasl = &cfg }
+}
+
+// TxnKafkaTLS enables TLS. An empty auth.TLSConfig turns TLS on with
+// system root CAs (the common hosted-Kafka case); CAFile/CertFile/
+// KeyFile configure private CAs and mutual TLS.
+func TxnKafkaTLS(cfg auth.TLSConfig) TxnKafkaOption {
+	return func(c *txnKafkaConfig) { c.tls = &cfg }
+}
+
 // NewTxnKafkaSink creates a transactional Kafka sink. Panics on
 // missing required configuration (broker connection errors surface
 // from Write instead).
@@ -112,10 +129,45 @@ func NewTxnKafkaSink(opts ...TxnKafkaOption) *TxnKafkaSink {
 	if cfg.markerTopic == "" {
 		cfg.markerTopic = cfg.topic + ".checkpoints"
 	}
+	// Fail fast on unusable auth config (consistent with the other
+	// Kafka connectors, which panic in their transport builders).
+	if cfg.sasl != nil {
+		if _, err := auth.BuildKgoSASL(*cfg.sasl); err != nil {
+			panic(fmt.Sprintf("mailer/sink: TxnKafkaSink SASL: %v", err))
+		}
+	}
+	if cfg.tls != nil {
+		if _, err := auth.BuildTLSConfig(*cfg.tls); err != nil {
+			panic(fmt.Sprintf("mailer/sink: TxnKafkaSink TLS: %v", err))
+		}
+	}
 	return &TxnKafkaSink{
 		cfg:     cfg,
 		waiters: map[string]chan struct{}{},
 	}
+}
+
+// baseOpts returns the kgo options shared by the transactional
+// producer and the recovery marker-probe consumer: brokers plus the
+// configured SASL/TLS. Both clients MUST authenticate identically —
+// a probe that cannot reach the cluster would break crash recovery.
+func (s *TxnKafkaSink) baseOpts() ([]kgo.Opt, error) {
+	opts := []kgo.Opt{kgo.SeedBrokers(s.cfg.brokers...)}
+	if s.cfg.sasl != nil {
+		mech, err := auth.BuildKgoSASL(*s.cfg.sasl)
+		if err != nil {
+			return nil, fmt.Errorf("sasl: %w", err)
+		}
+		opts = append(opts, kgo.SASL(mech))
+	}
+	if s.cfg.tls != nil {
+		tlsConf, err := auth.BuildTLSConfig(*s.cfg.tls)
+		if err != nil {
+			return nil, fmt.Errorf("tls: %w", err)
+		}
+		opts = append(opts, kgo.DialTLSConfig(tlsConf))
+	}
+	return opts, nil
 }
 
 // TransactionalID reports the configured transactional ID (recorded
@@ -129,12 +181,15 @@ func (s *TxnKafkaSink) SetOnPrepared(fn func(id string, err error)) { s.onPrepar
 // transaction. On a checkpoint barrier it flushes, writes the marker,
 // notifies the coordinator, and blocks until Commit or Abort.
 func (s *TxnKafkaSink) Write(ctx context.Context, in <-chan types.Record) error {
-	client, err := kgo.NewClient(
-		kgo.SeedBrokers(s.cfg.brokers...),
+	opts, err := s.baseOpts()
+	if err != nil {
+		return fmt.Errorf("txn kafka sink: %w", err)
+	}
+	client, err := kgo.NewClient(append(opts,
 		kgo.TransactionalID(s.cfg.txnID),
 		kgo.DefaultProduceTopic(s.cfg.topic),
 		kgo.RequiredAcks(kgo.AllISRAcks()),
-	)
+	)...)
 	if err != nil {
 		return fmt.Errorf("txn kafka sink: client: %w", err)
 	}
@@ -289,12 +344,15 @@ func (s *TxnKafkaSink) signal(id string) {
 // under read_committed isolation and reports whether checkpoint id's
 // marker is visible — i.e. whether its transaction committed.
 func (s *TxnKafkaSink) WasCommitted(ctx context.Context, id string) (bool, error) {
-	cl, err := kgo.NewClient(
-		kgo.SeedBrokers(s.cfg.brokers...),
+	opts, err := s.baseOpts()
+	if err != nil {
+		return false, fmt.Errorf("txn kafka sink: marker probe: %w", err)
+	}
+	cl, err := kgo.NewClient(append(opts,
 		kgo.ConsumeTopics(s.cfg.markerTopic),
 		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
 		kgo.FetchIsolationLevel(kgo.ReadCommitted()),
-	)
+	)...)
 	if err != nil {
 		return false, fmt.Errorf("txn kafka sink: marker probe client: %w", err)
 	}
@@ -339,15 +397,19 @@ func (s *TxnKafkaSink) WasCommitted(ctx context.Context, id string) (bool, error
 
 // Describe returns dashboard metadata.
 func (s *TxnKafkaSink) Describe() SinkInfo {
-	return SinkInfo{
-		Type: "TxnKafka",
-		Props: map[string]string{
-			"topic":        s.cfg.topic,
-			"marker_topic": s.cfg.markerTopic,
-			"txn_id":       s.cfg.txnID,
-			"exactly_once": "true",
-		},
+	props := map[string]string{
+		"topic":        s.cfg.topic,
+		"marker_topic": s.cfg.markerTopic,
+		"txn_id":       s.cfg.txnID,
+		"exactly_once": "true",
 	}
+	if s.cfg.sasl != nil {
+		props["sasl"] = string(s.cfg.sasl.Mechanism)
+	}
+	if s.cfg.tls != nil {
+		props["tls"] = "enabled"
+	}
+	return SinkInfo{Type: "TxnKafka", Props: props}
 }
 
 // Compile-time checks.
