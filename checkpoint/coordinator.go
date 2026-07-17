@@ -62,6 +62,11 @@ type Coordinator struct {
 	// Hook is a test-only seam fired after each protocol step.
 	Hook func(step Step, id string) HookAction
 
+	// OnCompleted, if set, is called with the checkpoint ID once it is
+	// promoted to StatusCompleted. Observability only (progress signal
+	// for supervisors); must not block.
+	OnCompleted func(id string)
+
 	mu      sync.Mutex
 	pending map[string]*pendingCheckpoint
 	halted  bool
@@ -225,6 +230,9 @@ func (c *Coordinator) finalize(ctx context.Context, id string) {
 		// (prepared + marker visible → promoted on restart).
 		c.reportFatal(fmt.Errorf("checkpoint %s: persist completed: %w", id, err))
 		return
+	}
+	if c.OnCompleted != nil {
+		c.OnCompleted(id)
 	}
 	if !c.step(ctx, StepPersistCompleted, id) {
 		return
