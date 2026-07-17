@@ -70,6 +70,13 @@ type StreamExecutionEnv struct {
 	// to halt or fail the protocol at exact steps.
 	checkpointHook func(checkpoint.Step, string) checkpoint.HookAction
 
+	// checkpointListener, if set, is called with the checkpoint ID each
+	// time a checkpoint completes — in both the uncoordinated
+	// (at-least-once) and coordinated (exactly-once) paths. Progress
+	// signal for supervisors (see the jobagent package); must not block
+	// and must not mutate pipeline state.
+	checkpointListener func(id string)
+
 	// stateFactory creates per-owner state backends for stateful
 	// operators (WithStateBackend). Nil = operators keep their
 	// self-created in-memory backends.
@@ -145,6 +152,24 @@ func (env *StreamExecutionEnv) WithStateBackend(f state.BackendFactory) *StreamE
 func (env *StreamExecutionEnv) WithCheckpointHook(fn func(checkpoint.Step, string) checkpoint.HookAction) *StreamExecutionEnv {
 	env.checkpointHook = fn
 	return env
+}
+
+// WithCheckpointListener registers an observer called with the
+// checkpoint ID whenever a checkpoint completes — covering both the
+// uncoordinated (at-least-once) and coordinated (exactly-once) paths.
+// It is a progress signal for supervisors such as the job agent; the
+// callback must not block and must not mutate pipeline state.
+func (env *StreamExecutionEnv) WithCheckpointListener(fn func(id string)) *StreamExecutionEnv {
+	env.checkpointListener = fn
+	return env
+}
+
+// notifyCheckpoint fires the optional checkpoint listener. A no-op when
+// none is registered.
+func (env *StreamExecutionEnv) notifyCheckpoint(id string) {
+	if env.checkpointListener != nil {
+		env.checkpointListener(id)
+	}
 }
 
 // FromSource sets the data source for the pipeline and returns a Stream
@@ -283,6 +308,7 @@ func (env *StreamExecutionEnv) Execute(ctx context.Context) error {
 		env.coord.CommitSink = coordinatedSink.Commit
 		env.coord.AbortSink = coordinatedSink.Abort
 		env.coord.Hook = env.checkpointHook
+		env.coord.OnCompleted = env.notifyCheckpoint
 		if oc, ok := env.source.(source.OffsetCommitter); ok {
 			env.coord.CommitOffsets = oc.CommitOffsets
 		}
@@ -795,7 +821,9 @@ func (env *StreamExecutionEnv) saveCheckpoint(id string) {
 
 	if err := env.checkpointStorage.Save(data); err != nil {
 		fmt.Printf("mailer: checkpoint save failed: %v\n", err)
+		return
 	}
+	env.notifyCheckpoint(id)
 }
 
 // restoreSourceOffset restores the source offset from a checkpoint.
