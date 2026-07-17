@@ -1,0 +1,10 @@
+# Keep the build context lean — source is copied, everything below is not
+# needed to compile the runner binary.
+.git
+.gitignore
+.playwright-mcp/
+data/
+plans/
+bench/
+Dockerfile.runner
+*.log
