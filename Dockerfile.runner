@@ -1,0 +1,31 @@
+# Generic Mailer job runner image (job-orchestration plan, phase P2).
+# One prebuilt image runs any YAML/JSON workflow: mount the document,
+# point WORKFLOW at it, mount a volume at DATA_DIR for durable state.
+#
+#   docker build -f Dockerfile.runner -t mailer-runner:dev .
+
+# --- build stage: static binary, no cgo -------------------------------
+FROM golang:1.26 AS build
+WORKDIR /src
+
+# Cache modules first.
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+# CGO off → a fully static binary that runs on distroless/scratch.
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" \
+    -o /out/mailer-runner ./cmd/mailer-runner
+
+# --- runtime stage: distroless, non-root ------------------------------
+FROM gcr.io/distroless/static-debian12:nonroot
+COPY --from=build /out/mailer-runner /usr/local/bin/mailer-runner
+
+# Defaults; override WORKFLOW (required) and secrets at run time.
+ENV DATA_DIR=/data \
+    PORT=8080
+VOLUME ["/data"]
+EXPOSE 8080
+USER nonroot:nonroot
+
+ENTRYPOINT ["/usr/local/bin/mailer-runner"]
