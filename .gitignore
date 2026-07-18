@@ -41,3 +41,11 @@ screenshots/
 dashboard-demo
 pg-orders
 kafka-dashboard
+
+# Control-plane runtime artifacts (SQLite store, per-job state/checkpoints)
+*.db
+*.db-shm
+*.db-wal
+control/mailer-control.db
+data/
+control/data/

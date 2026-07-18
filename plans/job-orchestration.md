@@ -427,19 +427,32 @@ by `test/unit_tests/exactly_once_test.go` + `recovery_test.go`.
 
 ---
 
-### P5 — Web UI  *(operate from the browser)*
+### P5 — Web UI  *(operate from the browser)* — DONE
 
-**Goal.** Everything the API does, visually — inspired by the Flink dashboard.
+**Goal.** Everything the API does, visually — an industrial control-room
+dashboard in the mailer "field-manual" identity.
 
-**Deliverables** (in `control/`, embedded via `embed.FS`):
-- SPA: jobs list; job detail (graph rendered from `PipelineGraph`, live
-  throughput/backpressure from metrics, checkpoint history, log tail);
-  submit form with **dry-run preview** (graph + delivery guarantee before
-  launch); cancel / savepoint / restart actions.
-- SSE (or WebSocket) for live state; served by the controller binary.
+**Scope decision.** Live updates use **polling** (list every 2s, detail every
+1.6s) rather than SSE — simpler, self-contained, no server push code, and the
+`/state` + `/logs` proxies already exist. SSE is a later upgrade if needed.
 
-**Gate.** Submit, watch, and manage a job end-to-end from the browser with no
-curl.
+**Delivered** (in `control/ui`, one self-contained `index.html` embedded via
+`embed.FS` — inline CSS/JS, no build step, no external assets):
+- Jobs list with phase LEDs (running pulses), delivery badges, op count.
+- Job detail: pipeline graph rendered from `PipelineGraph` (source/sink
+  accented), **live panel** (phase, records in/out, uptime, current
+  checkpoint) fed by the proxied agent `/state`, lifecycle transition log, and
+  a tailing log panel. Cancel / restart / **savepoint** / restart-from-savepoint
+  actions, disabled correctly on terminal jobs.
+- Submit form with **dry-run preview**: `POST /validate` compiles without
+  launching and shows the graph + delivery guarantee before Deploy.
+- Backend additions: `Controller.Validate`, `POST /validate`, and `GET /jobs`
+  enriched with each job's latest-run phase. UI served at `GET /{$}`.
+
+**Gate.** ✅ Verified in a real browser: submitted a workflow via the form
+(preview → deploy), watched it on the live list + detail, and drove
+cancel/restart/savepoint — no curl. API-level tests cover `/validate`, the
+enriched list, and UI serving; screenshots in `.playwright-mcp/shots/`.
 
 ---
 

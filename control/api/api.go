@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"strconv"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/ASHUTOSH-SWAIN-GIT/mailer/control"
 	"github.com/ASHUTOSH-SWAIN-GIT/mailer/control/store"
+	"github.com/ASHUTOSH-SWAIN-GIT/mailer/control/ui"
 )
 
 // Server adapts a Controller to an http.Handler.
@@ -30,7 +32,9 @@ func NewServer(ctrl *control.Controller) *Server {
 // Handler returns the routed API. Method patterns give automatic 405s.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
+	mux.Handle("GET /{$}", ui.Index()) // dashboard at the app root
 	mux.HandleFunc("GET /healthz", s.health)
+	mux.HandleFunc("POST /validate", s.validate)
 	mux.HandleFunc("POST /jobs", s.submit)
 	mux.HandleFunc("GET /jobs", s.list)
 	mux.HandleFunc("GET /jobs/{id}", s.get)
@@ -61,23 +65,50 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
-func (s *Server) submit(w http.ResponseWriter, r *http.Request) {
+// readWorkflow extracts a workflow doc (+ optional env) from a request:
+// a JSON envelope {"workflow","env"} or a raw workflow body.
+func readWorkflow(r *http.Request) (doc []byte, env map[string]string, err error) {
 	body, err := io.ReadAll(io.LimitReader(r.Body, 4<<20)) // 4 MiB cap
 	if err != nil {
-		writeErr(w, http.StatusBadRequest, "read body: "+err.Error())
-		return
+		return nil, nil, fmt.Errorf("read body: %w", err)
 	}
-	var doc []byte
-	var env map[string]string
 	if isJSON(r) {
 		var req submitRequest
 		if err := json.Unmarshal(body, &req); err != nil {
-			writeErr(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
-			return
+			return nil, nil, fmt.Errorf("invalid JSON: %w", err)
 		}
-		doc, env = []byte(req.Workflow), req.Env
-	} else {
-		doc = body
+		return []byte(req.Workflow), req.Env, nil
+	}
+	return body, nil, nil
+}
+
+// validate is the dry-run preview: compile without launching, return the
+// name, delivery guarantee, and graph the submit would produce.
+func (s *Server) validate(w http.ResponseWriter, r *http.Request) {
+	doc, env, err := readWorkflow(r)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if len(doc) == 0 {
+		writeErr(w, http.StatusBadRequest, "empty workflow")
+		return
+	}
+	name, delivery, graph, err := s.ctrl.Validate(doc, env)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"name": name, "delivery": delivery, "graph": graph,
+	})
+}
+
+func (s *Server) submit(w http.ResponseWriter, r *http.Request) {
+	doc, env, err := readWorkflow(r)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
 	}
 	if len(doc) == 0 {
 		writeErr(w, http.StatusBadRequest, "empty workflow")
@@ -98,13 +129,27 @@ func (s *Server) submit(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, job)
 }
 
+// jobListItem is a job plus its latest-run phase, for the list view.
+type jobListItem struct {
+	*store.Job
+	Phase string `json:"phase"`
+}
+
 func (s *Server) list(w http.ResponseWriter, r *http.Request) {
 	jobs, err := s.ctrl.ListJobs()
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"jobs": jobs})
+	items := make([]jobListItem, len(jobs))
+	for i, j := range jobs {
+		phase := "—"
+		if run, _ := s.ctrl.LatestRun(j.ID); run != nil {
+			phase = run.Phase
+		}
+		items[i] = jobListItem{Job: j, Phase: phase}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"jobs": items})
 }
 
 func (s *Server) get(w http.ResponseWriter, r *http.Request) {

@@ -3,6 +3,7 @@ package api_test
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -143,6 +144,82 @@ func TestCancelAndRestart(t *testing.T) {
 		t.Fatalf("restart: %d", resp.StatusCode)
 	}
 	resp.Body.Close()
+}
+
+func TestValidatePreview(t *testing.T) {
+	srv := newAPI(t)
+	body, _ := json.Marshal(map[string]any{"workflow": wf})
+	resp, err := http.Post(srv.URL+"/validate", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("validate: got %d", resp.StatusCode)
+	}
+	var out struct {
+		Name     string `json:"name"`
+		Delivery string `json:"delivery"`
+		Graph    struct {
+			Source string `json:"Source"`
+			Sink   string `json:"Sink"`
+		} `json:"graph"`
+	}
+	json.NewDecoder(resp.Body).Decode(&out)
+	if out.Name != "wordcount" || out.Graph.Source != "generator" || out.Graph.Sink != "stdout" {
+		t.Fatalf("preview wrong: %+v", out)
+	}
+
+	// Validate must NOT create a job.
+	resp2, _ := http.Get(srv.URL + "/jobs")
+	var listed struct {
+		Jobs []any `json:"jobs"`
+	}
+	json.NewDecoder(resp2.Body).Decode(&listed)
+	resp2.Body.Close()
+	if len(listed.Jobs) != 0 {
+		t.Fatalf("validate must not launch a job, found %d", len(listed.Jobs))
+	}
+}
+
+func TestListIncludesPhase(t *testing.T) {
+	srv := newAPI(t)
+	resp, _ := http.Post(srv.URL+"/jobs", "application/yaml", strings.NewReader(wf))
+	resp.Body.Close()
+
+	resp, err := http.Get(srv.URL + "/jobs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var listed struct {
+		Jobs []struct {
+			Phase string `json:"phase"`
+		} `json:"jobs"`
+	}
+	json.NewDecoder(resp.Body).Decode(&listed)
+	if len(listed.Jobs) != 1 || listed.Jobs[0].Phase != "running" {
+		t.Fatalf("list phase: %+v", listed.Jobs)
+	}
+}
+
+func TestServesUI(t *testing.T) {
+	srv := newAPI(t)
+	resp, err := http.Get(srv.URL + "/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("GET /: %d", resp.StatusCode)
+	}
+	if ct := resp.Header.Get("Content-Type"); !strings.HasPrefix(ct, "text/html") {
+		t.Fatalf("content-type: %q", ct)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(body), "MAILER") {
+		t.Fatal("index.html not served")
+	}
 }
 
 func TestMethodNotAllowed(t *testing.T) {

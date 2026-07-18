@@ -208,6 +208,13 @@ func (c *Controller) Savepoint(ctx context.Context, jobID, label string) error {
 	return nil
 }
 
+// Validate compiles a workflow without launching it — the dry-run preview
+// behind the submit form. Returns the name, delivery guarantee, and graph
+// a submit would produce, or an error if the workflow is invalid.
+func (c *Controller) Validate(doc []byte, env map[string]string) (string, compiler.DeliveryGuarantee, compiler.PipelineGraph, error) {
+	return c.validate(doc, env)
+}
+
 // ListJobs returns all jobs, newest first.
 func (c *Controller) ListJobs() ([]*store.Job, error) { return c.store.ListJobs() }
 
