@@ -21,6 +21,11 @@ type Agent struct {
 	mu     sync.Mutex
 	st     State
 	cancel context.CancelFunc
+
+	// savepoint request (stop-with-savepoint). When set, the runner
+	// promotes the final checkpoint to a savepoint after Run returns.
+	savepointReq   bool
+	savepointLabel string
 }
 
 // New creates an agent that will run the given configured environment.
@@ -78,6 +83,33 @@ func (a *Agent) Cancel() {
 	}
 	a.st.Phase = PhaseCancelling
 	a.cancel()
+}
+
+// RequestSavepoint asks for a stop-with-savepoint: the job drains and
+// writes its final checkpoint (like Cancel), and the label is recorded so
+// the runner can promote that checkpoint to a named savepoint once Run
+// returns. It is a no-op once the job is terminal; returns whether the
+// request was accepted.
+func (a *Agent) RequestSavepoint(label string) bool {
+	a.mu.Lock()
+	if a.cancel == nil || a.st.Phase.Terminal() {
+		a.mu.Unlock()
+		return false
+	}
+	a.savepointReq = true
+	a.savepointLabel = label
+	a.mu.Unlock()
+	a.Cancel()
+	return true
+}
+
+// SavepointRequest reports whether a savepoint was requested and its
+// label. The runner reads this after Run returns to decide whether to
+// promote the final checkpoint.
+func (a *Agent) SavepointRequest() (label string, requested bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.savepointLabel, a.savepointReq
 }
 
 // State returns a snapshot, refreshing the live-computed fields (uptime

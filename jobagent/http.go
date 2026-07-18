@@ -18,7 +18,7 @@ import (
 //	GET  /describe   pipeline topology (env.DescribeJSON)
 //	GET  /metrics    Prometheus exposition
 //	POST /cancel     request graceful shutdown
-//	POST /savepoint  reserved for P4; returns 501 for now
+//	POST /savepoint  stop-with-savepoint (?label=<name>)
 func (a *Agent) Handler() http.Handler {
 	mux := http.NewServeMux()
 
@@ -49,9 +49,19 @@ func (a *Agent) Handler() http.Handler {
 	})
 
 	mux.HandleFunc("POST /savepoint", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusNotImplemented, map[string]any{
-			"error": "savepoints are not implemented until phase P4",
-		})
+		label := r.URL.Query().Get("label")
+		if label == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "missing ?label"})
+			return
+		}
+		if !a.RequestSavepoint(label) {
+			writeJSON(w, http.StatusConflict, map[string]any{"error": "job is not running"})
+			return
+		}
+		// Stop-with-savepoint: the job now drains and writes its final
+		// checkpoint; the runner promotes it to the named savepoint as the
+		// process winds down.
+		writeJSON(w, http.StatusAccepted, map[string]any{"label": label, "phase": a.State().Phase})
 	})
 
 	return mux

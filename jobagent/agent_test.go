@@ -95,6 +95,46 @@ func TestAgent_StateAndCancel(t *testing.T) {
 	}
 }
 
+// POST /savepoint?label triggers a stop-with-savepoint: the job drains
+// and the label is recorded for the runner to promote.
+func TestAgent_SavepointRequest(t *testing.T) {
+	src := &blockingSource{live: make(chan struct{})}
+	env := mailer.NewEnv().FromSource(src).ToSink(sink.NewBlackholeSink())
+	a := jobagent.New(env)
+
+	srv := httptest.NewServer(a.Handler())
+	defer srv.Close()
+
+	done := make(chan error, 1)
+	go func() { done <- a.Run(context.Background()) }()
+	select {
+	case <-src.live:
+	case <-time.After(5 * time.Second):
+		t.Fatal("source never went live")
+	}
+
+	resp, err := http.Post(srv.URL+"/savepoint?label=before-upgrade", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("savepoint: got %d, want 202", resp.StatusCode)
+	}
+
+	select {
+	case <-done:
+	case <-time.After(35 * time.Second):
+		t.Fatal("job did not drain after savepoint request")
+	}
+	if label, ok := a.SavepointRequest(); !ok || label != "before-upgrade" {
+		t.Fatalf("savepoint request: label=%q ok=%v", label, ok)
+	}
+	if a.State().Phase != jobagent.PhaseFinished {
+		t.Errorf("phase after savepoint: %q", a.State().Phase)
+	}
+}
+
 // A misconfigured env (no sink) fails fast; the agent records it.
 func TestAgent_Failed(t *testing.T) {
 	env := mailer.NewEnv() // no source and no sink configured
@@ -127,7 +167,7 @@ func TestAgent_HTTPSurface(t *testing.T) {
 		{"GET", "/state", 200},
 		{"GET", "/describe", 200},
 		{"GET", "/metrics", 200},
-		{"POST", "/savepoint", 501},
+		{"POST", "/savepoint", 400}, // missing ?label
 		{"POST", "/state", 405}, // wrong method
 	}
 	for _, c := range cases {

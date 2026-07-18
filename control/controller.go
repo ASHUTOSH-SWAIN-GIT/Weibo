@@ -11,6 +11,8 @@ import (
 	"encoding/hex"
 	"fmt"
 	"maps"
+	"net/http"
+	"net/url"
 	"os"
 	"sync"
 	"time"
@@ -45,6 +47,7 @@ type Controller struct {
 	stopTimeout time.Duration
 	newID       func() string
 	logf        func(string, ...any)
+	httpc       *http.Client // talks to job agents (savepoint trigger)
 
 	mu      sync.Mutex
 	secrets map[string]map[string]string // jobID → env; process-memory only, never persisted
@@ -61,6 +64,7 @@ func New(opts Options) *Controller {
 		stopTimeout: opts.StopTimeout,
 		newID:       opts.NewID,
 		logf:        opts.Logf,
+		httpc:       &http.Client{Timeout: 10 * time.Second},
 		secrets:     map[string]map[string]string{},
 	}
 	if c.port == 0 {
@@ -109,7 +113,7 @@ func (c *Controller) Submit(ctx context.Context, doc []byte, env map[string]stri
 	c.setSecrets(job.ID, env)
 	c.transition(job.ID, "", "", lifecycle.Submitted, "submitted")
 
-	if err := c.launch(ctx, job, 1); err != nil {
+	if err := c.launch(ctx, job, 1, ""); err != nil {
 		// The job is recorded; the reconciler will not retry a launch
 		// failure automatically, so surface it to the caller.
 		return job, fmt.Errorf("submit: launch: %w", err)
@@ -142,6 +146,19 @@ func (c *Controller) Cancel(ctx context.Context, jobID string) error {
 // Restart stops any live run and launches a fresh one, resetting the
 // desired state to running and the attempt counter.
 func (c *Controller) Restart(ctx context.Context, jobID string) (*store.Job, error) {
+	return c.doRestart(ctx, jobID, "")
+}
+
+// RestartFromSavepoint restarts the job, seeding the new run's state from
+// the named savepoint instead of the last automatic checkpoint.
+func (c *Controller) RestartFromSavepoint(ctx context.Context, jobID, label string) (*store.Job, error) {
+	if label == "" {
+		return nil, fmt.Errorf("restart: empty savepoint label")
+	}
+	return c.doRestart(ctx, jobID, label)
+}
+
+func (c *Controller) doRestart(ctx context.Context, jobID, restore string) (*store.Job, error) {
 	job, err := c.store.GetJob(jobID)
 	if err != nil {
 		return nil, err
@@ -153,10 +170,42 @@ func (c *Controller) Restart(ctx context.Context, jobID string) (*store.Job, err
 	if err := c.store.SetDesired(jobID, store.DesiredRunning); err != nil {
 		return nil, err
 	}
-	if err := c.launch(ctx, job, 1); err != nil {
+	if err := c.launch(ctx, job, 1, restore); err != nil {
 		return job, fmt.Errorf("restart: launch: %w", err)
 	}
 	return job, nil
+}
+
+// Savepoint triggers a stop-with-savepoint on the job's live container:
+// the job drains, writes its final checkpoint, and the runner promotes it
+// to a named savepoint. The job's desired state becomes stopped.
+func (c *Controller) Savepoint(ctx context.Context, jobID, label string) error {
+	if label == "" {
+		return fmt.Errorf("savepoint: empty label")
+	}
+	addr, err := c.ControlAddress(ctx, jobID)
+	if err != nil {
+		return err
+	}
+	if addr == "" {
+		return fmt.Errorf("savepoint: job %s has no running control surface", jobID)
+	}
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost,
+		"http://"+addr+"/savepoint?label="+url.QueryEscape(label), nil)
+	resp, err := c.httpc.Do(req)
+	if err != nil {
+		return fmt.Errorf("savepoint: contact agent: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusAccepted {
+		return fmt.Errorf("savepoint: agent returned %d", resp.StatusCode)
+	}
+	// The job is stopping; record intent and audit it.
+	if err := c.store.SetDesired(jobID, store.DesiredStopped); err != nil {
+		return err
+	}
+	c.transition(jobID, "", lifecycle.Running, lifecycle.Cancelling, "savepoint: "+label)
+	return nil
 }
 
 // ListJobs returns all jobs, newest first.
@@ -226,8 +275,16 @@ func (c *Controller) validate(doc []byte, env map[string]string) (string, compil
 	return cw.Name, cw.Delivery, cw.Graph, nil
 }
 
-// launch starts a container for the job and records the run.
-func (c *Controller) launch(ctx context.Context, job *store.Job, attempt int) error {
+// launch starts a container for the job and records the run. restore, if
+// non-empty, names a savepoint the new run seeds from.
+func (c *Controller) launch(ctx context.Context, job *store.Job, attempt int, restore string) error {
+	// Single-live-run fencing: never run two containers for one job at
+	// once — two live transactional producers with the same id would
+	// break exactly-once. Callers stop the prior run before relaunching.
+	if prev, _ := c.store.LatestRun(job.ID); prev != nil && prev.Stopped == nil {
+		return fmt.Errorf("job %s already has an active run %s", job.ID, prev.ID)
+	}
+
 	now := time.Now().UTC()
 	run := &store.Run{
 		ID:      c.newID(),
@@ -238,12 +295,13 @@ func (c *Controller) launch(ctx context.Context, job *store.Job, attempt int) er
 	}
 
 	id, err := c.backend.Launch(ctx, backend.LaunchSpec{
-		JobID:       job.ID,
-		Name:        job.Name,
-		Image:       c.image,
-		WorkflowDoc: []byte(job.Spec),
-		Env:         c.getSecrets(job.ID),
-		ControlPort: c.port,
+		JobID:            job.ID,
+		Name:             job.Name,
+		Image:            c.image,
+		WorkflowDoc:      []byte(job.Spec),
+		Env:              c.launchEnv(job.ID),
+		ControlPort:      c.port,
+		RestoreSavepoint: restore,
 	})
 	if err != nil {
 		run.Phase = string(lifecycle.Failed)
@@ -299,6 +357,16 @@ func (c *Controller) getSecrets(jobID string) map[string]string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.secrets[jobID]
+}
+
+// launchEnv builds the container environment: the job's secrets plus
+// MAILER_JOB_ID. Authors can pin a stable transactional id across
+// restarts by referencing it (e.g. transactionalID: ${MAILER_JOB_ID}),
+// which — with single-live-run fencing — keeps exactly-once safe.
+func (c *Controller) launchEnv(jobID string) map[string]string {
+	env := map[string]string{"MAILER_JOB_ID": jobID}
+	maps.Copy(env, c.getSecrets(jobID))
+	return env
 }
 
 func randomID() string {

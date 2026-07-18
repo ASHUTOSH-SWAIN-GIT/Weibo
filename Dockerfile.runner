@@ -16,15 +16,23 @@ COPY . .
 # CGO off → a fully static binary that runs on distroless/scratch.
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" \
     -o /out/mailer-runner ./cmd/mailer-runner
+# Pre-create the mount points so the fresh named volumes inherit nonroot
+# ownership (distroless has no shell to chown at runtime).
+RUN mkdir -p /out/data /out/savepoints
 
 # --- runtime stage: distroless, non-root ------------------------------
 FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=build /out/mailer-runner /usr/local/bin/mailer-runner
+# 65532 is the distroless "nonroot" uid/gid. Owning the volume mount
+# points lets the runner create per-job state/checkpoint dirs under them.
+COPY --from=build --chown=65532:65532 /out/data /data
+COPY --from=build --chown=65532:65532 /out/savepoints /savepoints
 
 # Defaults; override WORKFLOW (required) and secrets at run time.
 ENV DATA_DIR=/data \
+    SAVEPOINT_DIR=/savepoints \
     PORT=8080
-VOLUME ["/data"]
+VOLUME ["/data", "/savepoints"]
 EXPOSE 8080
 USER nonroot:nonroot
 

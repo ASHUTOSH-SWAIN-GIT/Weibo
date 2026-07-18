@@ -105,7 +105,7 @@ func (c *Controller) maybeRestart(ctx context.Context, job *store.Job, run *stor
 		case <-time.After(d):
 		}
 	}
-	if err := c.launch(ctx, job, run.Attempt+1); err != nil {
+	if err := c.launch(ctx, job, run.Attempt+1, ""); err != nil {
 		c.logf("job %s: restart launch failed: %v", job.ID, err)
 	}
 }

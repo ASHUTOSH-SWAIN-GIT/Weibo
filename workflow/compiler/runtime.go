@@ -81,6 +81,21 @@ func CompileRuntime(workflowName, dataRoot string, rt *workflow.EnvSpec) (*maile
 	return env, nil
 }
 
+// CheckpointDir returns the directory a compiled workflow uses for its
+// checkpoints, or "" when checkpointing is disabled. It mirrors the path
+// CompileRuntime derives, so callers that must target the same storage
+// without holding the env — e.g. the runner seeding a restored savepoint
+// before Execute — can compute it identically.
+func CheckpointDir(workflowName, dataRoot string, rt *workflow.EnvSpec) string {
+	if rt == nil || rt.Checkpointing == nil || rt.Checkpointing.Interval.Std() <= 0 {
+		return ""
+	}
+	if dataRoot == "" {
+		dataRoot = DefaultDataRoot
+	}
+	return jobDir(rt.Checkpointing.Dir, dataRoot, sanitizeName(workflowName), "checkpoints")
+}
+
 // jobDir returns a per-workflow directory. When a directory is
 // configured it is used as the resource root with the workflow name
 // nested under it (<configured>/<name>); otherwise the default layout
