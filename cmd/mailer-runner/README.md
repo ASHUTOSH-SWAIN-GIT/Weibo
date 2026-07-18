@@ -8,9 +8,12 @@ mount the document, point `WORKFLOW` at it, mount a volume for durable state.
 
 | Var        | Required | Default | Purpose |
 | ---------- | -------- | ------- | ------- |
-| `WORKFLOW` | yes      | —       | Path to the mounted workflow file. |
-| `DATA_DIR` | no       | `/data` | Base dir; the engine derives `<name>/state` and `<name>/checkpoints` under it. Mount a volume here for durability. |
-| `PORT`     | no       | `8080`  | Agent HTTP control port. |
+| `WORKFLOW`           | yes | —            | Path to the mounted workflow file. |
+| `DATA_DIR`           | no  | `/data`      | Base dir; the engine derives `<name>/state` and `<name>/checkpoints` under it. Mount a volume here for durability. |
+| `SAVEPOINT_DIR`      | no  | `/savepoints`| Shared blobstore for savepoints. Mount a shared volume so any job can restore any savepoint. |
+| `RESTORE_SAVEPOINT`  | no  | —            | Name of a savepoint to seed state from before starting. |
+| `PORT`               | no  | `8080`       | Agent HTTP control port. |
+| `MAILER_JOB_ID`      | no  | —            | Injected by the controller; reference it (`transactionalID: ${MAILER_JOB_ID}`) to pin a stable exactly-once id across restarts. |
 
 Secret placeholders (`${VAR}`) in the workflow resolve from the process
 environment at compile time — pass them with `-e`.
@@ -26,7 +29,7 @@ The runner supervises the job with a `jobagent` and serves it on `PORT`:
 | `GET /describe`  | Compiled pipeline topology (JSON). |
 | `GET /metrics`   | Prometheus exposition. |
 | `POST /cancel`   | Request graceful shutdown. |
-| `POST /savepoint`| Reserved (501 until phase P4). |
+| `POST /savepoint?label=<name>` | Stop-with-savepoint: drain, write a final checkpoint, and promote it to a named savepoint. |
 
 On `SIGTERM`/`SIGINT` the job drains in-flight records and takes a final
 checkpoint before the process exits.

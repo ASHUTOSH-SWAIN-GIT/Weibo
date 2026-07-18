@@ -44,6 +44,11 @@ func (d *Docker) Ping(ctx context.Context) error {
 const (
 	containerWorkflowPath = "/wf/workflow.yaml"
 	containerDataDir      = "/data"
+	containerSavepointDir = "/savepoints"
+	// sharedSavepointVolume is mounted into every job, so a savepoint
+	// written by one job is visible to another — a shared namespace like
+	// an object-store bucket, which an S3 backend replaces later (P6).
+	sharedSavepointVolume = "mailer-savepoints"
 )
 
 func (d *Docker) Launch(ctx context.Context, spec LaunchSpec) (string, error) {
@@ -57,16 +62,23 @@ func (d *Docker) Launch(ctx context.Context, spec LaunchSpec) (string, error) {
 	}
 	portSpec := nat.Port(strconv.Itoa(port) + "/tcp")
 
-	// Reuse a per-job named volume so restarts recover from checkpoints.
+	// Reuse a per-job named volume so restarts recover from checkpoints,
+	// plus the shared savepoints volume visible to every job.
 	volName := "mailer-" + spec.JobID
-	if _, err := d.cli.VolumeCreate(ctx, volume.CreateOptions{Name: volName}); err != nil {
-		return "", fmt.Errorf("docker: create volume %s: %w", volName, err)
+	for _, v := range []string{volName, sharedSavepointVolume} {
+		if _, err := d.cli.VolumeCreate(ctx, volume.CreateOptions{Name: v}); err != nil {
+			return "", fmt.Errorf("docker: create volume %s: %w", v, err)
+		}
 	}
 
 	env := []string{
 		"WORKFLOW=" + containerWorkflowPath,
 		"DATA_DIR=" + containerDataDir,
+		"SAVEPOINT_DIR=" + containerSavepointDir,
 		"PORT=" + strconv.Itoa(port),
+	}
+	if spec.RestoreSavepoint != "" {
+		env = append(env, "RESTORE_SAVEPOINT="+spec.RestoreSavepoint)
 	}
 	for k, v := range spec.Env {
 		env = append(env, k+"="+v)
@@ -79,7 +91,10 @@ func (d *Docker) Launch(ctx context.Context, spec LaunchSpec) (string, error) {
 		Labels:       map[string]string{"mailer.job": spec.JobID, "mailer.name": spec.Name},
 	}
 	host := &container.HostConfig{
-		Binds: []string{volName + ":" + containerDataDir},
+		Binds: []string{
+			volName + ":" + containerDataDir,
+			sharedSavepointVolume + ":" + containerSavepointDir,
+		},
 		PortBindings: nat.PortMap{
 			portSpec: []nat.PortBinding{{HostIP: "127.0.0.1", HostPort: ""}},
 		},

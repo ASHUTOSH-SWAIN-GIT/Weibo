@@ -39,6 +39,10 @@ type LaunchSpec struct {
 	// ControlPort is the container port the jobagent listens on. The
 	// backend publishes it and reports the reachable host port in Status.
 	ControlPort int
+
+	// RestoreSavepoint, if set, names a savepoint the runner seeds from
+	// before starting (RESTORE_SAVEPOINT). Empty means a fresh start.
+	RestoreSavepoint string
 }
 
 // Status is a point-in-time container status.

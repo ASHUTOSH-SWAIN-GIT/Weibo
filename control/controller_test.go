@@ -114,6 +114,40 @@ func TestCancelStopsJob(t *testing.T) {
 	}
 }
 
+// Fencing: the controller refuses to launch a second container while a
+// run is live — two transactional producers with the same id would break
+// exactly-once. (A restart stops the old run first, so it is allowed.)
+func TestSingleLiveRunGuard(t *testing.T) {
+	fake := backend.NewFake()
+	c, st := newController(t, fake, lifecycle.DefaultRestartPolicy())
+	job, err := c.Submit(context.Background(), []byte(validWorkflow), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The container carries the stable job id for txn-id pinning.
+	run, _ := c.LatestRun(job.ID)
+	if fake.LastEnv(run.ContainerID)["MAILER_JOB_ID"] != job.ID {
+		t.Errorf("MAILER_JOB_ID not injected: %v", fake.LastEnv(run.ContainerID))
+	}
+
+	// Restart while the run is still live must stop the old one first, so
+	// there is never more than one active run.
+	if _, err := c.Restart(context.Background(), job.ID); err != nil {
+		t.Fatalf("Restart: %v", err)
+	}
+	active := 0
+	runs, _ := st.ListRuns(job.ID)
+	for _, r := range runs {
+		if r.Stopped == nil {
+			active++
+		}
+	}
+	if active != 1 {
+		t.Fatalf("expected exactly 1 active run, got %d", active)
+	}
+}
+
 func TestRestartLaunchesNewRun(t *testing.T) {
 	fake := backend.NewFake()
 	c, _ := newController(t, fake, lifecycle.DefaultRestartPolicy())

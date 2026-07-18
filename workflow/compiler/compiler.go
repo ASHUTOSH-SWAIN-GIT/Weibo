@@ -51,6 +51,10 @@ type CompiledWorkflow struct {
 	Name     string
 	Graph    PipelineGraph
 	Delivery DeliveryGuarantee
+	// CheckpointDir is the on-disk directory holding this workflow's
+	// checkpoints, or "" when checkpointing is disabled. Exposed so the
+	// runner can seed a restored savepoint into the same storage.
+	CheckpointDir string
 }
 
 // Compile validates and compiles a workflow into an executable Mailer
@@ -116,10 +120,11 @@ func (c *Compiler) CompileWorkflow(spec *workflow.WorkflowSpec) (*CompiledWorkfl
 
 	// 7. Return the executable environment + description.
 	return &CompiledWorkflow{
-		Env:      env,
-		Name:     resolved.Name,
-		Graph:    buildGraph(resolved),
-		Delivery: deliveryGuarantee(resolved),
+		Env:           env,
+		Name:          resolved.Name,
+		Graph:         buildGraph(resolved),
+		Delivery:      deliveryGuarantee(resolved),
+		CheckpointDir: CheckpointDir(resolved.Name, c.BaseDataDir, resolved.Env),
 	}, nil
 }
 

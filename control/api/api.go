@@ -36,6 +36,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /jobs/{id}", s.get)
 	mux.HandleFunc("POST /jobs/{id}/cancel", s.cancel)
 	mux.HandleFunc("POST /jobs/{id}/restart", s.restart)
+	mux.HandleFunc("POST /jobs/{id}/savepoint", s.savepoint)
 	mux.HandleFunc("GET /jobs/{id}/logs", s.logs)
 	mux.HandleFunc("GET /jobs/{id}/state", s.proxy("/state"))
 	mux.HandleFunc("GET /jobs/{id}/metrics", s.proxy("/metrics"))
@@ -126,8 +127,19 @@ func (s *Server) cancel(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, map[string]string{"status": "cancelling"})
 }
 
+// restart optionally accepts JSON body {"savepoint": "<label>"} to resume
+// from a savepoint instead of the last automatic checkpoint.
 func (s *Server) restart(w http.ResponseWriter, r *http.Request) {
-	job, err := s.ctrl.Restart(r.Context(), r.PathValue("id"))
+	id := r.PathValue("id")
+	label := savepointLabel(r)
+
+	var job *store.Job
+	var err error
+	if label != "" {
+		job, err = s.ctrl.RestartFromSavepoint(r.Context(), id, label)
+	} else {
+		job, err = s.ctrl.Restart(r.Context(), id)
+	}
 	if err != nil {
 		if job == nil {
 			writeErr(w, http.StatusNotFound, err.Error())
@@ -137,6 +149,45 @@ func (s *Server) restart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusAccepted, job)
+}
+
+// savepoint triggers a stop-with-savepoint. Label comes from ?label= or a
+// JSON body {"label": "..."}.
+func (s *Server) savepoint(w http.ResponseWriter, r *http.Request) {
+	label := savepointLabel(r)
+	if label == "" {
+		writeErr(w, http.StatusBadRequest, "missing savepoint label (?label= or {\"label\":...})")
+		return
+	}
+	if err := s.ctrl.Savepoint(r.Context(), r.PathValue("id"), label); err != nil {
+		writeErr(w, http.StatusConflict, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]string{"savepoint": label, "status": "stopping"})
+}
+
+// savepointLabel reads a savepoint label from the ?label query param, then
+// falls back to a JSON body {"label" | "savepoint": "..."}.
+func savepointLabel(r *http.Request) string {
+	if l := r.URL.Query().Get("label"); l != "" {
+		return l
+	}
+	if r.Body == nil {
+		return ""
+	}
+	body, _ := io.ReadAll(io.LimitReader(r.Body, 1<<16))
+	if len(body) == 0 {
+		return ""
+	}
+	var req struct {
+		Label     string `json:"label"`
+		Savepoint string `json:"savepoint"`
+	}
+	_ = json.Unmarshal(body, &req)
+	if req.Label != "" {
+		return req.Label
+	}
+	return req.Savepoint
 }
 
 func (s *Server) logs(w http.ResponseWriter, r *http.Request) {
