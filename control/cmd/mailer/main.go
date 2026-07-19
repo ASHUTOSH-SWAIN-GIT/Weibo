@@ -61,6 +61,9 @@ func runDashboard(args []string) int {
 	dbPath := fs.String("db", "./mailer-control.db", "SQLite database path")
 	interval := fs.Duration("reconcile", 3*time.Second, "reconcile interval")
 	noOpen := fs.Bool("no-open", false, "do not open the browser")
+	backendKind := fs.String("backend", "docker", "container backend: docker | kubernetes")
+	namespace := fs.String("namespace", "default", "kubernetes namespace (kubernetes backend)")
+	kubeconfig := fs.String("kubeconfig", "", "kubeconfig path (kubernetes backend; empty = default)")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -68,20 +71,11 @@ func runDashboard(args []string) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	// Preflight: a clear message beats a launch-time failure later.
-	docker, err := backend.NewDocker(*image)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "mailer: docker: %v\n", err)
-		return 1
-	}
-	if err := docker.Ping(ctx); err != nil {
-		fmt.Fprintln(os.Stderr, "mailer: Docker daemon not reachable — is Docker running?")
-		return 1
-	}
-	if ok, err := docker.HasImage(ctx, *image); err == nil && !ok {
-		fmt.Fprintf(os.Stderr, "mailer: runner image %q not found. Build it first (from the mailer repo root):\n"+
-			"  docker build -f Dockerfile.runner -t %s .\n", *image, *image)
-		return 1
+	// Build and preflight the selected backend — a clear message beats a
+	// launch-time failure later.
+	be, rc := makeBackend(ctx, *backendKind, *image, *namespace, *kubeconfig)
+	if be == nil {
+		return rc
 	}
 
 	st, err := store.OpenSQLite(*dbPath)
@@ -91,7 +85,7 @@ func runDashboard(args []string) int {
 	}
 	defer st.Close()
 
-	ctrl := control.New(control.Options{Store: st, Backend: docker, Image: *image, Logf: log.Printf})
+	ctrl := control.New(control.Options{Store: st, Backend: be, Image: *image, Logf: log.Printf})
 	go ctrl.RunReconciler(ctx, *interval)
 
 	srv := &http.Server{Addr: *addr, Handler: api.NewServer(ctrl).Handler()}
@@ -114,6 +108,46 @@ func runDashboard(args []string) int {
 	}
 	log.Print("mailer dashboard: stopped")
 	return 0
+}
+
+// makeBackend constructs and preflights the chosen container backend. On
+// failure it prints a hint and returns (nil, exitCode).
+func makeBackend(ctx context.Context, kind, image, namespace, kubeconfig string) (backend.ContainerBackend, int) {
+	switch kind {
+	case "docker":
+		d, err := backend.NewDocker(image)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "mailer: docker: %v\n", err)
+			return nil, 1
+		}
+		if err := d.Ping(ctx); err != nil {
+			fmt.Fprintln(os.Stderr, "mailer: Docker daemon not reachable — is Docker running?")
+			return nil, 1
+		}
+		if ok, err := d.HasImage(ctx, image); err == nil && !ok {
+			fmt.Fprintf(os.Stderr, "mailer: runner image %q not found. Build it first:\n"+
+				"  docker build -f Dockerfile.runner -t %s .\n", image, image)
+			return nil, 1
+		}
+		return d, 0
+	case "kubernetes", "k8s":
+		kb, err := backend.NewKubernetes(backend.KubernetesOptions{
+			Kubeconfig: kubeconfig, Namespace: namespace, Image: image,
+		})
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "mailer: kubernetes: %v\n", err)
+			return nil, 1
+		}
+		if err := kb.Ping(ctx); err != nil {
+			fmt.Fprintf(os.Stderr, "mailer: kubernetes API not reachable: %v\n"+
+				"  check your kubeconfig / cluster, and that the image %q is pushed to a registry the cluster can pull.\n", err, image)
+			return nil, 1
+		}
+		return kb, 0
+	default:
+		fmt.Fprintf(os.Stderr, "mailer: unknown backend %q (want docker or kubernetes)\n", kind)
+		return nil, 2
+	}
 }
 
 // browserURL turns a listen address (":9000", "0.0.0.0:9000") into a URL

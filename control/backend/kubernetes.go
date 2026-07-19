@@ -1,0 +1,376 @@
+package backend
+
+import (
+	"context"
+	"fmt"
+	"io"
+	"strconv"
+	"time"
+
+	batchv1 "k8s.io/api/batch/v1"
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/intstr"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/clientcmd"
+)
+
+// Kubernetes runs each job as a batch/v1 Job on a cluster — the same jobs
+// the Docker backend runs locally, so the controller, reconciler, API, and
+// web UI are unchanged. A Job (not a Deployment) is used so a completed
+// pod is not auto-restarted by Kubernetes: mailer's own reconciler owns
+// restart decisions (backoffLimit is 0).
+//
+// Per job: a per-job PVC (state + checkpoints, reused across restarts), a
+// ConfigMap (the workflow), an optional Secret (env), and a ClusterIP
+// Service so the controller can reach the agent's control surface.
+type Kubernetes struct {
+	cs           kubernetes.Interface
+	namespace    string
+	image        string
+	pvcSize      string
+	storageClass string
+}
+
+// KubernetesOptions configures the backend.
+type KubernetesOptions struct {
+	Kubeconfig   string // path; empty → in-cluster, else default loading rules
+	Namespace    string // default "default"
+	Image        string // runner image (must be pullable by the cluster)
+	PVCSize      string // per-job volume size, default "1Gi"
+	StorageClass string // optional; empty → cluster default
+}
+
+// NewKubernetes connects using in-cluster config (when running in a Pod)
+// or the kubeconfig file otherwise.
+func NewKubernetes(opts KubernetesOptions) (*Kubernetes, error) {
+	cfg, err := restConfig(opts.Kubeconfig)
+	if err != nil {
+		return nil, fmt.Errorf("k8s: config: %w", err)
+	}
+	cs, err := kubernetes.NewForConfig(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("k8s: client: %w", err)
+	}
+	return newK8s(cs, opts), nil
+}
+
+// newK8s builds the backend from an injected client (used by tests).
+func newK8s(cs kubernetes.Interface, opts KubernetesOptions) *Kubernetes {
+	k := &Kubernetes{
+		cs:           cs,
+		namespace:    orString(opts.Namespace, "default"),
+		image:        opts.Image,
+		pvcSize:      orString(opts.PVCSize, "1Gi"),
+		storageClass: opts.StorageClass,
+	}
+	return k
+}
+
+func restConfig(kubeconfig string) (*rest.Config, error) {
+	if kubeconfig == "" {
+		if c, err := rest.InClusterConfig(); err == nil {
+			return c, nil
+		}
+	}
+	rules := clientcmd.NewDefaultClientConfigLoadingRules()
+	if kubeconfig != "" {
+		rules.ExplicitPath = kubeconfig
+	}
+	return clientcmd.NewNonInteractiveDeferredLoadingClientConfig(rules, &clientcmd.ConfigOverrides{}).ClientConfig()
+}
+
+// Ping verifies the API server is reachable.
+func (k *Kubernetes) Ping(ctx context.Context) error {
+	_, err := k.cs.Discovery().ServerVersion()
+	return err
+}
+
+const (
+	k8sWorkflowPath = "/wf/workflow.yaml"
+	k8sDataDir      = "/data"
+	// Savepoints live under the per-job data volume, so a same-job
+	// restart-from-savepoint works without cluster-wide shared storage.
+	// Cross-host/cross-job savepoints need an object store (deferred).
+	k8sSavepointDir = "/data/savepoints"
+	nonRootUID      = int64(65532) // distroless "nonroot"
+)
+
+func (k *Kubernetes) Launch(ctx context.Context, spec LaunchSpec) (string, error) {
+	image := orString(spec.Image, k.image)
+	port := spec.ControlPort
+	if port == 0 {
+		port = 8080
+	}
+	jobID := spec.JobID
+	run := fmt.Sprintf("mailer-%s-%d", jobID, time.Now().UnixNano())
+	pvc := "mailer-" + jobID + "-data"
+
+	// Per-job volume, reused across restarts for state/checkpoints.
+	if err := k.ensurePVC(ctx, pvc, jobID); err != nil {
+		return "", err
+	}
+
+	// Workflow document as a ConfigMap.
+	cm := &corev1.ConfigMap{
+		ObjectMeta: k.meta(run, jobID, run),
+		Data:       map[string]string{"workflow.yaml": string(spec.WorkflowDoc)},
+	}
+	if _, err := k.cs.CoreV1().ConfigMaps(k.namespace).Create(ctx, cm, metav1.CreateOptions{}); err != nil {
+		return "", fmt.Errorf("k8s: create configmap: %w", err)
+	}
+
+	// Env (including any secrets) as a Secret, referenced via envFrom.
+	var secretName string
+	if len(spec.Env) > 0 {
+		sec := &corev1.Secret{
+			ObjectMeta: k.meta(run, jobID, run),
+			StringData: spec.Env,
+		}
+		if _, err := k.cs.CoreV1().Secrets(k.namespace).Create(ctx, sec, metav1.CreateOptions{}); err != nil {
+			k.cleanup(ctx, run)
+			return "", fmt.Errorf("k8s: create secret: %w", err)
+		}
+		secretName = run
+	}
+
+	job := k.buildJob(run, jobID, pvc, run, secretName, image, port, spec.RestoreSavepoint)
+	if _, err := k.cs.BatchV1().Jobs(k.namespace).Create(ctx, job, metav1.CreateOptions{}); err != nil {
+		k.cleanup(ctx, run)
+		return "", fmt.Errorf("k8s: create job: %w", err)
+	}
+
+	svc := k.buildService(run, jobID, port)
+	if _, err := k.cs.CoreV1().Services(k.namespace).Create(ctx, svc, metav1.CreateOptions{}); err != nil {
+		k.cleanup(ctx, run)
+		return "", fmt.Errorf("k8s: create service: %w", err)
+	}
+	return run, nil
+}
+
+func (k *Kubernetes) buildJob(run, jobID, pvc, cmName, secretName, image string, port int, restore string) *batchv1.Job {
+	env := []corev1.EnvVar{
+		{Name: "WORKFLOW", Value: k8sWorkflowPath},
+		{Name: "DATA_DIR", Value: k8sDataDir},
+		{Name: "SAVEPOINT_DIR", Value: k8sSavepointDir},
+		{Name: "PORT", Value: strconv.Itoa(port)},
+	}
+	if restore != "" {
+		env = append(env, corev1.EnvVar{Name: "RESTORE_SAVEPOINT", Value: restore})
+	}
+	var envFrom []corev1.EnvFromSource
+	if secretName != "" {
+		envFrom = []corev1.EnvFromSource{{SecretRef: &corev1.SecretEnvSource{
+			LocalObjectReference: corev1.LocalObjectReference{Name: secretName},
+		}}}
+	}
+	probe := &corev1.Probe{
+		ProbeHandler: corev1.ProbeHandler{HTTPGet: &corev1.HTTPGetAction{
+			Path: "/healthz", Port: intstr.FromInt(port),
+		}},
+		InitialDelaySeconds: 3, PeriodSeconds: 5, FailureThreshold: 6,
+	}
+
+	return &batchv1.Job{
+		ObjectMeta: k.meta(run, jobID, run),
+		Spec: batchv1.JobSpec{
+			BackoffLimit: int32Ptr(0), // no k8s retries; mailer reconciler restarts
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{Labels: labels(jobID, run)},
+				Spec: corev1.PodSpec{
+					RestartPolicy:                 corev1.RestartPolicyNever,
+					TerminationGracePeriodSeconds: int64Ptr(45), // room to drain + final checkpoint
+					SecurityContext: &corev1.PodSecurityContext{
+						RunAsNonRoot: boolPtr(true),
+						RunAsUser:    int64Ptr(nonRootUID),
+						RunAsGroup:   int64Ptr(nonRootUID),
+						// fsGroup makes the PVC writable by the nonroot user
+						// (the same ownership issue the Docker image hit).
+						FSGroup: int64Ptr(nonRootUID),
+					},
+					Containers: []corev1.Container{{
+						Name:    "runner",
+						Image:   image,
+						Env:     env,
+						EnvFrom: envFrom,
+						Ports:   []corev1.ContainerPort{{ContainerPort: int32(port)}},
+						VolumeMounts: []corev1.VolumeMount{
+							{Name: "data", MountPath: k8sDataDir},
+							{Name: "wf", MountPath: "/wf", ReadOnly: true},
+						},
+						LivenessProbe:  probe,
+						ReadinessProbe: probe,
+					}},
+					Volumes: []corev1.Volume{
+						{Name: "data", VolumeSource: corev1.VolumeSource{
+							PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: pvc},
+						}},
+						{Name: "wf", VolumeSource: corev1.VolumeSource{
+							ConfigMap: &corev1.ConfigMapVolumeSource{
+								LocalObjectReference: corev1.LocalObjectReference{Name: cmName},
+							},
+						}},
+					},
+				},
+			},
+		},
+	}
+}
+
+func (k *Kubernetes) buildService(run, jobID string, port int) *corev1.Service {
+	return &corev1.Service{
+		ObjectMeta: k.meta(run, jobID, run),
+		Spec: corev1.ServiceSpec{
+			Selector: map[string]string{"mailer.run": run},
+			Ports: []corev1.ServicePort{{
+				Port: int32(port), TargetPort: intstr.FromInt(port),
+			}},
+		},
+	}
+}
+
+func (k *Kubernetes) ensurePVC(ctx context.Context, name, jobID string) error {
+	_, err := k.cs.CoreV1().PersistentVolumeClaims(k.namespace).Get(ctx, name, metav1.GetOptions{})
+	if err == nil {
+		return nil // reuse existing
+	}
+	if !apierrors.IsNotFound(err) {
+		return fmt.Errorf("k8s: get pvc: %w", err)
+	}
+	pvc := &corev1.PersistentVolumeClaim{
+		ObjectMeta: k.meta(name, jobID, ""),
+		Spec: corev1.PersistentVolumeClaimSpec{
+			AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+			Resources: corev1.VolumeResourceRequirements{
+				Requests: corev1.ResourceList{corev1.ResourceStorage: resource.MustParse(k.pvcSize)},
+			},
+		},
+	}
+	if k.storageClass != "" {
+		pvc.Spec.StorageClassName = &k.storageClass
+	}
+	_, err = k.cs.CoreV1().PersistentVolumeClaims(k.namespace).Create(ctx, pvc, metav1.CreateOptions{})
+	if apierrors.IsAlreadyExists(err) {
+		return nil
+	}
+	return err
+}
+
+func (k *Kubernetes) Status(ctx context.Context, id string) (Status, error) {
+	job, err := k.cs.BatchV1().Jobs(k.namespace).Get(ctx, id, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		return Status{Phase: PhaseGone}, nil
+	}
+	if err != nil {
+		return Status{}, err
+	}
+	st := Status{}
+	switch {
+	case job.Status.Succeeded > 0:
+		st.Phase = PhaseExited
+		st.ExitCode = 0
+	case job.Status.Failed > 0:
+		st.Phase = PhaseExited
+		st.ExitCode = k.podExitCode(ctx, id)
+	default:
+		// Active, or pending/starting: treat as running.
+		st.Phase = PhaseRunning
+	}
+	// The control surface is reachable in-cluster via the Service DNS.
+	if svc, err := k.cs.CoreV1().Services(k.namespace).Get(ctx, id, metav1.GetOptions{}); err == nil && len(svc.Spec.Ports) > 0 {
+		st.Address = fmt.Sprintf("%s.%s.svc.cluster.local:%d", id, k.namespace, svc.Spec.Ports[0].Port)
+	}
+	return st, nil
+}
+
+// podExitCode returns a failed pod's container exit code, or 1 if unknown.
+func (k *Kubernetes) podExitCode(ctx context.Context, run string) int {
+	pods, err := k.cs.CoreV1().Pods(k.namespace).List(ctx, metav1.ListOptions{LabelSelector: "mailer.run=" + run})
+	if err != nil {
+		return 1
+	}
+	for _, p := range pods.Items {
+		for _, cs := range p.Status.ContainerStatuses {
+			if cs.State.Terminated != nil {
+				return int(cs.State.Terminated.ExitCode)
+			}
+		}
+	}
+	return 1
+}
+
+func (k *Kubernetes) Stop(ctx context.Context, id string, timeout time.Duration) error {
+	prop := metav1.DeletePropagationBackground
+	err := k.cs.BatchV1().Jobs(k.namespace).Delete(ctx, id, metav1.DeleteOptions{PropagationPolicy: &prop})
+	if apierrors.IsNotFound(err) {
+		return nil
+	}
+	return err
+}
+
+func (k *Kubernetes) Logs(ctx context.Context, id string, tail int) (string, error) {
+	pods, err := k.cs.CoreV1().Pods(k.namespace).List(ctx, metav1.ListOptions{LabelSelector: "mailer.run=" + id})
+	if err != nil {
+		return "", err
+	}
+	if len(pods.Items) == 0 {
+		return "", nil
+	}
+	opts := &corev1.PodLogOptions{}
+	if tail > 0 {
+		t := int64(tail)
+		opts.TailLines = &t
+	}
+	req := k.cs.CoreV1().Pods(k.namespace).GetLogs(pods.Items[0].Name, opts)
+	rc, err := req.Stream(ctx)
+	if err != nil {
+		return "", err
+	}
+	defer rc.Close()
+	b, err := io.ReadAll(rc)
+	return string(b), err
+}
+
+func (k *Kubernetes) Remove(ctx context.Context, id string) error {
+	k.cleanup(ctx, id)
+	return nil
+}
+
+// cleanup best-effort deletes a run's Job, Service, ConfigMap, and Secret
+// (the per-job PVC is kept so state survives).
+func (k *Kubernetes) cleanup(ctx context.Context, run string) {
+	prop := metav1.DeletePropagationBackground
+	_ = k.cs.BatchV1().Jobs(k.namespace).Delete(ctx, run, metav1.DeleteOptions{PropagationPolicy: &prop})
+	_ = k.cs.CoreV1().Services(k.namespace).Delete(ctx, run, metav1.DeleteOptions{})
+	_ = k.cs.CoreV1().ConfigMaps(k.namespace).Delete(ctx, run, metav1.DeleteOptions{})
+	_ = k.cs.CoreV1().Secrets(k.namespace).Delete(ctx, run, metav1.DeleteOptions{})
+}
+
+func (k *Kubernetes) meta(name, jobID, run string) metav1.ObjectMeta {
+	return metav1.ObjectMeta{Name: name, Namespace: k.namespace, Labels: labels(jobID, run)}
+}
+
+func labels(jobID, run string) map[string]string {
+	m := map[string]string{"app.kubernetes.io/managed-by": "mailer", "mailer.job": jobID}
+	if run != "" {
+		m["mailer.run"] = run
+	}
+	return m
+}
+
+func orString(v, def string) string {
+	if v == "" {
+		return def
+	}
+	return v
+}
+
+func int32Ptr(v int32) *int32 { return &v }
+func int64Ptr(v int64) *int64 { return &v }
+func boolPtr(v bool) *bool     { return &v }
+
+// compile-time check.
+var _ ContainerBackend = (*Kubernetes)(nil)
