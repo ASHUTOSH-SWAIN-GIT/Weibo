@@ -15,7 +15,7 @@ Docker/SQLite clients that live here.
 | -------------------------- | ---- |
 | `store`                    | SQLite persistence (jobs, runs, transitions). Source of truth; never stores secrets. |
 | `lifecycle`                | Phases, legal transitions, restart policy. |
-| `backend`                  | `ContainerBackend` interface + Docker impl + in-memory fake. |
+| `backend`                  | `ContainerBackend` interface + Docker + Kubernetes impls + in-memory fake. |
 | (root) `control`           | `Controller`: submit/cancel/restart + the reconciler loop. |
 | `api`                      | REST server over the controller. |
 | `cmd/mailer`               | The `mailer` CLI (`mailer dashboard`). |
@@ -34,6 +34,44 @@ cd control && go run ./cmd/mailer dashboard                # starts controller +
 Add `-no-open` to run it headless (e.g. on a server), or `-addr :9000` to
 change the port. Everything — submit, watch, cancel, restart, savepoint —
 happens in that one UI.
+
+## Backends: Docker or Kubernetes
+
+The controller drives one job per container through a `ContainerBackend`. The
+same jobs, API, and UI work on either backend — only *where* the containers run
+changes.
+
+**Docker** (default) — one container per job on the local daemon:
+
+```sh
+mailer dashboard                         # -backend docker is the default
+```
+
+**Kubernetes** — one `batch/v1` Job per job on a cluster (a `Job`, not a
+Deployment, so a completed job isn't auto-restarted — mailer's reconciler owns
+restarts). Each job gets a per-job PVC (state + checkpoints), a ConfigMap (the
+workflow), an optional Secret (env), and a ClusterIP Service, with `/healthz`
+liveness/readiness probes and `fsGroup` so the non-root runner can write the
+volume.
+
+```sh
+# The image must be pullable by the cluster — push it, or for kind:
+kind load docker-image mailer-runner:dev
+mailer dashboard -backend kubernetes -namespace default -image mailer-runner:dev
+```
+
+Notes for the Kubernetes backend:
+
+- **Image:** `mailer-runner:dev` is local; a real cluster needs it in a registry
+  (`-image <registry>/mailer-runner:tag`), or loaded into kind.
+- **Live state proxy:** the dashboard reaches a job's `/state` and `/metrics`
+  via the ClusterIP Service DNS, so those work when the controller runs
+  **in-cluster**. Run the controller on the host (against a remote cluster) and
+  job *lifecycle* (submit/status/logs/cancel/restart) still works via the API,
+  but the live-metrics proxy needs in-cluster networking (or a port-forward).
+- **Savepoints** live under the per-job PVC (`/data/savepoints`), so same-job
+  restart-from-savepoint works. Cross-host / cross-job savepoints need an object
+  store (an S3 `Blobstore` adapter) — a planned follow-up.
 
 ## API
 
