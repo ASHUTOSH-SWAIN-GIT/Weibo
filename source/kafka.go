@@ -1,6 +1,7 @@
 package source
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -406,14 +407,18 @@ func (k *KafkaSource) RestoreOffset(data []byte) error {
 // Headers are copied into a map. Parsed is left nil here; the deserializer
 // (if configured) populates it in runOnce after this conversion.
 func KafkaToRecord(msg kafka.Message) types.Record {
+	// kafka-go reuses a message's Value/Key/Header byte buffers for
+	// subsequent messages, so the record must own copies — otherwise a
+	// record still in flight (buffered in a stage channel) is silently
+	// overwritten, which turns downstream field reads into empty values.
 	headers := make(map[string][]byte, len(msg.Headers))
 	for _, h := range msg.Headers {
-		headers[h.Key] = h.Value
+		headers[h.Key] = bytes.Clone(h.Value)
 	}
 
 	return types.Record{
-		Key:       msg.Key,
-		Value:     msg.Value,
+		Key:       bytes.Clone(msg.Key),
+		Value:     bytes.Clone(msg.Value),
 		Timestamp: msg.Time,
 		Offset:    msg.Offset,
 		Partition: msg.Partition,
