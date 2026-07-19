@@ -64,6 +64,49 @@ func TestSubmitLaunchesJob(t *testing.T) {
 	}
 }
 
+const sdkManifestDoc = `kind: sdk
+name: orders-sdk
+image: my-registry/orders-sdk:v1
+`
+
+// An SDK manifest is auto-detected, stored as an sdk job, and launched
+// with its own image (no workflow compilation).
+func TestSubmitSDK_DetectedAndLaunched(t *testing.T) {
+	fake := backend.NewFake()
+	c, _ := newController(t, fake, lifecycle.DefaultRestartPolicy())
+
+	job, err := c.Submit(context.Background(), []byte(sdkManifestDoc), nil)
+	if err != nil {
+		t.Fatalf("Submit(sdk): %v", err)
+	}
+	if job.Kind != store.KindSDK || job.Image != "my-registry/orders-sdk:v1" || job.Name != "orders-sdk" {
+		t.Fatalf("sdk job wrong: %+v", job)
+	}
+	if fake.Launched() != 1 {
+		t.Fatalf("expected launch, got %d", fake.Launched())
+	}
+	// The container runs the SDK image with NO workflow doc injected.
+	run, _ := c.LatestRun(job.ID)
+	if got := fake.LastImage(run.ContainerID); got != "my-registry/orders-sdk:v1" {
+		t.Errorf("launched image: got %q", got)
+	}
+	if doc := fake.LastWorkflowDoc(run.ContainerID); len(doc) != 0 {
+		t.Errorf("sdk job must not inject a workflow doc, got %q", doc)
+	}
+}
+
+func TestSubmitSDK_MissingImage(t *testing.T) {
+	fake := backend.NewFake()
+	c, _ := newController(t, fake, lifecycle.DefaultRestartPolicy())
+	_, err := c.Submit(context.Background(), []byte("kind: sdk\nname: x\n"), nil)
+	if err == nil {
+		t.Fatal("expected error for sdk manifest without image")
+	}
+	if fake.Launched() != 0 {
+		t.Error("nothing should launch for an invalid sdk manifest")
+	}
+}
+
 func TestSubmitRejectsInvalidWorkflow(t *testing.T) {
 	fake := backend.NewFake()
 	c, _ := newController(t, fake, lifecycle.DefaultRestartPolicy())

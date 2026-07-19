@@ -17,15 +17,13 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"os"
 	"os/signal"
 	"syscall"
 
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/checkpoint"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/jobagent"
+	"github.com/ASHUTOSH-SWAIN-GIT/mailer/sdk"
 	"github.com/ASHUTOSH-SWAIN-GIT/mailer/workflow/runner"
 )
 
@@ -34,9 +32,7 @@ const (
 	exitError = 1
 	exitUsage = 2
 
-	defaultDataDir      = "/data"
-	defaultPort         = "8080"
-	defaultSavepointDir = "/savepoints"
+	defaultDataDir = "/data"
 )
 
 func main() {
@@ -53,8 +49,10 @@ func run(ctx context.Context, getenv func(string) string, stdout, stderr io.Writ
 		fmt.Fprintln(stderr, "mailer-runner: WORKFLOW is required (path to the workflow file)")
 		return exitUsage
 	}
-	dataDir := orDefault(getenv("DATA_DIR"), defaultDataDir)
-	port := orDefault(getenv("PORT"), defaultPort)
+	dataDir := getenv("DATA_DIR")
+	if dataDir == "" {
+		dataDir = defaultDataDir
+	}
 
 	// The engine derives per-job state/checkpoint dirs under DATA_DIR;
 	// make sure the mounted base exists.
@@ -70,71 +68,17 @@ func run(ctx context.Context, getenv func(string) string, stdout, stderr io.Writ
 		fmt.Fprintf(stderr, "mailer-runner: compile %s: %v\n", workflowPath, err)
 		return exitError
 	}
-	fmt.Fprintf(stdout, "mailer-runner: job=%s delivery=%s data=%s port=%s\n",
-		cw.Name, cw.Delivery, dataDir, port)
+	fmt.Fprintf(stdout, "mailer-runner: job=%s delivery=%s data=%s\n", cw.Name, cw.Delivery, dataDir)
 
-	// Savepoints live in a shared blobstore (a shared volume locally; an
-	// object store on multi-host later), so any run can restore any
-	// savepoint. Both restore and promote target the workflow's own
-	// checkpoint storage via cw.CheckpointDir.
-	blobs := checkpoint.NewFileBlobstore(orDefault(getenv("SAVEPOINT_DIR"), defaultSavepointDir))
-
-	if label := getenv("RESTORE_SAVEPOINT"); label != "" {
-		if cw.CheckpointDir == "" {
-			fmt.Fprintln(stderr, "mailer-runner: RESTORE_SAVEPOINT set but workflow has no checkpointing")
-			return exitError
-		}
-		id, err := checkpoint.RestoreSavepoint(checkpoint.NewFileStorage(cw.CheckpointDir), blobs, label)
-		if err != nil {
-			fmt.Fprintf(stderr, "mailer-runner: restore savepoint %q: %v\n", label, err)
-			return exitError
-		}
-		fmt.Fprintf(stdout, "mailer-runner: restored from savepoint %q (checkpoint %s)\n", label, id)
-	}
-
-	agent := jobagent.New(cw.Env)
-
-	// Serve the control surface alongside the job. A serve failure (e.g.
-	// port already bound) is logged but does not abort the job — the
-	// pipeline is the primary workload. The server has its own context so
-	// it shuts down when the job finishes on its own, not only on SIGTERM.
-	srvCtx, stopSrv := context.WithCancel(ctx)
-	defer stopSrv()
-	serveErr := make(chan error, 1)
-	go func() { serveErr <- agent.Serve(srvCtx, ":"+port) }()
-
-	runErr := agent.Run(ctx)
-	stopSrv() // job is done; tear down the control server
-
-	// Stop-with-savepoint: the job has drained and written its final
-	// checkpoint; promote it to the named savepoint now.
-	if label, ok := agent.SavepointRequest(); ok {
-		if cw.CheckpointDir == "" {
-			fmt.Fprintln(stderr, "mailer-runner: savepoint requested but workflow has no checkpointing")
-		} else if id, err := checkpoint.CreateSavepoint(checkpoint.NewFileStorage(cw.CheckpointDir), blobs, label); err != nil {
-			fmt.Fprintf(stderr, "mailer-runner: create savepoint %q: %v\n", label, err)
-		} else {
-			fmt.Fprintf(stdout, "mailer-runner: savepoint %q created from checkpoint %s\n", label, id)
-		}
-	}
-
-	if err := <-serveErr; err != nil {
-		fmt.Fprintf(stderr, "mailer-runner: control server: %v\n", err)
-	}
-
-	switch {
-	case runErr == nil || errors.Is(runErr, context.Canceled):
-		fmt.Fprintf(stdout, "mailer-runner: job=%s %s\n", cw.Name, agent.State().Phase)
-		return exitOK
-	default:
-		fmt.Fprintf(stderr, "mailer-runner: job=%s failed: %v\n", cw.Name, runErr)
-		return exitError
-	}
-}
-
-func orDefault(v, def string) string {
-	if v == "" {
-		return def
-	}
-	return v
+	// The lifecycle (agent, serve, savepoints, graceful shutdown) is shared
+	// with SDK jobs so both behave identically.
+	return sdk.Serve(ctx, cw.Env, sdk.ServeOptions{
+		Name:             cw.Name,
+		Port:             getenv("PORT"),
+		CheckpointDir:    cw.CheckpointDir,
+		SavepointDir:     getenv("SAVEPOINT_DIR"),
+		RestoreSavepoint: getenv("RESTORE_SAVEPOINT"),
+		Stdout:           stdout,
+		Stderr:           stderr,
+	})
 }

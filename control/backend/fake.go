@@ -118,6 +118,27 @@ func (f *Fake) LastEnv(id string) map[string]string {
 	return nil
 }
 
+// LastImage returns the image a container was launched with.
+func (f *Fake) LastImage(id string) string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if c, ok := f.containers[id]; ok {
+		return c.spec.Image
+	}
+	return ""
+}
+
+// LastWorkflowDoc returns the workflow document a container was launched
+// with (empty for SDK jobs).
+func (f *Fake) LastWorkflowDoc(id string) []byte {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if c, ok := f.containers[id]; ok {
+		return c.spec.WorkflowDoc
+	}
+	return nil
+}
+
 // Launched reports how many containers were ever launched.
 func (f *Fake) Launched() int {
 	f.mu.Lock()

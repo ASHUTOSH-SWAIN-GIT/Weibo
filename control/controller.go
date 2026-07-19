@@ -14,8 +14,11 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strings"
 	"sync"
 	"time"
+
+	"gopkg.in/yaml.v3"
 
 	"github.com/ASHUTOSH-SWAIN-GIT/mailer/control/backend"
 	"github.com/ASHUTOSH-SWAIN-GIT/mailer/control/lifecycle"
@@ -91,6 +94,12 @@ func New(opts Options) *Controller {
 // never persisted. A validation failure rejects the job before any
 // container starts.
 func (c *Controller) Submit(ctx context.Context, doc []byte, env map[string]string) (*store.Job, error) {
+	// Auto-detect the kind: a manifest with `kind: sdk` is a prebuilt Go
+	// pipeline image; anything else is a declarative YAML workflow.
+	if m, ok := parseSDKManifest(doc); ok {
+		return c.submitSDK(ctx, doc, m, env)
+	}
+
 	name, delivery, graph, err := c.validate(doc, env)
 	if err != nil {
 		return nil, fmt.Errorf("submit: invalid workflow: %w", err)
@@ -100,6 +109,7 @@ func (c *Controller) Submit(ctx context.Context, doc []byte, env map[string]stri
 	job := &store.Job{
 		ID:       c.newID(),
 		Name:     name,
+		Kind:     store.KindYAML,
 		Spec:     string(doc),
 		Delivery: delivery,
 		Graph:    graph,
@@ -116,6 +126,57 @@ func (c *Controller) Submit(ctx context.Context, doc []byte, env map[string]stri
 	if err := c.launch(ctx, job, 1, ""); err != nil {
 		// The job is recorded; the reconciler will not retry a launch
 		// failure automatically, so surface it to the caller.
+		return job, fmt.Errorf("submit: launch: %w", err)
+	}
+	return job, nil
+}
+
+// sdkManifest is the submission for a prebuilt SDK job image.
+type sdkManifest struct {
+	Kind  string `yaml:"kind"`
+	Name  string `yaml:"name"`
+	Image string `yaml:"image"`
+}
+
+// parseSDKManifest reports whether doc is an SDK job manifest (kind: sdk).
+// A YAML workflow has no `kind`, so it never matches.
+func parseSDKManifest(doc []byte) (sdkManifest, bool) {
+	var m sdkManifest
+	if err := yaml.Unmarshal(doc, &m); err != nil {
+		return sdkManifest{}, false
+	}
+	return m, strings.EqualFold(m.Kind, store.KindSDK)
+}
+
+// submitSDK records and launches a prebuilt SDK job image. There is no
+// workflow to compile; the pipeline lives in the image. The topology is
+// discovered at runtime from the agent's /describe.
+func (c *Controller) submitSDK(ctx context.Context, doc []byte, m sdkManifest, env map[string]string) (*store.Job, error) {
+	if m.Name == "" {
+		return nil, fmt.Errorf("submit: sdk manifest missing 'name'")
+	}
+	if m.Image == "" {
+		return nil, fmt.Errorf("submit: sdk manifest missing 'image'")
+	}
+
+	now := time.Now().UTC()
+	job := &store.Job{
+		ID:      c.newID(),
+		Name:    m.Name,
+		Kind:    store.KindSDK,
+		Image:   m.Image,
+		Spec:    string(doc),
+		Desired: store.DesiredRunning,
+		Created: now,
+		Updated: now,
+	}
+	if err := c.store.CreateJob(job); err != nil {
+		return nil, err
+	}
+	c.setSecrets(job.ID, env)
+	c.transition(job.ID, "", "", lifecycle.Submitted, "submitted (sdk)")
+
+	if err := c.launch(ctx, job, 1, ""); err != nil {
 		return job, fmt.Errorf("submit: launch: %w", err)
 	}
 	return job, nil
@@ -301,11 +362,22 @@ func (c *Controller) launch(ctx context.Context, job *store.Job, attempt int, re
 		Started: now,
 	}
 
+	// SDK jobs run their own prebuilt image with the pipeline compiled in;
+	// YAML jobs run the generic runner image with the workflow document
+	// injected.
+	img := c.image
+	var doc []byte
+	if job.Kind == store.KindSDK {
+		img = job.Image
+	} else {
+		doc = []byte(job.Spec)
+	}
+
 	id, err := c.backend.Launch(ctx, backend.LaunchSpec{
 		JobID:            job.ID,
 		Name:             job.Name,
-		Image:            c.image,
-		WorkflowDoc:      []byte(job.Spec),
+		Image:            img,
+		WorkflowDoc:      doc,
 		Env:              c.launchEnv(job.ID),
 		ControlPort:      c.port,
 		RestoreSavepoint: restore,

@@ -85,11 +85,17 @@ func (d *Docker) Launch(ctx context.Context, spec LaunchSpec) (string, error) {
 		}
 	}
 
+	// An SDK job's image has the pipeline compiled in — no workflow doc to
+	// inject, and WORKFLOW is left unset.
+	sdkJob := len(spec.WorkflowDoc) == 0
+
 	env := []string{
-		"WORKFLOW=" + containerWorkflowPath,
 		"DATA_DIR=" + containerDataDir,
 		"SAVEPOINT_DIR=" + containerSavepointDir,
 		"PORT=" + strconv.Itoa(port),
+	}
+	if !sdkJob {
+		env = append(env, "WORKFLOW="+containerWorkflowPath)
 	}
 	if spec.RestoreSavepoint != "" {
 		env = append(env, "RESTORE_SAVEPOINT="+spec.RestoreSavepoint)
@@ -120,14 +126,16 @@ func (d *Docker) Launch(ctx context.Context, spec LaunchSpec) (string, error) {
 		return "", fmt.Errorf("docker: create container: %w", err)
 	}
 
-	// Inject the workflow document before the process starts.
-	archive, err := tarFile("wf/workflow.yaml", spec.WorkflowDoc)
-	if err != nil {
-		return "", err
-	}
-	if err := d.cli.CopyToContainer(ctx, created.ID, "/", archive, container.CopyToContainerOptions{}); err != nil {
-		_ = d.cli.ContainerRemove(ctx, created.ID, container.RemoveOptions{Force: true})
-		return "", fmt.Errorf("docker: copy workflow: %w", err)
+	// Inject the workflow document before the process starts (YAML jobs).
+	if !sdkJob {
+		archive, err := tarFile("wf/workflow.yaml", spec.WorkflowDoc)
+		if err != nil {
+			return "", err
+		}
+		if err := d.cli.CopyToContainer(ctx, created.ID, "/", archive, container.CopyToContainerOptions{}); err != nil {
+			_ = d.cli.ContainerRemove(ctx, created.ID, container.RemoveOptions{Force: true})
+			return "", fmt.Errorf("docker: copy workflow: %w", err)
+		}
 	}
 
 	if err := d.cli.ContainerStart(ctx, created.ID, container.StartOptions{}); err != nil {
