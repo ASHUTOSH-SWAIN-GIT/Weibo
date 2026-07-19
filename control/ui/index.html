@@ -3,102 +3,93 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>MAILER // CONTROL</title>
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%2314110d'/%3E%3Crect x='3' y='6' width='10' height='4' fill='%23e0a53d'/%3E%3C/svg%3E">
+<title>mailer</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='8' cy='8' r='4' fill='%232563eb'/%3E%3C/svg%3E">
 <style>
   :root{
-    --bg:#14110d; --panel:#1b1712; --panel2:#221d16; --line:#39301f;
-    --ink:#ece2cf; --muted:#8f8472; --dim:#5f574a;
-    --amber:#e0a53d; --green:#63d090; --red:#e0573d; --steel:#7fb0d8; --violet:#b79ae0;
-    --mono:'IBM Plex Mono',ui-monospace,'SF Mono',Menlo,Consolas,monospace;
+    --bg:#fbfbfa; --card:#fff; --fg:#1a1a1a; --muted:#8a8a8a; --line:#ececec;
+    --accent:#2563eb; --green:#16a34a; --amber:#d97706; --red:#dc2626; --gray:#b0b0b0;
+    --sans:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;
+    --mono:ui-monospace,'SF Mono',Menlo,Consolas,monospace;
+    --radius:8px;
   }
   *{box-sizing:border-box}
   html,body{margin:0;height:100%}
-  body{
-    background:var(--bg); color:var(--ink); font-family:var(--mono);
-    font-size:13px; line-height:1.5;
-    background-image:linear-gradient(rgba(255,255,255,.015) 1px,transparent 1px),
-      linear-gradient(90deg,rgba(255,255,255,.015) 1px,transparent 1px);
-    background-size:34px 34px;
-  }
+  body{background:var(--bg);color:var(--fg);font-family:var(--sans);font-size:14px;line-height:1.5;-webkit-font-smoothing:antialiased}
   a{color:inherit;text-decoration:none}
-  .hazard{height:6px;background:repeating-linear-gradient(45deg,var(--amber) 0 14px,#14110d 14px 28px)}
-  /* top bar */
-  header{display:flex;align-items:center;gap:22px;padding:14px 22px;border-bottom:1px solid var(--line);background:var(--panel)}
-  .brand{font-weight:800;letter-spacing:.14em;font-size:15px;font-family:system-ui,var(--mono)}
-  .brand b{color:var(--amber)}
-  nav{display:flex;gap:6px;margin-left:auto}
-  nav a{padding:6px 14px;border:1px solid var(--line);color:var(--muted);text-transform:uppercase;letter-spacing:.12em;font-size:11px}
-  nav a.on{color:var(--bg);background:var(--amber);border-color:var(--amber);font-weight:700}
-  .count{color:var(--dim);text-transform:uppercase;letter-spacing:.14em;font-size:11px}
-  main{max-width:1100px;margin:0 auto;padding:26px 22px 60px}
-  /* panels */
-  .panel{border:1px solid var(--line);background:var(--panel)}
-  .panel>.hd{padding:9px 14px;border-bottom:1px solid var(--line);text-transform:uppercase;letter-spacing:.16em;font-size:10.5px;color:var(--muted);background:var(--panel2)}
-  .grid{display:grid;gap:16px}
-  h1{font-family:system-ui,var(--mono);font-weight:800;letter-spacing:.02em;font-size:22px;margin:0}
-  .sub{color:var(--dim);font-size:11px;letter-spacing:.1em;text-transform:uppercase}
+  /* header */
+  header{display:flex;align-items:center;gap:20px;padding:16px 28px;border-bottom:1px solid var(--line)}
+  .brand{font-weight:600;font-size:15px;letter-spacing:-.01em}
+  .brand span{color:var(--accent)}
+  nav{display:flex;gap:4px;margin-left:auto}
+  nav a{padding:6px 12px;border-radius:6px;color:var(--muted);font-weight:500}
+  nav a:hover{background:#f2f2f0;color:var(--fg)}
+  nav a.on{color:var(--fg);background:#eef2ff}
+  .count{color:var(--muted);font-size:13px}
+  main{max-width:900px;margin:0 auto;padding:28px 28px 80px}
+  h1{font-size:20px;font-weight:600;letter-spacing:-.02em;margin:0}
+  .sub{color:var(--muted);font-size:13px;margin-top:2px}
+  .muted{color:var(--muted)}
+  /* card */
+  .card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius)}
+  .card .hd{padding:12px 16px;font-size:12px;font-weight:600;color:var(--muted);border-bottom:1px solid var(--line)}
   /* table */
   table{width:100%;border-collapse:collapse}
-  th{text-align:left;font-size:10px;letter-spacing:.16em;text-transform:uppercase;color:var(--dim);padding:10px 14px;border-bottom:1px solid var(--line)}
-  td{padding:12px 14px;border-bottom:1px solid var(--line)}
+  th{text-align:left;font-size:12px;font-weight:500;color:var(--muted);padding:10px 16px}
+  td{padding:13px 16px;border-top:1px solid var(--line)}
   tr.row{cursor:pointer}
-  tr.row:hover td{background:var(--panel2)}
-  .name{font-weight:700;color:var(--ink)}
-  .mono-dim{color:var(--dim);font-size:11px}
-  /* LED + badges */
-  .led{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:8px;vertical-align:middle;box-shadow:0 0 8px currentColor}
-  .phase{display:inline-flex;align-items:center;text-transform:uppercase;letter-spacing:.1em;font-size:11px}
-  .p-running{color:var(--green)} .p-starting,.p-cancelling{color:var(--amber)}
-  .p-finished{color:var(--steel)} .p-failed{color:var(--red)}
-  .p-cancelled,.p-submitted,.p-none{color:var(--muted)}
-  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
-  .p-running .led{animation:pulse 1.1s ease-in-out infinite}
-  .badge{display:inline-block;padding:3px 9px;border:1px solid currentColor;text-transform:uppercase;letter-spacing:.1em;font-size:10px}
-  .d-exactly-once{color:var(--green)} .d-at-least-once{color:var(--steel)} .d-at-most-once{color:var(--muted)}
-  .b-sdk{color:var(--violet)}
+  tr.row:hover td{background:#faf9f8}
+  .name{font-weight:500}
+  .dim{color:var(--muted);font-size:13px}
+  /* phase dot */
+  .phase{display:inline-flex;align-items:center;gap:7px;font-size:13px}
+  .dot{width:7px;height:7px;border-radius:50%;background:var(--gray)}
+  .p-running .dot{background:var(--green)} .p-starting .dot,.p-cancelling .dot{background:var(--amber)}
+  .p-failed .dot{background:var(--red)} .p-finished .dot{background:var(--accent)}
+  .p-cancelled .dot,.p-none .dot,.p-submitted .dot{background:var(--gray)}
+  /* pill */
+  .pill{display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;background:#f2f2f0;color:var(--muted)}
+  .pill-sdk{background:#eef2ff;color:var(--accent)}
   /* buttons */
-  .btn{font-family:var(--mono);cursor:pointer;padding:8px 15px;border:1px solid var(--line);background:var(--panel2);color:var(--ink);text-transform:uppercase;letter-spacing:.1em;font-size:11px}
-  .btn:hover{border-color:var(--amber);color:var(--amber)}
-  .btn.pri{background:var(--amber);color:var(--bg);border-color:var(--amber);font-weight:700}
-  .btn.pri:hover{background:#efbb5c}
-  .btn.danger:hover{border-color:var(--red);color:var(--red)}
-  .btn:disabled{opacity:.4;cursor:not-allowed}
+  .btn{font-family:inherit;font-size:13px;cursor:pointer;padding:7px 13px;border:1px solid var(--line);background:#fff;color:var(--fg);border-radius:6px;font-weight:500}
+  .btn:hover{background:#f7f7f6}
+  .btn.pri{background:var(--accent);color:#fff;border-color:var(--accent)}
+  .btn.pri:hover{background:#1d4fd7}
+  .btn.danger:hover{color:var(--red);border-color:#f0c9c9}
+  .btn:disabled{opacity:.45;cursor:not-allowed}
   .btns{display:flex;gap:8px;flex-wrap:wrap}
-  /* pipeline graph */
-  .flow{display:flex;align-items:center;flex-wrap:wrap;gap:6px;padding:18px 14px}
-  .node{border:1px solid var(--line);padding:9px 13px;background:var(--panel2);min-width:74px;text-align:center}
-  .node .t{font-size:9.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--dim)}
-  .node .n{font-weight:700;margin-top:2px}
-  .node.src{border-color:#4a5f3a}.node.snk{border-color:#5a4438}
-  .arrow{color:var(--amber);font-size:15px}
+  /* pipeline */
+  .flow{display:flex;align-items:center;flex-wrap:wrap;gap:8px;padding:18px 16px}
+  .node{border:1px solid var(--line);border-radius:6px;padding:8px 12px;background:#fff;min-width:70px}
+  .node .t{font-size:11px;color:var(--muted)}
+  .node .n{font-weight:500;font-size:13px;margin-top:1px}
+  .arrow{color:var(--gray)}
   /* kv */
-  .kv{display:grid;grid-template-columns:auto 1fr;gap:7px 16px;padding:14px}
-  .kv dt{color:var(--dim);text-transform:uppercase;letter-spacing:.1em;font-size:10px;align-self:center}
-  .kv dd{margin:0;font-weight:600}
-  .big{font-size:20px;font-weight:800;color:var(--amber)}
-  /* logs + transitions */
-  pre.log{margin:0;padding:14px;max-height:280px;overflow:auto;font-size:11.5px;color:var(--muted);white-space:pre-wrap;word-break:break-all}
-  .tl{padding:12px 14px;font-size:11.5px}
-  .tl .r{display:flex;gap:10px;padding:3px 0;color:var(--muted)}
-  .tl .r b{color:var(--ink);min-width:82px}
-  .tl .r .at{margin-left:auto;color:var(--dim)}
+  .kv{display:grid;grid-template-columns:auto 1fr;gap:9px 20px;padding:16px}
+  .kv dt{color:var(--muted);font-size:13px}
+  .kv dd{margin:0;font-weight:500}
+  .big{font-size:19px;font-weight:600}
+  /* logs + lifecycle */
+  pre.log{margin:0;padding:14px 16px;max-height:300px;overflow:auto;font-size:12px;font-family:var(--mono);color:#444;white-space:pre-wrap;word-break:break-all;background:#fafafa;border-radius:0 0 var(--radius) var(--radius)}
+  .tl{padding:12px 16px;font-size:13px}
+  .tl .r{display:flex;gap:10px;padding:4px 0;color:var(--muted)}
+  .tl .r b{color:var(--fg);font-weight:500;min-width:80px}
+  .tl .r .at{margin-left:auto;font-size:12px}
   /* forms */
-  textarea{width:100%;background:var(--bg);color:var(--ink);border:1px solid var(--line);font-family:var(--mono);font-size:12.5px;padding:12px;resize:vertical}
-  textarea:focus{outline:none;border-color:var(--amber)}
-  label.fld{display:block;font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--dim);margin:0 0 6px}
-  .note{color:var(--dim);font-size:11px;margin-top:6px}
-  .err{color:var(--red);border:1px solid var(--red);padding:10px 13px;font-size:12px;white-space:pre-wrap}
-  .ok{color:var(--green)}
-  .empty{padding:40px 14px;text-align:center;color:var(--dim);letter-spacing:.06em}
-  .back{color:var(--muted);font-size:11px;letter-spacing:.1em;text-transform:uppercase}
-  .back:hover{color:var(--amber)}
+  textarea{width:100%;background:#fff;color:var(--fg);border:1px solid var(--line);border-radius:6px;font-family:var(--mono);font-size:13px;padding:12px;resize:vertical;line-height:1.55}
+  textarea:focus{outline:none;border-color:var(--accent)}
+  .err{color:var(--red);background:#fef2f2;border:1px solid #f5d0d0;border-radius:6px;padding:10px 13px;font-size:13px;white-space:pre-wrap}
+  .empty{padding:44px 16px;text-align:center;color:var(--muted)}
+  .back{color:var(--muted);font-size:13px}
+  .back:hover{color:var(--fg)}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  .id{font-family:var(--mono);font-size:12px;color:var(--muted)}
+  @media (max-width:640px){.grid2{grid-template-columns:1fr}}
 </style>
 </head>
 <body>
-<div class="hazard"></div>
 <header>
-  <div class="brand">MAILER <b>//</b> CONTROL</div>
+  <div class="brand">mailer<span>.</span></div>
   <span class="count" id="count"></span>
   <nav id="nav">
     <a href="#/jobs" data-v="jobs">Jobs</a>
@@ -108,7 +99,6 @@
 <main id="app"></main>
 
 <script>
-const $ = (h)=>{const t=document.createElement('template');t.innerHTML=h.trim();return t.content.firstChild};
 const esc=(s)=>String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const g=(o,...k)=>{for(const x of k){if(o&&o[x]!=null)return o[x]}return undefined};
 
@@ -129,107 +119,98 @@ function stopPoll(){if(timer){clearInterval(timer);timer=null}}
 function poll(fn,ms){stopPoll();fn();timer=setInterval(fn,ms)}
 
 function phaseEl(p){p=(p||'—').toLowerCase();const cls=({'—':'none'}[p])||p;
-  return `<span class="phase p-${esc(cls)}"><span class="led"></span>${esc(p)}</span>`}
+  return `<span class="phase p-${esc(cls)}"><span class="dot"></span>${esc(p)}</span>`}
+
+function badge(j){
+  if(j.kind==='sdk') return `<span class="pill pill-sdk">sdk</span>`;
+  return j.delivery?`<span class="pill">${esc(j.delivery)}</span>`:'';
+}
 
 function graphEl(gr){
   if(!gr)return '';
   const src=g(gr,'Source','source'), snk=g(gr,'Sink','sink'), ops=g(gr,'Operators','operators')||[];
-  const node=(t,n,c)=>`<div class="node ${c||''}"><div class="t">${esc(t)}</div><div class="n">${esc(n)}</div></div>`;
-  const arr='<span class="arrow">─▶</span>';
-  let parts=[node('source',src,'src')];
-  ops.forEach(o=>parts.push(arr,node(g(o,'Type','type'),g(o,'ID','id'))));
-  parts.push(arr,node('sink',snk,'snk'));
-  return `<div class="flow">${parts.join('')}</div>`;
+  return flow(src, ops.map(o=>[g(o,'Type','type'),g(o,'ID','id')]), snk);
 }
-
-// SDK jobs have no declarative graph; their topology comes from the live
-// agent /describe (source.type → operators → sink.type).
 function describeGraphEl(pi){
-  if(!pi) return '<div class="empty">pipeline appears once the job is running</div>';
-  const node=(t,n,c)=>`<div class="node ${c||''}"><div class="t">${esc(t)}</div><div class="n">${esc(n)}</div></div>`;
-  const arr='<span class="arrow">─▶</span>';
-  let parts=[node('source',(pi.source&&pi.source.type)||'?','src')];
-  (pi.operators||[]).forEach(o=>parts.push(arr,node(o.type||'op',o.label||o.type||'op')));
-  parts.push(arr,node('sink',(pi.sink&&pi.sink.type)||'?','snk'));
+  if(!pi) return '<div class="empty">Pipeline appears once the job is running.</div>';
+  return flow((pi.source&&pi.source.type)||'?', (pi.operators||[]).map(o=>[o.type||'op',o.label||o.type||'op']), (pi.sink&&pi.sink.type)||'?');
+}
+function flow(src, ops, snk){
+  const node=(t,n)=>`<div class="node"><div class="t">${esc(t)}</div><div class="n">${esc(n)}</div></div>`;
+  const arr='<span class="arrow">→</span>';
+  let parts=[node('source',src)];
+  ops.forEach(o=>parts.push(arr,node(o[0],o[1])));
+  parts.push(arr,node('sink',snk));
   return `<div class="flow">${parts.join('')}</div>`;
 }
 
-// The delivery/kind badge: an SDK job shows "SDK", a YAML job its guarantee.
-function deliveryBadge(j){
-  if(j.kind==='sdk') return `<span class="badge b-sdk">SDK</span>`;
-  return `<span class="badge d-${esc(j.delivery)}">${esc(j.delivery)}</span>`;
-}
-
-/* ---- jobs list ---- */
-async function viewJobs(){
+/* jobs list */
+function viewJobs(){
   setNav('jobs');
   poll(async()=>{
-    let d;try{d=await api.jobs()}catch(e){app.innerHTML=`<div class="err">controller unreachable</div>`;return}
+    let d;try{d=await api.jobs()}catch(e){app.innerHTML=`<div class="err">Controller unreachable.</div>`;return}
     const jobs=d.jobs||[];
-    document.getElementById('count').textContent=jobs.length+' job'+(jobs.length===1?'':'s');
-    if(!jobs.length){app.innerHTML=`<div class="panel"><div class="hd">Jobs</div><div class="empty">No jobs yet — <a class="back" href="#/submit">submit one →</a></div></div>`;return}
+    document.getElementById('count').textContent=jobs.length?jobs.length+(jobs.length===1?' job':' jobs'):'';
+    if(!jobs.length){app.innerHTML=`<div class="card"><div class="empty">No jobs yet. <a class="back" href="#/submit" style="color:var(--accent)">Submit one →</a></div></div>`;return}
     const rows=jobs.map(j=>`<tr class="row" onclick="location.hash='#/jobs/${esc(j.id)}'">
       <td class="name">${esc(j.name)}</td>
       <td>${phaseEl(j.phase)}</td>
-      <td>${deliveryBadge(j)}</td>
-      <td class="mono-dim">${j.kind==='sdk' ? 'go pipeline' : esc((g(j.graph,'Operators','operators')||[]).length)+' ops'}</td>
-      <td class="mono-dim">${esc(fmtTime(j.createdAt))}</td>
+      <td>${badge(j)}</td>
+      <td class="dim">${j.kind==='sdk'?'Go pipeline':esc((g(j.graph,'Operators','operators')||[]).length)+' operators'}</td>
+      <td class="dim">${esc(fmtTime(j.createdAt))}</td>
     </tr>`).join('');
-    app.innerHTML=`<div class="panel"><div class="hd">Jobs</div>
-      <table><thead><tr><th>Name</th><th>Phase</th><th>Delivery</th><th>Pipeline</th><th>Created</th></tr></thead>
+    app.innerHTML=`<div class="card"><table>
+      <thead><tr><th>Name</th><th>Phase</th><th>Type</th><th>Pipeline</th><th>Created</th></tr></thead>
       <tbody>${rows}</tbody></table></div>`;
-  },2000);
+  },2500);
 }
 
-/* ---- job detail ---- */
-async function viewDetail(id){
+/* job detail */
+function viewDetail(id){
   setNav(null);
   poll(async()=>{
-    let d;try{d=await api.job(id)}catch(e){app.innerHTML=`<div class="err">job not found</div>`;stopPoll();return}
+    let d;try{d=await api.job(id)}catch(e){app.innerHTML=`<div class="err">Job not found.</div>`;stopPoll();return}
     if(d.error){app.innerHTML=`<div class="err">${esc(d.error)}</div>`;stopPoll();return}
     const job=d.job, run=d.latestRun, logs=await api.logs(id);
     const phase=(run&&run.phase)||'—';
-    // Only a live (non-terminal) job has a control surface to query.
     const isTerm=['finished','failed','cancelled'].includes((phase||'').toLowerCase());
     const st=isTerm?null:await api.state(id);
-    // SDK jobs have no stored graph; pull the live topology from /describe.
     const pi=(job.kind==='sdk'&&!isTerm)?await api.describe(id):null;
-    document.getElementById('count').textContent=job.name;
+    document.getElementById('count').textContent='';
     const live=st?[
-      ['phase',phaseEl(st.phase)],
-      ['records in',`<span class="big">${esc(st.recordsIn||0)}</span>`],
-      ['records out',`<span class="big">${esc(st.recordsOut||0)}</span>`],
-      ['uptime',esc(st.uptime||'—')],
-      ['checkpoint',esc(st.currentCheckpointId||'—')],
-    ]:[['phase',phaseEl(phase)],['status','<span class="mono-dim">not running — no live control surface</span>']];
-    const trs=(d.transitions||[]).slice(-14).reverse().map(t=>
+      ['Phase',phaseEl(st.phase)],
+      ['Records in',`<span class="big">${esc(st.recordsIn||0)}</span>`],
+      ['Records out',`<span class="big">${esc(st.recordsOut||0)}</span>`],
+      ['Uptime',esc(st.uptime||'—')],
+      ['Checkpoint',`<span class="id">${esc(st.currentCheckpointId||'—')}</span>`],
+    ]:[['Phase',phaseEl(phase)],['Status','<span class="dim">Not running</span>']];
+    const trs=(d.transitions||[]).slice(-12).reverse().map(t=>
       `<div class="r"><b>${esc(t.to)}</b><span>${esc(t.reason||'')}</span><span class="at">${esc(fmtTime(t.at))}</span></div>`).join('')
-      ||'<div class="mono-dim">no transitions</div>';
-    const term=isTerm;
+      ||'<div class="dim">No transitions.</div>';
     app.innerHTML=`
-      <a class="back" href="#/jobs">← all jobs</a>
-      <div style="display:flex;align-items:flex-end;gap:16px;margin:12px 0 20px">
-        <div><h1>${esc(job.name)}</h1><div class="sub">${esc(job.id)}</div></div>
-        <span style="margin-bottom:4px">${deliveryBadge(job)}</span>
+      <a class="back" href="#/jobs">← Jobs</a>
+      <div style="display:flex;align-items:center;gap:12px;margin:12px 0 22px">
+        <div><h1>${esc(job.name)}</h1><div class="id" style="margin-top:3px">${esc(job.id)}</div></div>
+        ${badge(job)}
         <div class="btns" style="margin-left:auto">
-          <button class="btn" ${term?'disabled':''} onclick="doSavepoint('${esc(id)}')">Savepoint</button>
+          <button class="btn" ${isTerm?'disabled':''} onclick="doSavepoint('${esc(id)}')">Savepoint</button>
           <button class="btn" onclick="doRestart('${esc(id)}')">Restart</button>
-          <button class="btn danger" ${term?'disabled':''} onclick="doCancel('${esc(id)}')">Cancel</button>
+          <button class="btn danger" ${isTerm?'disabled':''} onclick="doCancel('${esc(id)}')">Cancel</button>
         </div>
       </div>
-      <div class="grid" style="grid-template-columns:1fr 1fr">
-        <div class="panel" style="grid-column:1/3"><div class="hd">Pipeline</div>${job.kind==='sdk' ? describeGraphEl(pi) : graphEl(job.graph)}</div>
-        <div class="panel"><div class="hd">Live</div><dl class="kv">${live.map(r=>`<dt>${r[0]}</dt><dd>${r[1]}</dd>`).join('')}</dl></div>
-        <div class="panel"><div class="hd">Lifecycle</div><div class="tl">${trs}</div></div>
-        <div class="panel" style="grid-column:1/3"><div class="hd">Logs</div><pre class="log" id="log">${esc(logs||'(no output yet)')}</pre></div>
-      </div>`;
+      <div class="card" style="margin-bottom:16px"><div class="hd">Pipeline</div>${job.kind==='sdk'?describeGraphEl(pi):graphEl(job.graph)}</div>
+      <div class="grid2" style="margin-bottom:16px">
+        <div class="card"><div class="hd">Live</div><dl class="kv">${live.map(r=>`<dt>${r[0]}</dt><dd>${r[1]}</dd>`).join('')}</dl></div>
+        <div class="card"><div class="hd">Lifecycle</div><div class="tl">${trs}</div></div>
+      </div>
+      <div class="card"><div class="hd">Logs</div><pre class="log" id="log">${esc(logs||'No output yet.')}</pre></div>`;
     const lg=document.getElementById('log');if(lg)lg.scrollTop=lg.scrollHeight;
-  },1600);
+  },2000);
 }
 
-async function doCancel(id){if(!confirm('Cancel this job?'))return;await api.act(id,'cancel');}
+async function doCancel(id){if(!confirm('Cancel this job?'))return;await api.act(id,'cancel')}
 async function doRestart(id){
-  const sp=prompt('Restart from savepoint label? (blank = from last checkpoint)','');
+  const sp=prompt('Restart from savepoint label? (leave blank for last checkpoint)','');
   if(sp===null)return;
   await api.act(id,'restart',sp?{savepoint:sp}:null);
 }
@@ -240,15 +221,13 @@ async function doSavepoint(id){
   if(!r.ok){const j=await r.json().catch(()=>({}));alert('Savepoint failed: '+(j.error||r.status))}
 }
 
-/* ---- submit ---- */
+/* submit */
 function viewSubmit(){
   setNav('submit');stopPoll();
   app.innerHTML=`
-    <h1>Submit workflow</h1>
-    <div class="sub" style="margin:4px 0 18px">Paste a YAML workflow. Preview compiles it (dry-run) before deploy.</div>
-    <div class="panel"><div class="hd">Workflow (YAML)</div>
-      <div style="padding:14px">
-        <textarea id="wf" rows="16" spellcheck="false" placeholder="name: my-job
+    <h1>Submit a job</h1>
+    <div class="sub" style="margin-bottom:18px">Paste a YAML workflow or an SDK manifest (kind: sdk). Preview compiles it before deploy.</div>
+    <textarea id="wf" rows="15" spellcheck="false" placeholder="name: my-job
 version: &quot;1&quot;
 source:
   type: generator
@@ -257,32 +236,30 @@ pipeline:
   - {id: by-n, type: keyBy, keyBy: {field: n, partitions: 1}}
   - {id: count, type: reduce, reduce: {function: count}}
 sink: {type: stdout}"></textarea>
-        <div class="btns" style="margin-top:12px">
-          <button class="btn" onclick="doPreview()">Preview</button>
-          <button class="btn pri" id="deploy" onclick="doDeploy()" disabled>Deploy</button>
-        </div>
-        <div id="pv" style="margin-top:14px"></div>
-      </div>
-    </div>`;
+    <div class="btns" style="margin-top:12px">
+      <button class="btn" onclick="doPreview()">Preview</button>
+      <button class="btn pri" id="deploy" onclick="doDeploy()" disabled>Deploy</button>
+    </div>
+    <div id="pv" style="margin-top:16px"></div>`;
 }
 async function doPreview(){
   const wf=document.getElementById('wf').value;const pv=document.getElementById('pv');
   const r=await api.validate({workflow:wf});const j=await r.json();
-  if(!r.ok){pv.innerHTML=`<div class="err">${esc(j.error||'invalid')}</div>`;document.getElementById('deploy').disabled=true;return}
-  pv.innerHTML=`<div class="panel"><div class="hd">Preview — ${esc(j.name)} · <span class="d-${esc(j.delivery)}">${esc(j.delivery)}</span></div>${graphEl(j.graph)}</div>`;
+  if(!r.ok){pv.innerHTML=`<div class="err">${esc(j.error||'Invalid.')}</div>`;document.getElementById('deploy').disabled=true;return}
+  pv.innerHTML=`<div class="card"><div class="hd">${esc(j.name)} · ${esc(j.delivery)}</div>${graphEl(j.graph)}</div>`;
   document.getElementById('deploy').disabled=false;
 }
 async function doDeploy(){
   const wf=document.getElementById('wf').value;
   const r=await api.submit({workflow:wf});const j=await r.json();
-  if(!r.ok){document.getElementById('pv').innerHTML=`<div class="err">${esc(j.error||'submit failed')}</div>`;return}
+  if(!r.ok){document.getElementById('pv').innerHTML=`<div class="err">${esc(j.error||'Submit failed.')}</div>`;return}
   const id=(j.job&&j.job.id)||j.id;location.hash='#/jobs/'+id;
 }
 
-/* ---- routing ---- */
+/* routing */
 function setNav(v){document.querySelectorAll('#nav a').forEach(a=>a.classList.toggle('on',a.dataset.v===v));
   if(v!=='jobs')document.getElementById('count').textContent=''}
-function fmtTime(s){if(!s)return '—';const d=new Date(s);return isNaN(d)?s:d.toLocaleString([], {month:'short',day:'2-digit',hour:'2-digit',minute:'2-digit'})}
+function fmtTime(s){if(!s)return '—';const d=new Date(s);return isNaN(d)?s:d.toLocaleString([],{month:'short',day:'2-digit',hour:'2-digit',minute:'2-digit'})}
 function route(){
   const h=location.hash.replace(/^#/,'')||'/jobs';
   const m=h.match(/^\/jobs\/(.+)$/);
