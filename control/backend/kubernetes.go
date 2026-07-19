@@ -114,13 +114,18 @@ func (k *Kubernetes) Launch(ctx context.Context, spec LaunchSpec) (string, error
 		return "", err
 	}
 
-	// Workflow document as a ConfigMap.
-	cm := &corev1.ConfigMap{
-		ObjectMeta: k.meta(run, jobID, run),
-		Data:       map[string]string{"workflow.yaml": string(spec.WorkflowDoc)},
-	}
-	if _, err := k.cs.CoreV1().ConfigMaps(k.namespace).Create(ctx, cm, metav1.CreateOptions{}); err != nil {
-		return "", fmt.Errorf("k8s: create configmap: %w", err)
+	// An SDK job's image has the pipeline compiled in — no workflow doc to
+	// mount. YAML jobs get the document as a ConfigMap.
+	cmName := ""
+	if len(spec.WorkflowDoc) > 0 {
+		cm := &corev1.ConfigMap{
+			ObjectMeta: k.meta(run, jobID, run),
+			Data:       map[string]string{"workflow.yaml": string(spec.WorkflowDoc)},
+		}
+		if _, err := k.cs.CoreV1().ConfigMaps(k.namespace).Create(ctx, cm, metav1.CreateOptions{}); err != nil {
+			return "", fmt.Errorf("k8s: create configmap: %w", err)
+		}
+		cmName = run
 	}
 
 	// Env (including any secrets) as a Secret, referenced via envFrom.
@@ -137,7 +142,7 @@ func (k *Kubernetes) Launch(ctx context.Context, spec LaunchSpec) (string, error
 		secretName = run
 	}
 
-	job := k.buildJob(run, jobID, pvc, run, secretName, image, port, spec.RestoreSavepoint)
+	job := k.buildJob(run, jobID, pvc, cmName, secretName, image, port, spec.RestoreSavepoint)
 	if _, err := k.cs.BatchV1().Jobs(k.namespace).Create(ctx, job, metav1.CreateOptions{}); err != nil {
 		k.cleanup(ctx, run)
 		return "", fmt.Errorf("k8s: create job: %w", err)
@@ -153,10 +158,12 @@ func (k *Kubernetes) Launch(ctx context.Context, spec LaunchSpec) (string, error
 
 func (k *Kubernetes) buildJob(run, jobID, pvc, cmName, secretName, image string, port int, restore string) *batchv1.Job {
 	env := []corev1.EnvVar{
-		{Name: "WORKFLOW", Value: k8sWorkflowPath},
 		{Name: "DATA_DIR", Value: k8sDataDir},
 		{Name: "SAVEPOINT_DIR", Value: k8sSavepointDir},
 		{Name: "PORT", Value: strconv.Itoa(port)},
+	}
+	if cmName != "" { // YAML job: point the runner at the mounted document
+		env = append(env, corev1.EnvVar{Name: "WORKFLOW", Value: k8sWorkflowPath})
 	}
 	if restore != "" {
 		env = append(env, corev1.EnvVar{Name: "RESTORE_SAVEPOINT", Value: restore})
@@ -172,6 +179,19 @@ func (k *Kubernetes) buildJob(run, jobID, pvc, cmName, secretName, image string,
 			Path: "/healthz", Port: intstr.FromInt(port),
 		}},
 		InitialDelaySeconds: 3, PeriodSeconds: 5, FailureThreshold: 6,
+	}
+
+	// Every job mounts its data PVC; YAML jobs also mount the workflow
+	// ConfigMap (SDK jobs have the pipeline compiled into the image).
+	mounts := []corev1.VolumeMount{{Name: "data", MountPath: k8sDataDir}}
+	volumes := []corev1.Volume{{Name: "data", VolumeSource: corev1.VolumeSource{
+		PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: pvc},
+	}}}
+	if cmName != "" {
+		mounts = append(mounts, corev1.VolumeMount{Name: "wf", MountPath: "/wf", ReadOnly: true})
+		volumes = append(volumes, corev1.Volume{Name: "wf", VolumeSource: corev1.VolumeSource{
+			ConfigMap: &corev1.ConfigMapVolumeSource{LocalObjectReference: corev1.LocalObjectReference{Name: cmName}},
+		}})
 	}
 
 	return &batchv1.Job{
@@ -197,23 +217,11 @@ func (k *Kubernetes) buildJob(run, jobID, pvc, cmName, secretName, image string,
 						Env:     env,
 						EnvFrom: envFrom,
 						Ports:   []corev1.ContainerPort{{ContainerPort: int32(port)}},
-						VolumeMounts: []corev1.VolumeMount{
-							{Name: "data", MountPath: k8sDataDir},
-							{Name: "wf", MountPath: "/wf", ReadOnly: true},
-						},
+						VolumeMounts:   mounts,
 						LivenessProbe:  probe,
 						ReadinessProbe: probe,
 					}},
-					Volumes: []corev1.Volume{
-						{Name: "data", VolumeSource: corev1.VolumeSource{
-							PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: pvc},
-						}},
-						{Name: "wf", VolumeSource: corev1.VolumeSource{
-							ConfigMap: &corev1.ConfigMapVolumeSource{
-								LocalObjectReference: corev1.LocalObjectReference{Name: cmName},
-							},
-						}},
-					},
+					Volumes: volumes,
 				},
 			},
 		},

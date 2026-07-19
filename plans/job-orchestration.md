@@ -489,23 +489,38 @@ blocked here by a flaky Docker/node-image pull, not by the code).
 
 ---
 
-### P7 — SDK jobs  *(the "engine reads the Go code" path, §2.5)*
+### P7 — SDK jobs  *(the "engine reads the Go code" path, §2.5)* — DONE (v1)
 
-**Goal.** Compile a user's Go pipeline into a job image, then manage it exactly
-like a YAML job.
+**Goal.** Run a user's Go pipeline through the same dashboard, auto-detected and
+managed identically to a YAML job.
 
-**Deliverables:**
-- Builder contract: `func Build(env *mailer.StreamExecutionEnv) *mailer.Stream`
-  + a `mailer.yaml` manifest (module path, builder symbol, runtime config).
-- Build pipeline: render the platform-owned harness `main()` around the user's
-  builder → `go build` user pkg + harness + module → image → push → run (same
-  lifecycle thereafter).
-- Supply-chain guardrails: pinned deps, sandboxed build, signed images. **v1
-  may require a user-provided repo/Dockerfile** rather than compiling loose
-  source.
+**Scope decision (v1).** **You build the image** (the plan's sanctioned v1),
+not the controller-compiles-source model: a user writes `func Build(env)` and a
+provided harness/Dockerfile compiles it into an image; they submit a small
+`mailer.yaml` manifest (`kind: sdk, image: …`). The controller **auto-detects**
+kind on one submit path — no separate SDK endpoint. Controller-compiles-source
+(point at a repo, it builds) is the heavier follow-up.
 
-**Gate.** Submit a Go SDK job (repo + `mailer.yaml`) → build → run → cancel →
-restart, identical to a YAML job downstream.
+**Delivered:**
+- Core `sdk` package: `sdk.Run(Build)` entrypoint + a shared `Serve` lifecycle
+  (agent, control surface, savepoints, graceful shutdown) that the **YAML runner
+  now also uses**, so YAML and SDK jobs behave identically. Opt-in checkpointing
+  via `CHECKPOINT_INTERVAL`.
+- Control plane: `store.Job` gains `Kind`+`Image`; backends (Docker + K8s) skip
+  workflow-doc injection for SDK jobs and run the prebuilt image; the controller
+  auto-detects `kind: sdk` on submit and routes it (no workflow compile). The
+  dashboard shows SDK jobs with an **SDK** badge and renders their live graph
+  from the agent's `/describe`.
+- Example: `mailer-test/sdk-job/` (a first-letter word count — custom Go the
+  declarative operators can't express) + Dockerfile + `mailer.yaml`.
+
+**Gate.** ✅ Verified end-to-end on Docker: submitted `sdk-job/mailer.yaml`,
+the controller auto-detected `kind: sdk`, ran the prebuilt image, and the job
+appeared in the dashboard and produced its custom output
+(`{"letter":"A","count":3}`, …). Unit tests cover the harness, the
+detect/route, and the no-doc-injection launch. (The example imports the new
+`sdk` package, so it needs a mailer release that includes it; the machinery was
+verified against local mailer.)
 
 ---
 

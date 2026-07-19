@@ -56,6 +56,7 @@
   .p-running .led{animation:pulse 1.1s ease-in-out infinite}
   .badge{display:inline-block;padding:3px 9px;border:1px solid currentColor;text-transform:uppercase;letter-spacing:.1em;font-size:10px}
   .d-exactly-once{color:var(--green)} .d-at-least-once{color:var(--steel)} .d-at-most-once{color:var(--muted)}
+  .b-sdk{color:var(--violet)}
   /* buttons */
   .btn{font-family:var(--mono);cursor:pointer;padding:8px 15px;border:1px solid var(--line);background:var(--panel2);color:var(--ink);text-transform:uppercase;letter-spacing:.1em;font-size:11px}
   .btn:hover{border-color:var(--amber);color:var(--amber)}
@@ -115,6 +116,7 @@ const api={
   jobs:()=>fetch('/jobs').then(r=>r.json()),
   job:(id)=>fetch('/jobs/'+id).then(r=>r.json()),
   state:(id)=>fetch('/jobs/'+id+'/state').then(r=>r.ok?r.json():null).catch(()=>null),
+  describe:(id)=>fetch('/jobs/'+id+'/describe').then(r=>r.ok?r.json():null).catch(()=>null),
   logs:(id)=>fetch('/jobs/'+id+'/logs?tail=200').then(r=>r.text()).catch(()=>''),
   validate:(b)=>fetch('/validate',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(b)}),
   submit:(b)=>fetch('/jobs',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(b)}),
@@ -140,6 +142,24 @@ function graphEl(gr){
   return `<div class="flow">${parts.join('')}</div>`;
 }
 
+// SDK jobs have no declarative graph; their topology comes from the live
+// agent /describe (source.type → operators → sink.type).
+function describeGraphEl(pi){
+  if(!pi) return '<div class="empty">pipeline appears once the job is running</div>';
+  const node=(t,n,c)=>`<div class="node ${c||''}"><div class="t">${esc(t)}</div><div class="n">${esc(n)}</div></div>`;
+  const arr='<span class="arrow">─▶</span>';
+  let parts=[node('source',(pi.source&&pi.source.type)||'?','src')];
+  (pi.operators||[]).forEach(o=>parts.push(arr,node(o.type||'op',o.label||o.type||'op')));
+  parts.push(arr,node('sink',(pi.sink&&pi.sink.type)||'?','snk'));
+  return `<div class="flow">${parts.join('')}</div>`;
+}
+
+// The delivery/kind badge: an SDK job shows "SDK", a YAML job its guarantee.
+function deliveryBadge(j){
+  if(j.kind==='sdk') return `<span class="badge b-sdk">SDK</span>`;
+  return `<span class="badge d-${esc(j.delivery)}">${esc(j.delivery)}</span>`;
+}
+
 /* ---- jobs list ---- */
 async function viewJobs(){
   setNav('jobs');
@@ -151,8 +171,8 @@ async function viewJobs(){
     const rows=jobs.map(j=>`<tr class="row" onclick="location.hash='#/jobs/${esc(j.id)}'">
       <td class="name">${esc(j.name)}</td>
       <td>${phaseEl(j.phase)}</td>
-      <td><span class="badge d-${esc(j.delivery)}">${esc(j.delivery)}</span></td>
-      <td class="mono-dim">${esc((g(j.graph,'Operators','operators')||[]).length)} ops</td>
+      <td>${deliveryBadge(j)}</td>
+      <td class="mono-dim">${j.kind==='sdk' ? 'go pipeline' : esc((g(j.graph,'Operators','operators')||[]).length)+' ops'}</td>
       <td class="mono-dim">${esc(fmtTime(j.createdAt))}</td>
     </tr>`).join('');
     app.innerHTML=`<div class="panel"><div class="hd">Jobs</div>
@@ -172,6 +192,8 @@ async function viewDetail(id){
     // Only a live (non-terminal) job has a control surface to query.
     const isTerm=['finished','failed','cancelled'].includes((phase||'').toLowerCase());
     const st=isTerm?null:await api.state(id);
+    // SDK jobs have no stored graph; pull the live topology from /describe.
+    const pi=(job.kind==='sdk'&&!isTerm)?await api.describe(id):null;
     document.getElementById('count').textContent=job.name;
     const live=st?[
       ['phase',phaseEl(st.phase)],
@@ -188,7 +210,7 @@ async function viewDetail(id){
       <a class="back" href="#/jobs">← all jobs</a>
       <div style="display:flex;align-items:flex-end;gap:16px;margin:12px 0 20px">
         <div><h1>${esc(job.name)}</h1><div class="sub">${esc(job.id)}</div></div>
-        <span class="badge d-${esc(job.delivery)}" style="margin-bottom:4px">${esc(job.delivery)}</span>
+        <span style="margin-bottom:4px">${deliveryBadge(job)}</span>
         <div class="btns" style="margin-left:auto">
           <button class="btn" ${term?'disabled':''} onclick="doSavepoint('${esc(id)}')">Savepoint</button>
           <button class="btn" onclick="doRestart('${esc(id)}')">Restart</button>
@@ -196,7 +218,7 @@ async function viewDetail(id){
         </div>
       </div>
       <div class="grid" style="grid-template-columns:1fr 1fr">
-        <div class="panel" style="grid-column:1/3"><div class="hd">Pipeline</div>${graphEl(job.graph)}</div>
+        <div class="panel" style="grid-column:1/3"><div class="hd">Pipeline</div>${job.kind==='sdk' ? describeGraphEl(pi) : graphEl(job.graph)}</div>
         <div class="panel"><div class="hd">Live</div><dl class="kv">${live.map(r=>`<dt>${r[0]}</dt><dd>${r[1]}</dd>`).join('')}</dl></div>
         <div class="panel"><div class="hd">Lifecycle</div><div class="tl">${trs}</div></div>
         <div class="panel" style="grid-column:1/3"><div class="hd">Logs</div><pre class="log" id="log">${esc(logs||'(no output yet)')}</pre></div>

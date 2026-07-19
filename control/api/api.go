@@ -44,6 +44,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /jobs/{id}/logs", s.logs)
 	mux.HandleFunc("GET /jobs/{id}/state", s.proxy("/state"))
 	mux.HandleFunc("GET /jobs/{id}/metrics", s.proxy("/metrics"))
+	mux.HandleFunc("GET /jobs/{id}/describe", s.proxy("/describe"))
 	return mux
 }
 

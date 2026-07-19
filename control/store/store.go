@@ -28,15 +28,27 @@ const (
 
 // Job is a submitted workflow and the operator's intent for it.
 type Job struct {
-	ID       string                       `json:"id"`
-	Name     string                       `json:"name"`
-	Spec     string                       `json:"spec"` // raw workflow doc, secrets unresolved
-	Delivery compiler.DeliveryGuarantee   `json:"delivery"`
-	Graph    compiler.PipelineGraph       `json:"graph"`
-	Desired  DesiredState                 `json:"desiredState"`
-	Created  time.Time                    `json:"createdAt"`
-	Updated  time.Time                    `json:"updatedAt"`
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	// Kind is "yaml" (a declarative workflow) or "sdk" (a prebuilt Go
+	// pipeline image). Empty is treated as "yaml".
+	Kind string `json:"kind,omitempty"`
+	Spec string `json:"spec"` // workflow doc (yaml) or manifest (sdk), secrets unresolved
+	// Image is the container image to run. Empty for yaml jobs (the
+	// controller's generic runner image is used); set for sdk jobs.
+	Image    string                     `json:"image,omitempty"`
+	Delivery compiler.DeliveryGuarantee `json:"delivery"`
+	Graph    compiler.PipelineGraph     `json:"graph"`
+	Desired  DesiredState               `json:"desiredState"`
+	Created  time.Time                  `json:"createdAt"`
+	Updated  time.Time                  `json:"updatedAt"`
 }
+
+// KindSDK / KindYAML are the Job.Kind values.
+const (
+	KindYAML = "yaml"
+	KindSDK  = "sdk"
+)
 
 // Run is one container launched for a job. A job accumulates runs across
 // restarts; at most one is non-terminal at a time.
