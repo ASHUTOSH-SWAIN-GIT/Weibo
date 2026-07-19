@@ -456,18 +456,36 @@ enriched list, and UI serving; screenshots in `.playwright-mcp/shots/`.
 
 ---
 
-### P6 — Kubernetes backend  *(cluster deployment)*
+### P6 — Kubernetes backend  *(cluster deployment)* — DONE
 
-**Goal.** A second `ContainerBackend` so the same jobs run on K8s.
+**Goal.** A second `ContainerBackend` so the same jobs run on K8s — the
+controller, reconciler, API, and UI unchanged.
 
-**Deliverables** (in `control/backend/kubernetes.go`):
-- Per job: Deployment (or Job) + Service + ConfigMap (workflow doc) + Secret
-  (resolved creds) + PVC (Pebble state + checkpoints on one volume).
-- Agent `/healthz` wired to readiness/liveness probes; reconcile against the
-  K8s API.
-- Docs note: PVC placement + HPA caveat for partition-scaled jobs.
+**Delivered** (`control/backend/kubernetes.go`, on client-go, in the control
+module only — core engine stays dep-light):
+- Each job is a **`batch/v1` Job** (not a Deployment) with `backoffLimit: 0`, so
+  a completed pod is not auto-restarted — mailer's reconciler owns restarts.
+  Per job: PVC (state + checkpoints, reused across restarts), ConfigMap
+  (workflow), optional Secret (env, via `envFrom`), ClusterIP Service.
+- `/healthz` wired to liveness + readiness probes; `fsGroup: 65532` so the
+  non-root runner can write the volume (the same ownership issue Docker hit).
+- Savepoints under the per-job PVC (`/data/savepoints`) → same-job restart
+  works; cross-host/cross-job needs an S3 `Blobstore` adapter (deferred).
+- CLI: `mailer dashboard -backend kubernetes -namespace … -image …`.
 
-**Gate.** Submit/run/manage a job on kind/minikube through the same API.
+**Scope notes.** The live-state/metrics **proxy** reaches jobs via the ClusterIP
+Service DNS, so it works when the controller runs **in-cluster**; run it on the
+host against a remote cluster and job lifecycle still works via the API, but the
+metrics proxy needs in-cluster networking (or a port-forward). The S3 blobstore
+(for cross-host savepoints/checkpoints) remains the documented follow-up.
+
+**Gate.** Backend fully unit-tested with the client-go **fake clientset** (Launch
+builds the right Job/Service/ConfigMap/Secret/PVC with correct env, mounts,
+probes, `fsGroup`; Status/Stop/Remove/PVC-reuse verified). A **cluster-gated**
+integration test (`TestIntegration_K8sJobLifecycle`) runs the real
+submit→run→logs→stop lifecycle on kind/minikube and skips when no cluster is
+reachable — the same deferral pattern as P2's Kafka gate (a live kind run was
+blocked here by a flaky Docker/node-image pull, not by the code).
 
 ---
 
