@@ -18,17 +18,22 @@ Docker/SQLite clients that live here.
 | `backend`                  | `ContainerBackend` interface + Docker impl + in-memory fake. |
 | (root) `control`           | `Controller`: submit/cancel/restart + the reconciler loop. |
 | `api`                      | REST server over the controller. |
-| `cmd/mailer-controller`    | The controller binary. |
+| `cmd/mailer`               | The `mailer` CLI (`mailer dashboard`). |
 
 ## Run
 
-Build the runner image first (from the repo root — see
-`cmd/mailer-runner/README.md`), then start the controller:
+Build the runner image once (from the repo root — see
+`cmd/mailer-runner/README.md`), then launch the dashboard:
 
 ```sh
 docker build -f Dockerfile.runner -t mailer-runner:dev .   # repo root
-cd control && go run ./cmd/mailer-controller -addr :9000 -image mailer-runner:dev
+cd control && go run ./cmd/mailer dashboard                # starts controller + opens the UI
 ```
+
+`mailer dashboard` boots the controller and opens the web UI in your browser.
+Add `-no-open` to run it headless (e.g. on a server), or `-addr :9000` to
+change the port. Everything — submit, watch, cancel, restart, savepoint —
+happens in that one UI.
 
 ## API
 
