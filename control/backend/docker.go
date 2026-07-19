@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/filters"
+	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/volume"
 	"github.com/docker/docker/client"
 	"github.com/docker/docker/pkg/stdcopy"
@@ -39,6 +41,18 @@ func NewDocker(image string) (*Docker, error) {
 func (d *Docker) Ping(ctx context.Context) error {
 	_, err := d.cli.Ping(ctx)
 	return err
+}
+
+// HasImage reports whether the given image reference is present locally,
+// so the CLI can fail fast with a build hint instead of a launch error.
+func (d *Docker) HasImage(ctx context.Context, ref string) (bool, error) {
+	list, err := d.cli.ImageList(ctx, image.ListOptions{
+		Filters: filters.NewArgs(filters.Arg("reference", ref)),
+	})
+	if err != nil {
+		return false, err
+	}
+	return len(list) > 0, nil
 }
 
 const (
