@@ -3,7 +3,7 @@ module github.com/ASHUTOSH-SWAIN-GIT/mailer/control
 go 1.26.2
 
 require (
-	github.com/ASHUTOSH-SWAIN-GIT/mailer v0.0.0
+	github.com/ASHUTOSH-SWAIN-GIT/mailer v0.6.0
 	github.com/docker/docker v27.5.1+incompatible
 	github.com/docker/go-connections v0.5.0
 	modernc.org/sqlite v1.54.0
@@ -84,5 +84,3 @@ require (
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
 )
-
-replace github.com/ASHUTOSH-SWAIN-GIT/mailer => ../
