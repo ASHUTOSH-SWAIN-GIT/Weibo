@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -32,7 +33,24 @@ func OpenSQLite(path string) (*SQLite, error) {
 		db.Close()
 		return nil, fmt.Errorf("store: apply schema: %w", err)
 	}
+	// Migrate databases created by an older version: CREATE TABLE IF NOT
+	// EXISTS does not add columns to a pre-existing table, so add them
+	// here. A "duplicate column" error means the DB is already current.
+	for _, m := range migrations {
+		if _, err := db.Exec(m); err != nil && !strings.Contains(err.Error(), "duplicate column") {
+			db.Close()
+			return nil, fmt.Errorf("store: migrate: %w", err)
+		}
+	}
 	return &SQLite{db: db}, nil
+}
+
+// migrations are applied after the base schema to upgrade older databases.
+// Each must be safe to run on an already-current DB (idempotent; a
+// "duplicate column" error is ignored).
+var migrations = []string{
+	`ALTER TABLE jobs ADD COLUMN kind TEXT NOT NULL DEFAULT 'yaml'`,
+	`ALTER TABLE jobs ADD COLUMN image TEXT NOT NULL DEFAULT ''`,
 }
 
 const schema = `

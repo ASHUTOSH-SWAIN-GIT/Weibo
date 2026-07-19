@@ -1,12 +1,52 @@
 package store_test
 
 import (
+	"database/sql"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/ASHUTOSH-SWAIN-GIT/mailer/control/store"
 	"github.com/ASHUTOSH-SWAIN-GIT/mailer/workflow/compiler"
+	_ "modernc.org/sqlite"
 )
+
+// A database created by an older version (no kind/image columns) must be
+// migrated on open so the current code works against it.
+func TestMigration_UpgradesOldDatabase(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "old.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The pre-P7 jobs schema — no kind/image columns.
+	_, err = db.Exec(`CREATE TABLE jobs (
+		id TEXT PRIMARY KEY, name TEXT NOT NULL, spec TEXT NOT NULL,
+		delivery TEXT NOT NULL, graph TEXT NOT NULL, desired_state TEXT NOT NULL,
+		created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+
+	// Opening it migrates in the missing columns.
+	s, err := store.OpenSQLite(path)
+	if err != nil {
+		t.Fatalf("open old db: %v", err)
+	}
+	defer s.Close()
+
+	// A kind/image-using write now succeeds.
+	j := &store.Job{ID: "j", Name: "n", Kind: store.KindSDK, Image: "img", Spec: "x",
+		Desired: store.DesiredRunning, Created: time.Now(), Updated: time.Now()}
+	if err := s.CreateJob(j); err != nil {
+		t.Fatalf("CreateJob after migration: %v", err)
+	}
+	got, err := s.GetJob("j")
+	if err != nil || got.Kind != store.KindSDK || got.Image != "img" {
+		t.Fatalf("migrated job wrong: %+v err=%v", got, err)
+	}
+}
 
 func open(t *testing.T) *store.SQLite {
 	t.Helper()
