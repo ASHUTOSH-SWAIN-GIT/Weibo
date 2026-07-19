@@ -4,7 +4,6 @@ go 1.26.2
 
 require (
 	github.com/cockroachdb/pebble v1.1.5
-	github.com/gorilla/websocket v1.5.3
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/prometheus/client_golang v1.23.2
 	github.com/prometheus/client_model v0.6.2
