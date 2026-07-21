@@ -212,11 +212,11 @@ func (k *Kubernetes) buildJob(run, jobID, pvc, cmName, secretName, image string,
 						FSGroup: int64Ptr(nonRootUID),
 					},
 					Containers: []corev1.Container{{
-						Name:    "runner",
-						Image:   image,
-						Env:     env,
-						EnvFrom: envFrom,
-						Ports:   []corev1.ContainerPort{{ContainerPort: int32(port)}},
+						Name:           "runner",
+						Image:          image,
+						Env:            env,
+						EnvFrom:        envFrom,
+						Ports:          []corev1.ContainerPort{{ContainerPort: int32(port)}},
 						VolumeMounts:   mounts,
 						LivenessProbe:  probe,
 						ReadinessProbe: probe,
@@ -378,7 +378,7 @@ func orString(v, def string) string {
 
 func int32Ptr(v int32) *int32 { return &v }
 func int64Ptr(v int64) *int64 { return &v }
-func boolPtr(v bool) *bool     { return &v }
+func boolPtr(v bool) *bool    { return &v }
 
 // compile-time check.
 var _ ContainerBackend = (*Kubernetes)(nil)

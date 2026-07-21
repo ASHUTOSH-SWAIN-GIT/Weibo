@@ -200,7 +200,7 @@ func (c *Controller) Cancel(ctx context.Context, jobID string) error {
 		return nil // nothing live to stop
 	}
 	_ = c.backend.Stop(ctx, run.ContainerID, c.stopTimeout)
-	c.finishRun(run, lifecycle.Cancelling, lifecycle.Cancelled, "user cancel")
+	c.finishRun(run, lifecycle.Running, lifecycle.Cancelled, "user cancel")
 	return nil
 }
 
@@ -226,7 +226,7 @@ func (c *Controller) doRestart(ctx context.Context, jobID, restore string) (*sto
 	}
 	if run, _ := c.store.LatestRun(jobID); run != nil && run.Stopped == nil {
 		_ = c.backend.Stop(ctx, run.ContainerID, c.stopTimeout)
-		c.finishRun(run, lifecycle.Cancelling, lifecycle.Cancelled, "restart")
+		c.finishRun(run, lifecycle.Running, lifecycle.Cancelled, "restart")
 	}
 	if err := c.store.SetDesired(jobID, store.DesiredRunning); err != nil {
 		return nil, err

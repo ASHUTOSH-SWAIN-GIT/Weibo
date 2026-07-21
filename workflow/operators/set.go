@@ -17,7 +17,7 @@ type FieldSet struct {
 // (creating nested objects as needed).
 //
 //   - id: tag
-//     type: set_fields
+//     type: setFields
 //     config:
 //     sets:
 //   - { field: source, value: web }

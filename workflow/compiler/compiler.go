@@ -33,15 +33,15 @@ const (
 
 // GraphNode is one operator in the compiled pipeline graph.
 type GraphNode struct {
-	ID   string
-	Type string
+	ID   string `json:"id"`
+	Type string `json:"type"`
 }
 
 // PipelineGraph is a static description of the compiled pipeline.
 type PipelineGraph struct {
-	Source    string
-	Operators []GraphNode
-	Sink      string
+	Source    string      `json:"source"`
+	Operators []GraphNode `json:"operators"`
+	Sink      string      `json:"sink"`
 }
 
 // CompiledWorkflow bundles the executable environment with a static

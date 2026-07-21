@@ -177,10 +177,13 @@ func (s *Server) cancel(w http.ResponseWriter, r *http.Request) {
 // from a savepoint instead of the last automatic checkpoint.
 func (s *Server) restart(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	label := savepointLabel(r)
+	label, err := savepointLabel(r)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
 
 	var job *store.Job
-	var err error
 	if label != "" {
 		job, err = s.ctrl.RestartFromSavepoint(r.Context(), id, label)
 	} else {
@@ -200,7 +203,11 @@ func (s *Server) restart(w http.ResponseWriter, r *http.Request) {
 // savepoint triggers a stop-with-savepoint. Label comes from ?label= or a
 // JSON body {"label": "..."}.
 func (s *Server) savepoint(w http.ResponseWriter, r *http.Request) {
-	label := savepointLabel(r)
+	label, err := savepointLabel(r)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	if label == "" {
 		writeErr(w, http.StatusBadRequest, "missing savepoint label (?label= or {\"label\":...})")
 		return
@@ -214,26 +221,31 @@ func (s *Server) savepoint(w http.ResponseWriter, r *http.Request) {
 
 // savepointLabel reads a savepoint label from the ?label query param, then
 // falls back to a JSON body {"label" | "savepoint": "..."}.
-func savepointLabel(r *http.Request) string {
+func savepointLabel(r *http.Request) (string, error) {
 	if l := r.URL.Query().Get("label"); l != "" {
-		return l
+		return l, nil
 	}
 	if r.Body == nil {
-		return ""
+		return "", nil
 	}
-	body, _ := io.ReadAll(io.LimitReader(r.Body, 1<<16))
+	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<16))
+	if err != nil {
+		return "", err
+	}
 	if len(body) == 0 {
-		return ""
+		return "", nil
 	}
 	var req struct {
 		Label     string `json:"label"`
 		Savepoint string `json:"savepoint"`
 	}
-	_ = json.Unmarshal(body, &req)
-	if req.Label != "" {
-		return req.Label
+	if err := json.Unmarshal(body, &req); err != nil {
+		return "", err
 	}
-	return req.Savepoint
+	if req.Label != "" {
+		return req.Label, nil
+	}
+	return req.Savepoint, nil
 }
 
 func (s *Server) logs(w http.ResponseWriter, r *http.Request) {

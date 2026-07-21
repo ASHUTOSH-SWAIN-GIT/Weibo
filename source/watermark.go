@@ -79,7 +79,14 @@ func (ws *WatermarkSource) Run(ctx context.Context, out chan<- types.Record) err
 
 			// Update watermark generator with the record's timestamp.
 			ws.Generator.OnRecord(record.Timestamp)
-			out <- record
+			// Forward with a ctx guard so a cancelled pipeline whose
+			// downstream is blocked doesn't leak this goroutine.
+			select {
+			case out <- record:
+			case <-ctx.Done():
+				emitMaxWatermark()
+				return ctx.Err()
+			}
 
 		case <-ticker.C:
 			wm := ws.Generator.GetWatermark()

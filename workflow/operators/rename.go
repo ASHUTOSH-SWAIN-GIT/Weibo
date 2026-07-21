@@ -16,7 +16,7 @@ type FieldRename struct {
 // RenameConfig configures a built-in rename: apply each rename in order.
 //
 //   - id: normalize
-//     type: rename_fields
+//     type: renameFields
 //     config:
 //     renames:
 //   - { from: cust_id, to: customer_id }

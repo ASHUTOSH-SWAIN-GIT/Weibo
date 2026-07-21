@@ -66,12 +66,12 @@ type Storage interface {
 	// LoadSpecific reads a checkpoint with the given ID.
 	LoadSpecific(id string) (*CheckpointData, error)
 
-	// UpdateStatus rewrites the status of an existing checkpoint
-	// (prepared → completed promotion).
 	// StateDir returns the root directory for native state snapshots
 	// (e.g. Pebble hard-links) associated with a checkpoint.
 	StateDir(id string) string
 
+	// UpdateStatus rewrites the status of an existing checkpoint
+	// (prepared → completed promotion).
 	UpdateStatus(id string, status Status) error
 }
 

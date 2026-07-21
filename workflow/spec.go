@@ -67,7 +67,7 @@ type CheckpointSpec struct {
 	Interval Duration `yaml:"interval" json:"interval"`
 
 	// Dir is the checkpoint file-storage directory
-	// (checkpoint.NewFileStorage). Required.
+	// (checkpoint.NewFileStorage). Optional; derived per-job when omitted.
 	Dir string `yaml:"dir" json:"dir"`
 }
 

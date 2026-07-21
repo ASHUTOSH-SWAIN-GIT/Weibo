@@ -288,7 +288,7 @@ func buildPostgresWriteQuery(q postgresWriteQuery) string {
 	}
 
 	var sb strings.Builder
-	fmt.Fprintf(&sb, `INSERT INTO "%s" (%s) VALUES `, q.Table, strings.Join(quotedCols, ","))
+	fmt.Fprintf(&sb, `INSERT INTO %s (%s) VALUES `, quotePostgresTable(q.Table), strings.Join(quotedCols, ","))
 
 	placeholder := 1
 	for i := 0; i < q.RowCount; i++ {
@@ -342,6 +342,14 @@ func buildPostgresWriteQuery(q postgresWriteQuery) string {
 	}
 
 	return sb.String()
+}
+
+func quotePostgresTable(table string) string {
+	parts := strings.Split(table, ".")
+	for i, part := range parts {
+		parts[i] = fmt.Sprintf(`"%s"`, strings.ReplaceAll(part, `"`, `""`))
+	}
+	return strings.Join(parts, ".")
 }
 
 // Compile-time check.

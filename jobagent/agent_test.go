@@ -168,7 +168,7 @@ func TestAgent_HTTPSurface(t *testing.T) {
 		{"GET", "/describe", 200},
 		{"GET", "/metrics", 200},
 		{"POST", "/savepoint", 400}, // missing ?label
-		{"POST", "/state", 405}, // wrong method
+		{"POST", "/state", 405},     // wrong method
 	}
 	for _, c := range cases {
 		req, _ := http.NewRequest(c.method, srv.URL+c.path, nil)

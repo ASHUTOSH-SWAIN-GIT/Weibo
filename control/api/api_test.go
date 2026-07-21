@@ -217,7 +217,7 @@ func TestServesUI(t *testing.T) {
 		t.Fatalf("content-type: %q", ct)
 	}
 	body, _ := io.ReadAll(resp.Body)
-	if !strings.Contains(string(body), "MAILER") {
+	if !strings.Contains(strings.ToLower(string(body)), "mailer") {
 		t.Fatal("index.html not served")
 	}
 }

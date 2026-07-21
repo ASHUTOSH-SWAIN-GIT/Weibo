@@ -8,8 +8,9 @@
 //   - ValueState: a single value per key (like a per-key variable)
 //   - ListState: an ordered list per key (like a per-key append-only list)
 //
-// StateBackend is the interface for storing state. Currently only MemoryBackend
-// exists, but the interface allows for RocksDB, file-based, or other backends.
+// StateBackend is the interface for storing state. Two backends exist today —
+// an in-memory backend and a durable Pebble (LSM) backend — and the interface
+// allows for other backends (RocksDB, file-based, etc.).
 package state
 
 // StateBackend persists keyed state for stateful operators.

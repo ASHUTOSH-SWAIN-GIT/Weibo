@@ -25,7 +25,7 @@ type WatermarkGenerator interface {
 	// If no records have been seen, returns time.Time{} (zero value).
 	GetWatermark() time.Time
 
-	// CurrentWatermark returns the current watermark as a special Record
-	// with IsWatermark=true. Returns the zero Record if no watermark is ready.
+	// CurrentWatermark returns the current watermark timestamp. Returns
+	// the zero time.Time if no watermark is ready.
 	CurrentWatermark() time.Time
 }

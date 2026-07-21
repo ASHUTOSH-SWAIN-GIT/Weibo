@@ -134,7 +134,7 @@ func TestValidate_Partitions(t *testing.T) {
 	wf := validEO(t)
 	wf.Pipeline[1].KeyBy.Partitions = -1
 	msg := errmsg(t, wf)
-	mustContain(t, msg, "partitions must be greater than zero")
+	mustContain(t, msg, "partitions must not be negative")
 }
 
 func TestValidate_CheckpointInterval(t *testing.T) {

@@ -129,7 +129,10 @@ func (k *KafkaSink) Write(ctx context.Context, in <-chan types.Record) error {
 	defer k.writer.Close()
 
 	const shutdownTimeout = 5 * time.Second
-	const flushThreshold = 100
+	flushThreshold := 100
+	if k.cfg.batchSize > 0 {
+		flushThreshold = k.cfg.batchSize
+	}
 
 	var (
 		batch   []kafkaBatchEntry

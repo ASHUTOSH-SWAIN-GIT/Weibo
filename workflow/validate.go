@@ -130,7 +130,7 @@ func (o Operator) configBlocks() []string {
 
 func (v *validator) structural(wf *Workflow) {
 	if !supportedVersions[wf.Version] {
-		v.addf("version", "unsupported workflow version %q (supported: \"1\")", wf.Version)
+		v.addf("version", "unsupported workflow version %q (supported: empty or \"1\")", wf.Version)
 	}
 
 	if wf.Name == "" {
@@ -219,7 +219,7 @@ func (v *validator) configuration(wf *Workflow) {
 				v.add(path+".keyBy.field", "a key field is required")
 			}
 			if op.KeyBy.Partitions < 0 {
-				v.add(path+".keyBy.partitions", "partitions must be greater than zero")
+				v.add(path+".keyBy.partitions", "partitions must not be negative")
 			}
 		case op.Reduce != nil:
 			switch op.Reduce.Function {
@@ -400,9 +400,7 @@ func (v *validator) windowConfig(path string, w *WindowConfig) {
 			v.add(path+".gap", "session gap must be greater than zero")
 		}
 	default:
-		if !supportedWindowTypes[w.Type] {
-			v.addf(path+".type", "unsupported window type %q", w.Type)
-		}
+		v.addf(path+".type", "unsupported window type %q", w.Type)
 	}
 }
 

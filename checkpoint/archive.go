@@ -89,7 +89,13 @@ func ExtractCheckpoint(dst Storage, r io.Reader) (string, error) {
 				return "", fmt.Errorf("checkpoint: extract: state file before %s", archiveMetaName)
 			}
 			rel := strings.TrimPrefix(hdr.Name, archiveStateRoot+"/")
-			dest := filepath.Join(dst.StateDir(data.ID), filepath.FromSlash(rel))
+			stateDir := dst.StateDir(data.ID)
+			dest := filepath.Join(stateDir, filepath.FromSlash(rel))
+			// Guard against a malicious archive using "../" entries to
+			// escape the checkpoint state dir (tar path traversal).
+			if rel := filepath.Clean(dest); !strings.HasPrefix(rel, filepath.Clean(stateDir)+string(os.PathSeparator)) {
+				return "", fmt.Errorf("checkpoint: extract: unsafe path %q escapes state dir", hdr.Name)
+			}
 			if err := writeFileFromTar(dest, tr, hdr); err != nil {
 				return "", err
 			}

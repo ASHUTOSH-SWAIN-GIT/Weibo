@@ -2,6 +2,7 @@ package source
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/ASHUTOSH-SWAIN-GIT/mailer/types"
@@ -21,6 +22,9 @@ func NewGeneratorSource(records []types.Record) *GeneratorSource {
 // FromSlices is a convenience function that creates records from string key-value pairs.
 // Each record gets an incrementing offset and the current timestamp.
 func FromSlices(keys []string, values []string) *GeneratorSource {
+	if len(keys) != len(values) {
+		panic(fmt.Sprintf("source.FromSlices: keys and values length mismatch (%d != %d)", len(keys), len(values)))
+	}
 	records := make([]types.Record, len(keys))
 	for i := range keys {
 		records[i] = types.Record{

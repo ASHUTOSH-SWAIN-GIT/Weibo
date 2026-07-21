@@ -75,7 +75,12 @@ func (vs *memoryValueState) Get() []byte {
 	if !ok {
 		return nil
 	}
-	return val
+	// Return a copy so callers can't mutate stored state through the
+	// returned slice. This matches SnapshotAll and the Pebble backend,
+	// which both hand back copies.
+	out := make([]byte, len(val))
+	copy(out, val)
+	return out
 }
 
 func (vs *memoryValueState) Set(value []byte) {

@@ -12,7 +12,7 @@ import (
 // paths, so nested fields can be projected too.
 //
 //   - id: output-fields
-//     type: select_fields
+//     type: selectFields
 //     config:
 //     fields:
 //   - customer_id

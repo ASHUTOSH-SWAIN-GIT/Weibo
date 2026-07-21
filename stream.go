@@ -22,8 +22,9 @@ type Stream struct {
 }
 
 // Map applies a 1:1 transformation to each record in the stream.
-// If the function returns the zero value of Record, the record is dropped.
-// The optional label is shown in the dashboard.
+// Every input record produces exactly one output record (use Filter to
+// drop records or FlatMap for 1:many). The optional label is shown in
+// the dashboard.
 func (s *Stream) Map(fn func(types.Record) types.Record, label ...string) *Stream {
 	op := operator.Map(fn)
 	if len(label) > 0 {

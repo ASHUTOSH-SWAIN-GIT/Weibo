@@ -39,9 +39,13 @@ func (p Phase) Terminal() bool {
 // audit transitions; an unknown edge is a programming error, not user
 // input, so callers may log rather than hard-fail.
 var valid = map[Phase][]Phase{
-	Submitted:  {Starting, Failed, Cancelled},
-	Starting:   {Running, Failed, Cancelling},
-	Running:    {Cancelling, Finished, Failed},
+	Submitted: {Starting, Failed, Cancelled},
+	Starting:  {Running, Failed, Cancelling},
+	// Running may terminate directly in Cancelled: a user cancel or a
+	// desired-stopped reconcile stops the container and marks the run
+	// Cancelled in one step (see Controller.Cancel / reconcileRun),
+	// without a distinct Cancelling dwell.
+	Running:    {Cancelling, Cancelled, Finished, Failed},
 	Cancelling: {Cancelled, Finished, Failed},
 	// terminal states may only re-enter Starting via an explicit restart,
 	// which creates a NEW run rather than transitioning the old one.

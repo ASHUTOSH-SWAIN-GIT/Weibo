@@ -100,10 +100,14 @@ func (r Record) WithOffset(offset int64) Record {
 }
 
 // WithHeader returns a copy of the record with the given header added.
+// The header map is cloned so the returned record never mutates a map
+// still shared with the original (which may be referenced upstream).
 func (r Record) WithHeader(key string, value []byte) Record {
-	if r.Headers == nil {
-		r.Headers = make(map[string][]byte)
+	headers := make(map[string][]byte, len(r.Headers)+1)
+	for k, v := range r.Headers {
+		headers[k] = v
 	}
-	r.Headers[key] = value
+	headers[key] = value
+	r.Headers = headers
 	return r
 }
