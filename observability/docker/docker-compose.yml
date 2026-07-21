@@ -5,6 +5,9 @@ services:
       - "9090:9090"
     volumes:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml
+    extra_hosts:
+      # Lets Prometheus reach a pipeline running on the host (needed on Linux).
+      - "host.docker.internal:host-gateway"
 
   grafana:
     image: grafana/grafana:latest
@@ -14,5 +17,6 @@ services:
       - GF_AUTH_ANONYMOUS_ENABLED=true
       - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
     volumes:
-      - ./grafana-dashboards:/etc/grafana/provisioning/dashboards
       - ./grafana-datasources.yml:/etc/grafana/provisioning/datasources/datasources.yml
+      - ./dashboards.yml:/etc/grafana/provisioning/dashboards/dashboards.yml
+      - ./mailer.json:/etc/grafana/provisioning/dashboards/mailer.json

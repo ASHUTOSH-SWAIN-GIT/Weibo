@@ -85,6 +85,17 @@
   .grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
   .id{font-family:var(--mono);font-size:12px;color:var(--muted)}
   @media (max-width:640px){.grid2{grid-template-columns:1fr}}
+  /* metrics */
+  .stats{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:16px}
+  .stat{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:14px 16px}
+  .stat .l{font-size:12px;color:var(--muted)}
+  .stat .v{font-size:22px;font-weight:600;margin-top:4px;letter-spacing:-.01em}
+  .stat .v .u{font-size:12px;color:var(--muted);font-weight:400;margin-left:2px}
+  .bar{height:6px;background:#efefef;border-radius:3px;overflow:hidden;min-width:80px}
+  .bar>i{display:block;height:100%;background:var(--accent);border-radius:3px}
+  .bar.hot>i{background:var(--red)}
+  td.num{text-align:right;font-variant-numeric:tabular-nums}
+  @media (max-width:640px){.stats{grid-template-columns:1fr 1fr}}
 </style>
 </head>
 <body>
@@ -108,6 +119,7 @@ const api={
   state:(id)=>fetch('/jobs/'+id+'/state').then(r=>r.ok?r.json():null).catch(()=>null),
   describe:(id)=>fetch('/jobs/'+id+'/describe').then(r=>r.ok?r.json():null).catch(()=>null),
   logs:(id)=>fetch('/jobs/'+id+'/logs?tail=200').then(r=>r.text()).catch(()=>''),
+  metrics:(id)=>fetch('/jobs/'+id+'/metrics').then(r=>r.ok?r.text():null).catch(()=>null),
   validate:(b)=>fetch('/validate',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(b)}),
   submit:(b)=>fetch('/jobs',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(b)}),
   act:(id,a,b)=>fetch('/jobs/'+id+'/'+a,{method:'POST',headers:b?{'content-type':'application/json'}:{},body:b?JSON.stringify(b):null}),
@@ -193,6 +205,7 @@ function viewDetail(id){
         <div><h1>${esc(job.name)}</h1><div class="id" style="margin-top:3px">${esc(job.id)}</div></div>
         ${badge(job)}
         <div class="btns" style="margin-left:auto">
+          <a class="btn pri" href="#/jobs/${esc(id)}/metrics">Metrics</a>
           <button class="btn" ${isTerm?'disabled':''} onclick="doSavepoint('${esc(id)}')">Savepoint</button>
           <button class="btn" onclick="doRestart('${esc(id)}')">Restart</button>
           <button class="btn danger" ${isTerm?'disabled':''} onclick="doCancel('${esc(id)}')">Cancel</button>
@@ -219,6 +232,98 @@ async function doSavepoint(id){
   if(!label)return;
   const r=await api.act(id,'savepoint?label='+encodeURIComponent(label));
   if(!r.ok){const j=await r.json().catch(()=>({}));alert('Savepoint failed: '+(j.error||r.status))}
+}
+
+/* metrics */
+// parseProm turns Prometheus text exposition into {name:[{labels,value}]}.
+function parseProm(txt){
+  const out={};
+  txt.split('\n').forEach(line=>{
+    line=line.trim();
+    if(!line||line[0]==='#')return;
+    const m=line.match(/^([a-zA-Z_:][\w:]*)(\{[^}]*\})?\s+(-?[\d.eE+]+|[+-]?Inf|NaN)$/);
+    if(!m)return;
+    const labels={};
+    if(m[2])m[2].slice(1,-1).split(',').forEach(p=>{
+      const i=p.indexOf('=');if(i<0)return;
+      labels[p.slice(0,i).trim()]=p.slice(i+1).trim().replace(/^"|"$/g,'');
+    });
+    (out[m[1]]=out[m[1]]||[]).push({labels,value:parseFloat(m[3])});
+  });
+  return out;
+}
+const mv=(M,n,pred)=>{const a=M[n]||[];const f=pred?a.find(pred):a[0];return f?f.value:0};
+const fmtN=v=>(v==null||isNaN(v))?'0':Math.round(v).toLocaleString();
+// rate tracker: derive per-second throughput from successive total samples.
+let rateS={id:null,t:0,read:0,written:0,rRead:0,rWritten:0};
+function rates(id,read,written){
+  const now=Date.now();
+  if(rateS.id===id&&rateS.t){const dt=(now-rateS.t)/1000;if(dt>0){
+    rateS.rRead=Math.max(0,(read-rateS.read)/dt);rateS.rWritten=Math.max(0,(written-rateS.written)/dt);}}
+  else{rateS.rRead=0;rateS.rWritten=0}
+  Object.assign(rateS,{id,t:now,read,written});
+  return {read:rateS.rRead,written:rateS.rWritten};
+}
+function statTile(l,v,u){return `<div class="stat"><div class="l">${esc(l)}</div><div class="v">${v}${u?`<span class="u">${esc(u)}</span>`:''}</div></div>`}
+function viewMetrics(id){
+  setNav(null);
+  poll(async()=>{
+    let job=null;try{const d=await api.job(id);job=d&&d.job}catch(e){}
+    const name=(job&&job.name)||id;
+    const txt=await api.metrics(id);
+    const head=`<a class="back" href="#/jobs/${esc(id)}">← ${esc(name)}</a>
+      <div style="display:flex;align-items:center;gap:12px;margin:12px 0 22px">
+        <div><h1>Metrics</h1><div class="id" style="margin-top:3px">${esc(id)}</div></div>
+        <div class="btns" style="margin-left:auto"><a class="btn" href="#/jobs/${esc(id)}/metrics/raw" onclick="event.preventDefault();window.open('/jobs/${esc(id)}/metrics','_blank')">Raw ↗</a></div>
+      </div>`;
+    if(txt===null){
+      app.innerHTML=head+`<div class="card"><div class="empty">This job isn't serving metrics right now.<br>Metrics come from the running job's agent — start or restart the job to see them.</div></div>`;
+      return;
+    }
+    const M=parseProm(txt);
+    const read=mv(M,'mailer_records_read_total'), written=mv(M,'mailer_records_written_total');
+    const r=rates(id,read,written);
+    const running=mv(M,'mailer_pipeline_running')===1;
+    const tiles=[
+      statTile('Records read',fmtN(read)),
+      statTile('Records written',fmtN(written)),
+      statTile('Read rate',fmtN(r.read),'/s'),
+      statTile('Write rate',fmtN(r.written),'/s'),
+      statTile('Processed',fmtN((M['mailer_records_processed_total']||[]).reduce((s,x)=>s+x.value,0))),
+      statTile('Failed',fmtN(mv(M,'mailer_records_failed_total'))),
+      statTile('Source errors',fmtN(mv(M,'mailer_source_errors_total'))),
+      statTile('Sink errors',fmtN(mv(M,'mailer_sink_errors_total'))),
+    ].join('');
+    // per-stage records in/out
+    const so=M['mailer_stage_records_out_total']||[], si=M['mailer_stage_records_in_total']||[];
+    const stageNames=[...new Set([...si,...so].map(x=>x.labels.stage))];
+    const stageRows=stageNames.map(s=>{
+      const type=(so.find(x=>x.labels.stage===s)||si.find(x=>x.labels.stage===s)||{labels:{}}).labels.type||'';
+      const inV=mv(M,'mailer_stage_records_in_total',x=>x.labels.stage===s);
+      const outV=mv(M,'mailer_stage_records_out_total',x=>x.labels.stage===s);
+      return `<tr><td class="name">${esc(s)}</td><td class="dim">${esc(type)}</td><td class="num">${fmtN(inV)}</td><td class="num">${fmtN(outV)}</td></tr>`;
+    }).join('')||`<tr><td colspan="4" class="dim">No stage metrics.</td></tr>`;
+    // per-edge backpressure (queue vs capacity)
+    const eq=M['mailer_edge_queue_size']||[], ec=M['mailer_edge_queue_capacity']||[];
+    const edgeNames=[...new Set([...eq,...ec].map(x=>x.labels.edge))].sort();
+    const edgeRows=edgeNames.map(e=>{
+      const q=mv(M,'mailer_edge_queue_size',x=>x.labels.edge===e);
+      const cap=mv(M,'mailer_edge_queue_capacity',x=>x.labels.edge===e)||1;
+      const pct=Math.min(100,Math.round(q/cap*100));
+      return `<tr><td class="name">${esc(e)}</td><td class="num">${fmtN(q)} / ${fmtN(cap)}</td>
+        <td style="width:40%"><div class="bar ${pct>=90?'hot':''}"><i style="width:${pct}%"></i></div></td>
+        <td class="num">${pct}%</td></tr>`;
+    }).join('')||`<tr><td colspan="4" class="dim">No edge metrics.</td></tr>`;
+    app.innerHTML=head+`
+      <div class="sub" style="margin:-10px 0 16px">${running?'<span class="phase p-running"><span class="dot"></span>live</span>':'<span class="dim">pipeline not running</span>'} · auto-refreshes every 2s</div>
+      <div class="stats">${tiles}</div>
+      <div class="grid2">
+        <div class="card"><div class="hd">Stages (records in / out)</div>
+          <table><thead><tr><th>Stage</th><th>Type</th><th class="num">In</th><th class="num">Out</th></tr></thead><tbody>${stageRows}</tbody></table></div>
+        <div class="card"><div class="hd">Backpressure (edge queues)</div>
+          <table><thead><tr><th>Edge</th><th class="num">Queue</th><th>Fill</th><th class="num">%</th></tr></thead><tbody>${edgeRows}</tbody></table></div>
+      </div>`;
+  },2000);
 }
 
 /* submit */
@@ -262,7 +367,9 @@ function setNav(v){document.querySelectorAll('#nav a').forEach(a=>a.classList.to
 function fmtTime(s){if(!s)return '—';const d=new Date(s);return isNaN(d)?s:d.toLocaleString([],{month:'short',day:'2-digit',hour:'2-digit',minute:'2-digit'})}
 function route(){
   const h=location.hash.replace(/^#/,'')||'/jobs';
-  const m=h.match(/^\/jobs\/(.+)$/);
+  const mm=h.match(/^\/jobs\/([^\/]+)\/metrics$/);
+  if(mm)return viewMetrics(mm[1]);
+  const m=h.match(/^\/jobs\/([^\/]+)$/);
   if(m)return viewDetail(m[1]);
   if(h==='/submit')return viewSubmit();
   return viewJobs();
