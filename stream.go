@@ -181,6 +181,41 @@ func (s *Stream) WindowWithIdleTimeout(assigner window.WindowAssigner, idleTimeo
 	return s
 }
 
+// WindowReduce is windowed aggregation with correct window semantics: the
+// window buffers each key's records and, when the watermark closes the
+// window, folds them with fn and emits ONE result per (key, window).
+//
+// Prefer this over Window(...).Reduce(...): the latter emits every buffered
+// record and lets a streaming Reduce fold them, producing many partial rows
+// per window (the last of which is the final total) and keeping a per-window
+// accumulator around indefinitely. WindowReduce emits one final aggregate
+// and evicts the window's state on fire, so memory is bounded by the number
+// of OPEN windows, not the number of windows ever seen.
+//
+//	stream.KeyBy(key).WithPartitions(8).
+//	    WindowReduce(window.NewTumbling(5*time.Minute), sumFn)
+func (s *Stream) WindowReduce(assigner window.WindowAssigner, fn operator.ReduceFn, label ...string) *Stream {
+	op := operator.Window(assigner)
+	op.Reducer = fn
+	if len(label) > 0 {
+		op.Label = label[0]
+	}
+	s.env.operators = append(s.env.operators, op)
+	return s
+}
+
+// WindowReduceWithIdleTimeout is WindowReduce with an idle timeout (fires
+// remaining windows and completes if no records arrive within the timeout).
+func (s *Stream) WindowReduceWithIdleTimeout(assigner window.WindowAssigner, fn operator.ReduceFn, idleTimeout time.Duration, label ...string) *Stream {
+	op := operator.Window(assigner).WithIdleTimeout(idleTimeout)
+	op.Reducer = fn
+	if len(label) > 0 {
+		op.Label = label[0]
+	}
+	s.env.operators = append(s.env.operators, op)
+	return s
+}
+
 // ToSink connects the stream to a sink and returns the execution environment.
 // The pipeline is still lazy — call env.Execute() to start processing.
 func (st *Stream) ToSink(sk sink.Sink) *StreamExecutionEnv {

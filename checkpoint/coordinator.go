@@ -74,6 +74,7 @@ type Coordinator struct {
 	events   chan string // checkpoint IDs ready to finalize
 	fatal    chan error
 	wg       sync.WaitGroup
+	sendWg   sync.WaitGroup // in-flight OnSinkPrepared sends to events
 	stopOnce sync.Once
 }
 
@@ -116,6 +117,12 @@ func (c *Coordinator) Stop() {
 		c.mu.Lock()
 		c.halted = true // no further OnSinkPrepared may enqueue
 		c.mu.Unlock()
+		// Wait for senders that already passed the halted check (and
+		// registered on sendWg under the lock) to finish their send before
+		// closing — otherwise close races the send and panics. The finalize
+		// worker is still draining events here, so these sends never block
+		// indefinitely.
+		c.sendWg.Wait()
 		close(c.events)
 	})
 	c.wg.Wait()
@@ -157,10 +164,17 @@ func (c *Coordinator) OnSinkPrepared(id string, sinkErr error) {
 	p.prepared = true
 	p.sinkErr = sinkErr
 	halted := c.halted
+	if !halted {
+		// Register the send while holding the lock, in the same critical
+		// section that reads halted. Stop sets halted then waits on sendWg,
+		// so once Stop can close the channel no send is still in flight.
+		c.sendWg.Add(1)
+	}
 	c.mu.Unlock()
 	if halted {
 		return
 	}
+	defer c.sendWg.Done()
 	c.events <- id
 }
 

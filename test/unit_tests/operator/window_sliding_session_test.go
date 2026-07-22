@@ -262,6 +262,46 @@ func TestWindowOperator_SessionWindow_MergesExpandingGap(t *testing.T) {
 	}
 }
 
+func TestWindowOperator_SessionWindow_BridgesTwoSessions(t *testing.T) {
+	// gap=10. A@0 → [0,10) and B@18 → [18,28) are separate sessions.
+	// C@9 → [9,19) overlaps BOTH, so all three must coalesce into one
+	// session [0,28). Merging only the first overlap would leave two
+	// (now-overlapping) sessions.
+	assigner := window.NewSession(10 * time.Second)
+	op := operator.Window(assigner)
+
+	in := make(chan types.Record, 20)
+	out := make(chan types.Record, 20)
+	go op.Process(in, out)
+
+	in <- types.Record{Key: []byte("k1"), Value: []byte("A"), Timestamp: time.Unix(0, 0).UTC()}
+	in <- types.Record{Key: []byte("k1"), Value: []byte("B"), Timestamp: time.Unix(18, 0).UTC()}
+	in <- types.Record{Key: []byte("k1"), Value: []byte("C"), Timestamp: time.Unix(9, 0).UTC()}
+	in <- types.NewWatermark(time.Unix(40, 0).UTC())
+	close(in)
+
+	var results []types.Record
+	for r := range out {
+		if !r.IsWatermark && !r.IsBarrier {
+			results = append(results, r)
+		}
+	}
+	if len(results) != 3 {
+		t.Fatalf("expected 3 records in one merged session, got %d", len(results))
+	}
+	ws := string(results[0].Headers["window_start"])
+	we := string(results[0].Headers["window_end"])
+	for _, r := range results {
+		if string(r.Headers["window_start"]) != ws || string(r.Headers["window_end"]) != we {
+			t.Errorf("all records must share the merged session; got [%s,%s) vs [%s,%s)",
+				ws, we, string(r.Headers["window_start"]), string(r.Headers["window_end"]))
+		}
+	}
+	if ws != "1970-01-01T00:00:00Z" || we != "1970-01-01T00:00:28Z" {
+		t.Errorf("merged session bounds: got [%s,%s), want [00:00,00:28)", ws, we)
+	}
+}
+
 func TestWindowOperator_SessionWindow_DropsLateRecords(t *testing.T) {
 	assigner := window.NewSession(10 * time.Second)
 	op := operator.Window(assigner)

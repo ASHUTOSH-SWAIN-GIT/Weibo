@@ -849,30 +849,46 @@ func (env *StreamExecutionEnv) restoreWorkersFromCheckpoint(data *checkpoint.Che
 	if data == nil {
 		return
 	}
+
+	// Top-level operators are snapshotted under "op-<i>" in collectSnapshots
+	// and must be restored symmetrically. For a non-keyed stateful pipeline
+	// (a Window/Reduce used without KeyBy) these ARE the live operators, so
+	// skipping them silently reset their state on every restart. For keyed
+	// pipelines they are unused templates and the restore is a harmless
+	// no-op (no matching snapshot / empty state).
+	for i, op := range env.operators {
+		env.restoreOperatorState(data, fmt.Sprintf("op-%d", i), op)
+	}
+
 	env.workerMu.Lock()
 	defer env.workerMu.Unlock()
 	for i, op := range env.workerOps {
-		key := fmt.Sprintf("worker-%d", i)
+		env.restoreOperatorState(data, fmt.Sprintf("worker-%d", i), op)
+	}
+}
 
-		// Native checkpoint restore (Pebble hard-links).
-		if stateDir, ok := data.StateDirs[key]; ok {
-			if rop, ok := op.(*operator.ReduceOperator); ok {
-				if cp, ok := rop.Backend().(state.Checkpointable); ok {
-					absPath := filepath.Join(env.checkpointStorage.StateDir(data.ID), stateDir)
-					if err := cp.RestoreFrom(absPath); err != nil {
-						fmt.Printf("mailer: restore worker-%d from native state failed: %v\n", i, err)
-					}
-					continue
+// restoreOperatorState restores a single operator's state from a checkpoint
+// under the given owner key, using native (Pebble hard-link) restore when
+// available and falling back to inline snapshot bytes otherwise.
+func (env *StreamExecutionEnv) restoreOperatorState(data *checkpoint.CheckpointData, key string, op operator.Operator) {
+	// Native checkpoint restore (Pebble hard-links).
+	if stateDir, ok := data.StateDirs[key]; ok {
+		if rop, ok := op.(*operator.ReduceOperator); ok {
+			if cp, ok := rop.Backend().(state.Checkpointable); ok {
+				absPath := filepath.Join(env.checkpointStorage.StateDir(data.ID), stateDir)
+				if err := cp.RestoreFrom(absPath); err != nil {
+					fmt.Printf("mailer: restore %s from native state failed: %v\n", key, err)
 				}
+				return
 			}
 		}
+	}
 
-		// Inline state restore (memory / compatible Pebble).
-		if snap, ok := op.(operator.Snapshotable); ok {
-			if stateData, exists := data.Operators[key]; exists && len(stateData) > 0 {
-				if err := snap.Restore(stateData); err != nil {
-					fmt.Printf("mailer: restore worker-%d failed: %v\n", i, err)
-				}
+	// Inline state restore (memory / compatible Pebble).
+	if snap, ok := op.(operator.Snapshotable); ok {
+		if stateData, exists := data.Operators[key]; exists && len(stateData) > 0 {
+			if err := snap.Restore(stateData); err != nil {
+				fmt.Printf("mailer: restore %s failed: %v\n", key, err)
 			}
 		}
 	}

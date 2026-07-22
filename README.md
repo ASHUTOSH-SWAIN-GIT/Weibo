@@ -99,6 +99,22 @@ Windows group an unbounded stream into finite chunks based on time. Without wind
 
 When a window closes, all records in that window are passed to the window function (Reduce, Process, etc.).
 
+**Windowed aggregation — use `WindowReduce`.** For a per-window aggregate
+(sum/count/…), prefer `WindowReduce`, which folds each window's records and
+emits **one** result per (key, window) at close:
+
+```go
+stream.KeyBy(customerKey).WithPartitions(8).
+       WindowReduce(window.NewTumbling(5*time.Minute), sumAmount)
+```
+
+`Window(...).Reduce(...)` (two separate operators) still works but has
+*incremental* semantics: the window emits every buffered record and the
+streaming `Reduce` folds them, so you get several partial rows per window (the
+last is the final total) and a per-window accumulator that is not evicted.
+`WindowReduce` gives the correct one-result-per-window semantics and bounds
+memory to the number of *open* windows.
+
 ### Watermark
 
 A watermark is a timestamp that says "no records with timestamp < X will arrive after this point." Watermarks are how Mailer decides when a window is complete. If a record arrives after the watermark has passed its timestamp, it's **late** — and can be dropped or handled separately.

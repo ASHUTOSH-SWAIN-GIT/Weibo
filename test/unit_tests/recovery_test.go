@@ -394,6 +394,78 @@ func TestRecovery_KeyedStateRestoredExactly(t *testing.T) {
 	}
 }
 
+// TestRecovery_NonKeyedStateRestored: a Reduce used WITHOUT KeyBy is a
+// top-level operator, snapshotted under "op-<i>". Run 1 counts the first
+// half and checkpoints; run 2 must restore that op-<i> state and continue,
+// so the final per-key counts match an uninterrupted run. Regression test
+// for op-<i> state being snapshotted but never restored.
+func TestRecovery_NonKeyedStateRestored(t *testing.T) {
+	for _, bk := range stateBackends(t) {
+		t.Run(bk.Name, func(t *testing.T) {
+			const total = 50
+			dir := t.TempDir()
+			storage := checkpoint.NewFileStorage(dir)
+
+			mkParts := func() [][]types.Record {
+				recs := make([]types.Record, total)
+				for i := 0; i < total; i++ {
+					key := "a"
+					if i%2 == 1 {
+						key = "b"
+					}
+					recs[i] = types.NewRecord([]byte(key), []byte("v"))
+				}
+				return [][]types.Record{recs}
+			}
+
+			src1 := newReplaySource(mkParts())
+			src1.pauseAfter = 25
+			src1.stopAfterPause = true
+			src1.resume = func() bool {
+				offs := checkpointOffsets(storage)
+				return offs != nil && offs["0"] == 25
+			}
+			sink1 := newCaptureSink()
+			env1 := mailer.NewEnv().
+				WithCheckpointing(5*time.Millisecond, storage).
+				WithStateBackend(bk.Factory)
+			env1.FromSource(src1).Reduce(countReduceFn).ToSink(sink1) // no KeyBy
+			if err := env1.Execute(context.Background()); err != nil {
+				t.Fatalf("run 1: Execute failed: %v", err)
+			}
+			if saved := checkpointOffsets(storage); saved["0"] != 25 {
+				t.Fatalf("expected offset {0:25}, got %v", saved)
+			}
+
+			src2 := newReplaySource(mkParts())
+			sink2 := newCaptureSink()
+			env2 := mailer.NewEnv().
+				WithCheckpointing(5*time.Millisecond, storage).
+				WithStateBackend(bk.Factory)
+			env2.FromSource(src2).Reduce(countReduceFn).ToSink(sink2) // no KeyBy
+			if err := env2.Execute(context.Background()); err != nil {
+				t.Fatalf("run 2: Execute failed: %v", err)
+			}
+
+			sink2.mu.Lock()
+			defer sink2.mu.Unlock()
+			for _, key := range []string{"a", "b"} {
+				v, ok := sink2.lastByKey[key]
+				if !ok {
+					t.Errorf("key %s: no output in run 2", key)
+					continue
+				}
+				// 25 of each across the full log; run 2 must continue the
+				// pre-crash count, not restart it. Without op-<i> restore
+				// this comes out ~12–13.
+				if got := binary.BigEndian.Uint64(v); got != 25 {
+					t.Errorf("key %s: final count %d, want 25 (state not restored?)", key, got)
+				}
+			}
+		})
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Cancellation with completely full edges
 // ---------------------------------------------------------------------------

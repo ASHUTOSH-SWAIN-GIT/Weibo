@@ -2,6 +2,7 @@ package sink
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -12,6 +13,12 @@ import (
 	"github.com/ASHUTOSH-SWAIN-GIT/mailer/auth"
 	"github.com/ASHUTOSH-SWAIN-GIT/mailer/types"
 )
+
+// markerProbePollTimeout bounds each PollFetches while draining the marker
+// topic in WasCommitted. During recovery the topic is static, so a poll that
+// blocks this long without new records means the visible log is fully
+// consumed. Generous enough to tolerate a slow first fetch.
+const markerProbePollTimeout = 5 * time.Second
 
 // TxnKafkaSink writes records to Kafka inside transactions, one
 // transaction per checkpoint interval, implementing CheckpointedSink
@@ -288,6 +295,18 @@ func (s *TxnKafkaSink) setProduceErr(err error) {
 	s.mu.Unlock()
 }
 
+// clearProduceErr resets the latched produce error once a transaction has
+// ended. produceErr belongs to the transaction that just closed: the barrier
+// already folded it into that checkpoint's flushErr (before onPrepared), and
+// Flush drained every produce callback before the barrier read it, so no late
+// callback from the old transaction can set it after this point. Without the
+// reset, one transient produce error would fail every subsequent checkpoint.
+func (s *TxnKafkaSink) clearProduceErr() {
+	s.mu.Lock()
+	s.produceErr = nil
+	s.mu.Unlock()
+}
+
 // Commit implements CheckpointedSink: commits the transaction for
 // checkpoint id, opens the next one, and unblocks Write.
 func (s *TxnKafkaSink) Commit(ctx context.Context, id string) error {
@@ -303,6 +322,7 @@ func (s *TxnKafkaSink) Commit(ctx context.Context, id string) error {
 	if err := client.BeginTransaction(); err != nil {
 		return fmt.Errorf("txn kafka sink: begin after %s: %w", id, err)
 	}
+	s.clearProduceErr() // fresh transaction: don't carry the old one's error
 	s.signal(id)
 	return nil
 }
@@ -327,6 +347,7 @@ func (s *TxnKafkaSink) Abort(ctx context.Context, id string) error {
 	if err := client.BeginTransaction(); err != nil {
 		return fmt.Errorf("txn kafka sink: begin after abort %s: %w", id, err)
 	}
+	s.clearProduceErr() // fresh transaction: don't carry the old one's error
 	s.signal(id)
 	return nil
 }
@@ -364,33 +385,57 @@ func (s *TxnKafkaSink) WasCommitted(ctx context.Context, id string) (bool, error
 	if err != nil {
 		return false, fmt.Errorf("txn kafka sink: marker probe end offsets: %w", err)
 	}
-	remaining := map[int32]int64{}
+	hasData := false
 	ends.Each(func(lo kadm.ListedOffset) {
 		if lo.Offset > 0 {
-			remaining[lo.Partition] = lo.Offset
+			hasData = true
 		}
 	})
-	if len(remaining) == 0 {
+	if !hasData {
 		return false, nil // empty (or missing) marker topic: nothing committed
 	}
 
+	// Consume the whole visible marker log. We can't drain on "a data record
+	// reached the end offset": under read_committed the trailing offsets are
+	// often transaction-control markers or aborted-batch records that
+	// EachRecord never surfaces, so the last visible data record sits *below*
+	// the end offset and that condition never fires — the previous code spun
+	// to the ctx deadline.
+	//
+	// WasCommitted runs only during recovery, when the sink is not producing,
+	// so the marker topic is static: a bounded poll that returns no new
+	// records therefore means the visible log is fully consumed (the tail is
+	// non-visible control/aborted records), and we can stop. A generous
+	// per-poll timeout tolerates a slow first fetch, so this never concludes
+	// "not committed" prematurely (which would replay a committed transaction
+	// and duplicate output).
 	found := false
-	for len(remaining) > 0 {
-		fetches := cl.PollFetches(ctx)
+	for {
+		pollCtx, cancel := context.WithTimeout(ctx, markerProbePollTimeout)
+		fetches := cl.PollFetches(pollCtx)
+		cancel()
 		if err := ctx.Err(); err != nil {
 			return false, err
 		}
 		if errs := fetches.Errors(); len(errs) > 0 {
-			return false, fmt.Errorf("txn kafka sink: marker probe fetch: %v", errs[0].Err)
+			for _, fe := range errs {
+				// Our own poll-timeout deadline is the expected end-of-log
+				// signal; any other fetch error is real.
+				if fe.Err != nil && !errors.Is(fe.Err, context.DeadlineExceeded) {
+					return false, fmt.Errorf("txn kafka sink: marker probe fetch: %w", fe.Err)
+				}
+			}
 		}
+		advanced := false
 		fetches.EachRecord(func(rec *kgo.Record) {
+			advanced = true
 			if string(rec.Key) == s.cfg.txnID && string(rec.Value) == id {
 				found = true
 			}
-			if end, ok := remaining[rec.Partition]; ok && rec.Offset+1 >= end {
-				delete(remaining, rec.Partition)
-			}
 		})
+		if !advanced {
+			break // visible log fully consumed (static topic during recovery)
+		}
 	}
 	return found, nil
 }

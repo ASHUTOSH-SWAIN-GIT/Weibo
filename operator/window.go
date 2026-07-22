@@ -47,6 +47,15 @@ type WindowOperator struct {
 	IdleTimeout time.Duration
 	Label       string
 
+	// Reducer, when set, makes the window aggregate its buffered records
+	// internally and emit ONE result per (key, window) at window close,
+	// instead of emitting every buffered record. This is the correct
+	// windowed-aggregation semantics (like Flink's window().reduce()) and
+	// is memory-bounded: a window's records are folded and evicted on fire,
+	// with no per-window accumulator lingering downstream. Set via the
+	// Stream.WindowReduce API.
+	Reducer ReduceFn
+
 	backend          state.StateBackend
 	currentWatermark time.Time // RAM working copy of the durable watermark
 
@@ -96,6 +105,9 @@ func (op *WindowOperator) DescribeOp() OperatorMeta {
 	if op.IdleTimeout > 0 {
 		cfg["idle_timeout"] = op.IdleTimeout.String()
 	}
+	if op.Reducer != nil {
+		cfg["reduce"] = "true"
+	}
 	return OperatorMeta{Type: "Window", Label: op.Label, Config: cfg}
 }
 
@@ -107,6 +119,7 @@ func (op *WindowOperator) Clone() Operator {
 		Assigner:    op.Assigner,
 		IdleTimeout: op.IdleTimeout,
 		Label:       op.Label,
+		Reducer:     op.Reducer,
 		backend:     state.NewMemoryBackend(),
 	}
 }
@@ -215,6 +228,17 @@ func (op *WindowOperator) assignToWindow(recState state.ListState, key string, w
 	wk := toWindowKey(key, win).String()
 
 	if op.Assigner.IsSession() {
+		// Collect EVERY existing session for this key that overlaps the new
+		// window, then coalesce them all (plus the new record) into one
+		// merged session. A single record can bridge two or more sessions —
+		// merging only the first left the rest fragmented. Existing sessions
+		// are pairwise disjoint (any overlap was already merged), so testing
+		// each against the original new window and taking min-start/max-end
+		// is sufficient: no non-overlapping session can fall inside the
+		// merged span.
+		newStart, newEnd := win.Start, win.End
+		var mergedRecords [][]byte
+		var toRemove []string
 		for _, existingStr := range recState.Keys() {
 			ek := parseWindowKey(existingStr)
 			if ek.Key != key {
@@ -223,30 +247,27 @@ func (op *WindowOperator) assignToWindow(recState state.ListState, key string, w
 			eStart := time.Unix(0, ek.Start).UTC()
 			eEnd := time.Unix(0, ek.End).UTC()
 			if !win.Start.Before(eEnd) || !win.End.After(eStart) {
-				continue // no overlap
+				continue // no overlap with the new window
 			}
-
-			newStart, newEnd := eStart, eEnd
-			if win.Start.Before(newStart) {
-				newStart = win.Start
+			if eStart.Before(newStart) {
+				newStart = eStart
 			}
-			if win.End.After(newEnd) {
-				newEnd = win.End
+			if eEnd.After(newEnd) {
+				newEnd = eEnd
 			}
-			mergedStr := toWindowKey(key, window.Window{Start: newStart, End: newEnd}).String()
-
-			if mergedStr == existingStr {
-				// New record fits within the existing session bounds.
-				recState.SetKey(existingStr)
-				recState.Append(recBytes)
-				return
-			}
-			// Bounds expanded: move existing records under the new key.
 			recState.SetKey(existingStr)
-			moved := recState.GetAll()
-			recState.Clear()
+			mergedRecords = append(mergedRecords, recState.GetAll()...)
+			toRemove = append(toRemove, existingStr)
+		}
+
+		if len(toRemove) > 0 {
+			mergedStr := toWindowKey(key, window.Window{Start: newStart, End: newEnd}).String()
+			for _, oldKey := range toRemove {
+				recState.SetKey(oldKey)
+				recState.Clear()
+			}
 			recState.SetKey(mergedStr)
-			for _, r := range moved {
+			for _, r := range mergedRecords {
 				recState.Append(r)
 			}
 			recState.Append(recBytes)
@@ -281,8 +302,10 @@ func (op *WindowOperator) flushRemaining(recState state.ListState, out chan<- ty
 	}
 }
 
-// fireWindow emits every record in the window under keyStr (tagged with
-// window bounds) and clears it.
+// fireWindow closes the window under keyStr and clears it. With a Reducer
+// set it folds the window's records into a single aggregate and emits one
+// result; otherwise it emits every buffered record (tagged with window
+// bounds) — the legacy incremental form.
 func (op *WindowOperator) fireWindow(recState state.ListState, keyStr string, out chan<- types.Record) {
 	wk := parseWindowKey(keyStr)
 	win := window.Window{
@@ -290,7 +313,32 @@ func (op *WindowOperator) fireWindow(recState state.ListState, keyStr string, ou
 		End:   time.Unix(0, wk.End).UTC(),
 	}
 	recState.SetKey(keyStr)
-	for _, rb := range recState.GetAll() {
+	entries := recState.GetAll()
+
+	if op.Reducer != nil {
+		if len(entries) > 0 {
+			var accum []byte
+			var last types.Record
+			for _, rb := range entries {
+				last = decodeRecord(rb)
+				accum = op.Reducer(accum, last)
+			}
+			// One aggregate per (key, window). Key/timestamp come from the
+			// window's records; the reduced value is the payload.
+			result := types.Record{
+				Key:       last.Key,
+				Value:     accum,
+				Timestamp: last.Timestamp,
+				Offset:    last.Offset,
+				Headers:   last.Headers,
+			}
+			out <- tagWithWindow(result, win)
+		}
+		recState.Clear()
+		return
+	}
+
+	for _, rb := range entries {
 		out <- tagWithWindow(decodeRecord(rb), win)
 	}
 	recState.Clear()

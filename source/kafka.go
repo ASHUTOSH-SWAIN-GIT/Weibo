@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -51,6 +52,16 @@ type KafkaSource struct {
 	// restoredOffsets holds per-partition offsets to seek to on startup,
 	// populated by RestoreOffset from a checkpoint.
 	restoredOffsets map[int]int64
+
+	// offsetMu guards consumedOffsets.
+	offsetMu sync.Mutex
+	// consumedOffsets tracks the next offset to read for every partition,
+	// updated as each message is consumed. It is the source of truth for
+	// CheckpointOffset: reader.Stats() surfaces only a single partition in
+	// consumer-group mode, so a Stats-based checkpoint silently dropped
+	// every other partition's progress — reprocessing (or, with a broker
+	// commit racing ahead, losing) their records on restart.
+	consumedOffsets map[int]int64
 }
 
 // NewKafkaSource creates a Source that reads from Kafka.
@@ -186,6 +197,7 @@ func (k *KafkaSource) runSerial(ctx context.Context, out chan<- types.Record) er
 		if err != nil {
 			return err
 		}
+		k.trackOffset(msg)
 		record := k.processRecord(msg)
 		if record == nil {
 			continue
@@ -239,6 +251,7 @@ func (k *KafkaSource) runParallel(ctx context.Context, out chan<- types.Record) 
 					}
 					return
 				}
+				k.trackOffset(msg)
 				record := k.processRecord(msg)
 				if record == nil {
 					continue
@@ -371,18 +384,40 @@ func (k *KafkaSource) closeAllReaders() {
 	}
 }
 
-// CheckpointOffset returns the source's current position as JSON bytes.
-// For Kafka, this is the last committed offset per partition (from reader stats).
-func (k *KafkaSource) CheckpointOffset() ([]byte, error) {
-	offsets := make(map[string]int64)
-	for _, r := range k.readers {
-		stats := r.Stats()
-		key := stats.Partition
-		if key == "" {
-			key = "0"
-		}
-		offsets[key] = stats.Offset
+// trackOffset records progress past a consumed message so CheckpointOffset
+// reports the next offset to read for every partition — not just the single
+// partition reader.Stats() happens to surface in consumer-group mode.
+func (k *KafkaSource) trackOffset(msg kafka.Message) {
+	k.offsetMu.Lock()
+	if k.consumedOffsets == nil {
+		k.consumedOffsets = make(map[int]int64)
 	}
+	k.consumedOffsets[msg.Partition] = msg.Offset + 1
+	k.offsetMu.Unlock()
+}
+
+// CheckpointOffset returns the source's current position as JSON bytes:
+// {"<partition>": <nextOffsetToRead>} for every partition consumed so far.
+//
+// This is the fallback offset source. The engine prefers barrier-aligned
+// offsets captured at barrier injection (which reflect exactly the records
+// processed before the barrier); CheckpointOffset reports the reader's fetch
+// position, which may run ahead of the barrier. Either way it must cover
+// every partition — the previous reader.Stats() implementation reported only
+// one partition per reader, so a multi-partition consumer group lost all but
+// one partition's offset from the checkpoint.
+//
+// Keyed by partition only, matching RestoreOffset/CommitOffsets and the
+// barrier-aligned offset map; a single consumer group spanning multiple
+// topics with overlapping partition ids is not distinguished (documented
+// limitation shared by the whole offset path).
+func (k *KafkaSource) CheckpointOffset() ([]byte, error) {
+	k.offsetMu.Lock()
+	offsets := make(map[string]int64, len(k.consumedOffsets))
+	for part, next := range k.consumedOffsets {
+		offsets[strconv.Itoa(part)] = next
+	}
+	k.offsetMu.Unlock()
 	return json.Marshal(offsets)
 }
 
