@@ -35,6 +35,25 @@ Add `-no-open` to run it headless (e.g. on a server), or `-addr :9000` to
 change the port. Everything — submit, watch, cancel, restart, savepoint —
 happens in that one UI.
 
+## CLI
+
+`mailer dashboard` is the server; the rest are thin REST clients that talk to a
+running controller (local or remote) over `MAILER_CONTROLLER` (default
+`http://localhost:9000`) and `MAILER_TOKEN`:
+
+```sh
+mailer deploy -file mailer.yaml   # build (SDK) + push + submit a job
+mailer jobs                       # list jobs
+mailer status <id>                # detail + latest run + history
+mailer logs <id> [-tail N]        # container logs
+mailer cancel <id>                # graceful stop
+mailer restart <id> [-savepoint L]
+mailer savepoint <id> -label L    # stop-with-savepoint
+```
+
+For a production single-VM deployment (registry auth, bearer-token auth, TLS,
+resource limits, systemd), see **[docs/self-hosting.md](../docs/self-hosting.md)**.
+
 ## Backends: Docker or Kubernetes
 
 The controller drives one job per container through a `ContainerBackend`. The
@@ -86,6 +105,12 @@ Notes for the Kubernetes backend:
 | `GET  /jobs/{id}/logs?tail=N` | Container logs (`tail=0` for all). |
 | `GET  /jobs/{id}/state`       | Proxy to the job's live agent `/state`. |
 | `GET  /jobs/{id}/metrics`     | Proxy to the job's live agent `/metrics`. |
+| `POST /auth`                  | Returns 200 iff the bearer token is valid (UI token check). |
+
+**Auth:** start the controller with `-auth-token <secret>` (env
+`MAILER_AUTH_TOKEN`) to require `Authorization: Bearer <secret>` on every route
+except `GET /` and `GET /healthz`. The CLI sends it via `-token` /
+`MAILER_TOKEN`; the UI prompts and stores it. No token = open API (the default).
 
 ### Example
 
