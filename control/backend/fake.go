@@ -139,6 +139,17 @@ func (f *Fake) LastWorkflowDoc(id string) []byte {
 	return nil
 }
 
+// LastResources returns the resource limits a container was launched with
+// (nil when the job set none).
+func (f *Fake) LastResources(id string) *ResourceLimits {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if c, ok := f.containers[id]; ok {
+		return c.spec.Resources
+	}
+	return nil
+}
+
 // Launched reports how many containers were ever launched.
 func (f *Fake) Launched() int {
 	f.mu.Lock()

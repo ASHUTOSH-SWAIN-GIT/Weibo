@@ -95,6 +95,64 @@ func TestSubmitSDK_DetectedAndLaunched(t *testing.T) {
 	}
 }
 
+// An SDK manifest's env and resources flow through to the LaunchSpec, and
+// API-supplied secret env overrides manifest env.
+func TestSubmitSDK_EnvAndResources(t *testing.T) {
+	const doc = `kind: sdk
+name: orders-sdk
+image: my-registry/orders-sdk:v1
+env:
+  LOG_LEVEL: info
+  DB_HOST: manifest-db
+resources:
+  cpu: 500m
+  memory: 256Mi
+`
+	fake := backend.NewFake()
+	c, _ := newController(t, fake, lifecycle.DefaultRestartPolicy())
+
+	// A secret supplied at submit shadows the manifest's DB_HOST.
+	job, err := c.Submit(context.Background(), []byte(doc), map[string]string{"DB_HOST": "secret-db"})
+	if err != nil {
+		t.Fatalf("Submit(sdk): %v", err)
+	}
+	run, _ := c.LatestRun(job.ID)
+
+	res := fake.LastResources(run.ContainerID)
+	if res == nil || res.CPU != "500m" || res.Memory != "256Mi" {
+		t.Fatalf("resources not threaded: %+v", res)
+	}
+	env := fake.LastEnv(run.ContainerID)
+	if env["LOG_LEVEL"] != "info" {
+		t.Errorf("manifest env lost: LOG_LEVEL=%q", env["LOG_LEVEL"])
+	}
+	if env["DB_HOST"] != "secret-db" {
+		t.Errorf("secret env should override manifest: DB_HOST=%q, want secret-db", env["DB_HOST"])
+	}
+}
+
+// A malformed resource quantity is rejected at submit — no launch.
+func TestSubmitSDK_InvalidResources(t *testing.T) {
+	const doc = `kind: sdk
+name: bad
+image: my-registry/bad:v1
+resources:
+  cpu: not-a-cpu
+`
+	fake := backend.NewFake()
+	c, _ := newController(t, fake, lifecycle.DefaultRestartPolicy())
+	_, err := c.Submit(context.Background(), []byte(doc), nil)
+	if err == nil {
+		t.Fatal("expected error for invalid resources.cpu")
+	}
+	if !strings.Contains(err.Error(), "resources.cpu") {
+		t.Errorf("error should name the bad field: %v", err)
+	}
+	if fake.Launched() != 0 {
+		t.Errorf("must not launch on invalid resources, launched %d", fake.Launched())
+	}
+}
+
 func TestSubmitSDK_MissingImage(t *testing.T) {
 	fake := backend.NewFake()
 	c, _ := newController(t, fake, lifecycle.DefaultRestartPolicy())

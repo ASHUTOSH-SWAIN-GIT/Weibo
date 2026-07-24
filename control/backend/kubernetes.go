@@ -148,7 +148,7 @@ func (k *Kubernetes) Launch(ctx context.Context, spec LaunchSpec) (string, error
 		secretName = run
 	}
 
-	job := k.buildJob(run, jobID, pvc, cmName, secretName, image, port, spec.RestoreSavepoint, spec.PullPolicy)
+	job := k.buildJob(run, jobID, pvc, cmName, secretName, image, port, spec.RestoreSavepoint, spec.PullPolicy, spec.Resources)
 	if _, err := k.cs.BatchV1().Jobs(k.namespace).Create(ctx, job, metav1.CreateOptions{}); err != nil {
 		k.cleanup(ctx, run)
 		return "", fmt.Errorf("k8s: create job: %w", err)
@@ -162,7 +162,7 @@ func (k *Kubernetes) Launch(ctx context.Context, spec LaunchSpec) (string, error
 	return run, nil
 }
 
-func (k *Kubernetes) buildJob(run, jobID, pvc, cmName, secretName, image string, port int, restore, pullPolicy string) *batchv1.Job {
+func (k *Kubernetes) buildJob(run, jobID, pvc, cmName, secretName, image string, port int, restore, pullPolicy string, resources *ResourceLimits) *batchv1.Job {
 	env := []corev1.EnvVar{
 		{Name: "DATA_DIR", Value: k8sDataDir},
 		{Name: "SAVEPOINT_DIR", Value: k8sSavepointDir},
@@ -233,6 +233,7 @@ func (k *Kubernetes) buildJob(run, jobID, pvc, cmName, secretName, image string,
 						VolumeMounts:    mounts,
 						LivenessProbe:   probe,
 						ReadinessProbe:  probe,
+						Resources:       k8sResources(resources),
 					}},
 					Volumes: volumes,
 				},
@@ -407,6 +408,25 @@ func k8sPullPolicy(policy string) corev1.PullPolicy {
 	default:
 		return ""
 	}
+}
+
+// k8sResources maps ResourceLimits to a container's ResourceRequirements
+// with requests == limits (a fixed, guaranteed-QoS reservation). Nil or
+// empty fields are omitted, leaving that dimension unconstrained. The
+// controller validates the quantity strings, so ParseQuantity cannot fail
+// here — MustParse would only panic on an already-rejected value.
+func k8sResources(r *ResourceLimits) corev1.ResourceRequirements {
+	if r == nil || (r.CPU == "" && r.Memory == "") {
+		return corev1.ResourceRequirements{}
+	}
+	list := corev1.ResourceList{}
+	if r.CPU != "" {
+		list[corev1.ResourceCPU] = resource.MustParse(r.CPU)
+	}
+	if r.Memory != "" {
+		list[corev1.ResourceMemory] = resource.MustParse(r.Memory)
+	}
+	return corev1.ResourceRequirements{Requests: list, Limits: list}
 }
 
 // compile-time check.

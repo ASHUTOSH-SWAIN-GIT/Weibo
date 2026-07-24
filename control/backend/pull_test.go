@@ -72,7 +72,7 @@ func TestK8sPullPolicy(t *testing.T) {
 // ImagePullPolicy are set from the backend config / spec.
 func TestBuildJob_PullSecretsAndPolicy(t *testing.T) {
 	k := &Kubernetes{namespace: "default", imagePullSecrets: []string{"reg-a", "reg-b"}}
-	job := k.buildJob("run1", "job1", "pvc1", "", "", "myreg/img:v1", 8080, "", PullAlways)
+	job := k.buildJob("run1", "job1", "pvc1", "", "", "myreg/img:v1", 8080, "", PullAlways, nil)
 	pod := job.Spec.Template.Spec
 
 	if len(pod.ImagePullSecrets) != 2 ||

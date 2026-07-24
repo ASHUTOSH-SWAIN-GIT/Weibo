@@ -21,6 +21,7 @@ import (
 	"github.com/docker/docker/client"
 	"github.com/docker/docker/pkg/stdcopy"
 	"github.com/docker/go-connections/nat"
+	"k8s.io/apimachinery/pkg/api/resource"
 )
 
 // dockerConfigDir, when non-empty, overrides the directory registry
@@ -216,6 +217,9 @@ func (d *Docker) Launch(ctx context.Context, spec LaunchSpec) (string, error) {
 			portSpec: []nat.PortBinding{{HostIP: "127.0.0.1", HostPort: ""}},
 		},
 	}
+	if err := applyResources(host, spec.Resources); err != nil {
+		return "", fmt.Errorf("docker: %w", err)
+	}
 	name := fmt.Sprintf("mailer-%s-%d", spec.JobID, time.Now().UnixNano())
 
 	created, err := d.cli.ContainerCreate(ctx, cfg, host, nil, nil, name)
@@ -240,6 +244,41 @@ func (d *Docker) Launch(ctx context.Context, spec LaunchSpec) (string, error) {
 		return "", fmt.Errorf("docker: start container: %w", err)
 	}
 	return created.ID, nil
+}
+
+// applyResources maps ResourceLimits onto the Docker HostConfig. A nil
+// limit or empty field leaves that dimension unconstrained. It parses the
+// same Kubernetes quantity strings the controller validates and the K8s
+// backend uses, so all three agree on what "500m"/"1Gi" mean.
+func applyResources(host *container.HostConfig, r *ResourceLimits) error {
+	if r == nil {
+		return nil
+	}
+	if r.CPU != "" {
+		nano, err := cpuToNanoCPUs(r.CPU)
+		if err != nil {
+			return fmt.Errorf("cpu %q: %w", r.CPU, err)
+		}
+		host.NanoCPUs = nano
+	}
+	if r.Memory != "" {
+		q, err := resource.ParseQuantity(r.Memory)
+		if err != nil {
+			return fmt.Errorf("memory %q: %w", r.Memory, err)
+		}
+		host.Memory = q.Value()
+	}
+	return nil
+}
+
+// cpuToNanoCPUs converts a Kubernetes CPU quantity to Docker NanoCPUs
+// (1 CPU = 1e9). Millicores map directly: "500m" → 5e8, "2" → 2e9.
+func cpuToNanoCPUs(s string) (int64, error) {
+	q, err := resource.ParseQuantity(s)
+	if err != nil {
+		return 0, err
+	}
+	return q.MilliValue() * 1_000_000, nil // millicores → nanocores
 }
 
 func (d *Docker) Stop(ctx context.Context, id string, timeout time.Duration) error {

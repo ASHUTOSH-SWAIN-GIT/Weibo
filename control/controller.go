@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"gopkg.in/yaml.v3"
+	"k8s.io/apimachinery/pkg/api/resource"
 
 	"github.com/ASHUTOSH-SWAIN-GIT/mailer/control/backend"
 	"github.com/ASHUTOSH-SWAIN-GIT/mailer/control/lifecycle"
@@ -136,6 +137,18 @@ type sdkManifest struct {
 	Kind  string `yaml:"kind"`
 	Name  string `yaml:"name"`
 	Image string `yaml:"image"`
+	// Env are non-secret environment variables baked into the job. Secret
+	// env supplied via the API at submit time overrides these at launch.
+	Env map[string]string `yaml:"env,omitempty"`
+	// Resources caps CPU/memory as Kubernetes quantity strings.
+	Resources *resourceSpec `yaml:"resources,omitempty"`
+}
+
+// resourceSpec is the manifest's CPU/memory request, using Kubernetes
+// quantity strings (CPU "500m"/"2", Memory "512Mi"/"1Gi").
+type resourceSpec struct {
+	CPU    string `yaml:"cpu,omitempty"`
+	Memory string `yaml:"memory,omitempty"`
 }
 
 // parseSDKManifest reports whether doc is an SDK job manifest (kind: sdk).
@@ -148,6 +161,47 @@ func parseSDKManifest(doc []byte) (sdkManifest, bool) {
 	return m, strings.EqualFold(m.Kind, store.KindSDK)
 }
 
+// validateResources checks that the manifest's CPU/memory strings are
+// parseable Kubernetes quantities, so an invalid value is rejected at
+// submit instead of panicking a backend at launch.
+func validateResources(r *resourceSpec) error {
+	if r == nil {
+		return nil
+	}
+	if r.CPU != "" {
+		if _, err := resource.ParseQuantity(r.CPU); err != nil {
+			return fmt.Errorf("invalid resources.cpu %q: %w", r.CPU, err)
+		}
+	}
+	if r.Memory != "" {
+		if _, err := resource.ParseQuantity(r.Memory); err != nil {
+			return fmt.Errorf("invalid resources.memory %q: %w", r.Memory, err)
+		}
+	}
+	return nil
+}
+
+// toLimits converts a manifest resourceSpec to a backend ResourceLimits.
+// Nil or fully-empty specs return nil (unlimited).
+func (r *resourceSpec) toLimits() *backend.ResourceLimits {
+	if r == nil || (r.CPU == "" && r.Memory == "") {
+		return nil
+	}
+	return &backend.ResourceLimits{CPU: r.CPU, Memory: r.Memory}
+}
+
+// mergeEnv layers override on top of base, returning a new map. Keys in
+// override win; neither input is mutated.
+func mergeEnv(base, override map[string]string) map[string]string {
+	if len(base) == 0 {
+		return override
+	}
+	out := make(map[string]string, len(base)+len(override))
+	maps.Copy(out, base)
+	maps.Copy(out, override)
+	return out
+}
+
 // submitSDK records and launches a prebuilt SDK job image. There is no
 // workflow to compile; the pipeline lives in the image. The topology is
 // discovered at runtime from the agent's /describe.
@@ -157,6 +211,11 @@ func (c *Controller) submitSDK(ctx context.Context, doc []byte, m sdkManifest, e
 	}
 	if m.Image == "" {
 		return nil, fmt.Errorf("submit: sdk manifest missing 'image'")
+	}
+	// Validate resource quantities now so a bad value is a clean 400 at
+	// submit — not a resource.MustParse panic at launch time.
+	if err := validateResources(m.Resources); err != nil {
+		return nil, fmt.Errorf("submit: %w", err)
 	}
 
 	now := time.Now().UTC()
@@ -367,8 +426,17 @@ func (c *Controller) launch(ctx context.Context, job *store.Job, attempt int, re
 	// injected.
 	img := c.image
 	var doc []byte
+	env := c.launchEnv(job.ID)
+	var resources *backend.ResourceLimits
 	if job.Kind == store.KindSDK {
 		img = job.Image
+		// Re-parse the durable manifest to recover Env/Resources — they are
+		// not stored as separate columns, so they survive a controller
+		// restart via job.Spec alone (no schema migration).
+		if m, ok := parseSDKManifest([]byte(job.Spec)); ok {
+			env = mergeEnv(m.Env, env) // API secret env wins over manifest env
+			resources = m.Resources.toLimits()
+		}
 	} else {
 		doc = []byte(job.Spec)
 	}
@@ -378,9 +446,10 @@ func (c *Controller) launch(ctx context.Context, job *store.Job, attempt int, re
 		Name:             job.Name,
 		Image:            img,
 		WorkflowDoc:      doc,
-		Env:              c.launchEnv(job.ID),
+		Env:              env,
 		ControlPort:      c.port,
 		RestoreSavepoint: restore,
+		Resources:        resources,
 		// Pull registry-hosted SDK images when absent; the local runner
 		// image used by YAML jobs is present, so it is never pulled.
 		PullPolicy: backend.PullIfNotPresent,
