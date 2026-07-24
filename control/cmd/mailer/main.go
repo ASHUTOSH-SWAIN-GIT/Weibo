@@ -36,6 +36,20 @@ func main() {
 	switch os.Args[1] {
 	case "dashboard":
 		os.Exit(runDashboard(os.Args[2:]))
+	case "deploy":
+		os.Exit(runDeploy(os.Args[2:]))
+	case "jobs":
+		os.Exit(runJobs(os.Args[2:]))
+	case "status":
+		os.Exit(runStatus(os.Args[2:]))
+	case "logs":
+		os.Exit(runLogs(os.Args[2:]))
+	case "cancel":
+		os.Exit(runCancel(os.Args[2:]))
+	case "restart":
+		os.Exit(runRestart(os.Args[2:]))
+	case "savepoint":
+		os.Exit(runSavepoint(os.Args[2:]))
 	case "-h", "--help", "help":
 		usage()
 	default:
@@ -49,9 +63,17 @@ func usage() {
 	fmt.Fprint(os.Stderr, `mailer — stream-processing control plane
 
 Usage:
-  mailer dashboard [flags]   Start the controller and open the web UI
+  mailer dashboard [flags]              Start the controller and open the web UI
+  mailer deploy [flags]                 Build, push, and submit a job manifest
+  mailer jobs [flags]                   List jobs
+  mailer status <job-id> [flags]        Show one job's detail and history
+  mailer logs <job-id> [-tail N]        Print a job's container logs
+  mailer cancel <job-id>                Gracefully stop a job
+  mailer restart <job-id> [-savepoint]  Resume a job (optionally from a savepoint)
+  mailer savepoint <job-id> -label N    Stop a job with a named savepoint
 
-Run "mailer dashboard -h" for flags.
+Management commands talk to a controller over REST (env MAILER_CONTROLLER,
+default http://localhost:9000). Run "mailer <command> -h" for flags.
 `)
 }
 
