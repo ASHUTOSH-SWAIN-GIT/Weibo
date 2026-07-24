@@ -70,7 +70,7 @@ func TestIntegration_SubmitRunCancelRestart(t *testing.T) {
 	defer st.Close()
 
 	ctrl := control.New(control.Options{Store: st, Backend: docker, Image: runnerImage})
-	srv := httptest.NewServer(api.NewServer(ctrl).Handler())
+	srv := httptest.NewServer(api.NewServer(ctrl, "").Handler())
 	defer srv.Close()
 
 	// Clean up any containers we launch, whatever the outcome.
@@ -173,7 +173,7 @@ func TestIntegration_SavepointAndRestore(t *testing.T) {
 	}
 	defer st.Close()
 	ctrl := control.New(control.Options{Store: st, Backend: docker, Image: runnerImage})
-	srv := httptest.NewServer(api.NewServer(ctrl).Handler())
+	srv := httptest.NewServer(api.NewServer(ctrl, "").Handler())
 	defer srv.Close()
 
 	var jobID string

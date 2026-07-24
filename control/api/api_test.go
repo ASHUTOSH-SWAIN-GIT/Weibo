@@ -37,9 +37,83 @@ func newAPI(t *testing.T) *httptest.Server {
 	ctrl := control.New(control.Options{
 		Store: st, Backend: backend.NewFake(), Image: "img", StopTimeout: time.Second,
 	})
-	srv := httptest.NewServer(api.NewServer(ctrl).Handler())
+	srv := httptest.NewServer(api.NewServer(ctrl, "").Handler())
 	t.Cleanup(srv.Close)
 	return srv
+}
+
+// newAuthAPI builds a server that requires the given bearer token.
+func newAuthAPI(t *testing.T, token string) *httptest.Server {
+	t.Helper()
+	st, err := store.OpenSQLite(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	ctrl := control.New(control.Options{
+		Store: st, Backend: backend.NewFake(), Image: "img", StopTimeout: time.Second,
+	})
+	srv := httptest.NewServer(api.NewServer(ctrl, token).Handler())
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func TestAuth_TokenGating(t *testing.T) {
+	srv := newAuthAPI(t, "s3cret")
+	client := srv.Client()
+
+	do := func(method, path, auth string) int {
+		req, _ := http.NewRequest(method, srv.URL+path, nil)
+		if auth != "" {
+			req.Header.Set("Authorization", auth)
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+
+	// Protected route: no header / wrong token → 401; correct token → 200.
+	if got := do(http.MethodGet, "/jobs", ""); got != http.StatusUnauthorized {
+		t.Errorf("/jobs no token: got %d, want 401", got)
+	}
+	if got := do(http.MethodGet, "/jobs", "Bearer wrong"); got != http.StatusUnauthorized {
+		t.Errorf("/jobs wrong token: got %d, want 401", got)
+	}
+	if got := do(http.MethodGet, "/jobs", "Bearer s3cret"); got != http.StatusOK {
+		t.Errorf("/jobs correct token: got %d, want 200", got)
+	}
+
+	// Public routes need no token so the browser can load and prompt.
+	if got := do(http.MethodGet, "/", ""); got != http.StatusOK {
+		t.Errorf("GET / no token: got %d, want 200", got)
+	}
+	if got := do(http.MethodGet, "/healthz", ""); got != http.StatusOK {
+		t.Errorf("/healthz no token: got %d, want 200", got)
+	}
+
+	// /auth verifies a token: 401 without, 200 with.
+	if got := do(http.MethodPost, "/auth", ""); got != http.StatusUnauthorized {
+		t.Errorf("/auth no token: got %d, want 401", got)
+	}
+	if got := do(http.MethodPost, "/auth", "Bearer s3cret"); got != http.StatusOK {
+		t.Errorf("/auth correct token: got %d, want 200", got)
+	}
+}
+
+func TestAuth_OpenWhenNoToken(t *testing.T) {
+	srv := newAPI(t) // token ""
+	// With no token configured, protected routes stay open.
+	resp, err := http.Get(srv.URL + "/jobs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("open /jobs: got %d, want 200", resp.StatusCode)
+	}
 }
 
 func TestSubmitRawYAMLThenListAndGet(t *testing.T) {

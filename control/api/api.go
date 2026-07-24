@@ -5,6 +5,7 @@ package api
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -22,11 +23,16 @@ import (
 type Server struct {
 	ctrl   *control.Controller
 	client *http.Client
+	// token, when non-empty, is the shared bearer token required on every
+	// API route (the HTML shell and health check stay public). Empty means
+	// the API is fully open — today's behavior.
+	token string
 }
 
-// NewServer builds the API server.
-func NewServer(ctrl *control.Controller) *Server {
-	return &Server{ctrl: ctrl, client: &http.Client{Timeout: 5 * time.Second}}
+// NewServer builds the API server. An empty token leaves the API open;
+// a non-empty token gates every route behind Authorization: Bearer <token>.
+func NewServer(ctrl *control.Controller, token string) *Server {
+	return &Server{ctrl: ctrl, client: &http.Client{Timeout: 5 * time.Second}, token: token}
 }
 
 // Handler returns the routed API. Method patterns give automatic 405s.
@@ -34,6 +40,7 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("GET /{$}", ui.Index()) // dashboard at the app root
 	mux.HandleFunc("GET /healthz", s.health)
+	mux.HandleFunc("POST /auth", s.authCheck)
 	mux.HandleFunc("POST /validate", s.validate)
 	mux.HandleFunc("POST /jobs", s.submit)
 	mux.HandleFunc("GET /jobs", s.list)
@@ -45,7 +52,44 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /jobs/{id}/state", s.proxy("/state"))
 	mux.HandleFunc("GET /jobs/{id}/metrics", s.proxy("/metrics"))
 	mux.HandleFunc("GET /jobs/{id}/describe", s.proxy("/describe"))
-	return mux
+	return s.auth(mux)
+}
+
+// auth wraps h with shared-bearer-token enforcement. With no token
+// configured it is a pass-through (open API). Otherwise every request must
+// carry Authorization: Bearer <token>, except the two public routes: the
+// health check and the HTML shell (which must load so the browser can
+// prompt for a token).
+func (s *Server) auth(h http.Handler) http.Handler {
+	if s.token == "" {
+		return h
+	}
+	want := []byte("Bearer " + s.token)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if publicRoute(r) {
+			h.ServeHTTP(w, r)
+			return
+		}
+		got := []byte(r.Header.Get("Authorization"))
+		if subtle.ConstantTimeCompare(got, want) != 1 {
+			writeErr(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		h.ServeHTTP(w, r)
+	})
+}
+
+// publicRoute reports whether r may bypass auth: the HTML shell at "/" and
+// the health check, both GET-only.
+func publicRoute(r *http.Request) bool {
+	return r.Method == http.MethodGet && (r.URL.Path == "/" || r.URL.Path == "/healthz")
+}
+
+// authCheck returns 200 once a request reaches it — the auth middleware has
+// already validated (or the API is open). It lets the UI verify a token
+// before storing it, without listing jobs.
+func (s *Server) authCheck(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 // submitRequest is the JSON envelope for POST /jobs. A raw (non-JSON)

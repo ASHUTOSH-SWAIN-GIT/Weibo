@@ -113,17 +113,65 @@
 const esc=(s)=>String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const g=(o,...k)=>{for(const x of k){if(o&&o[x]!=null)return o[x]}return undefined};
 
+/* auth: a single shared bearer token kept in localStorage. When the API is
+   open (no token configured server-side), the first /jobs returns 200 and no
+   prompt ever appears — UX identical to the no-auth build. */
+const TOKEN_KEY='mailer_token';
+const getToken=()=>localStorage.getItem(TOKEN_KEY)||'';
+const setToken=(t)=>{t?localStorage.setItem(TOKEN_KEY,t):localStorage.removeItem(TOKEN_KEY)};
+
+// authFetch injects the bearer header and reacts to a 401 by clearing the
+// stored token and rendering the token gate. On 401 it returns a promise
+// that never resolves, so callers do not overwrite the gate with their own
+// error UI (polling is already stopped by promptToken).
+function authFetch(url,opts){
+  opts=opts||{};
+  const t=getToken();
+  const headers=Object.assign({},opts.headers||{});
+  if(t)headers['Authorization']='Bearer '+t;
+  return fetch(url,Object.assign({},opts,{headers})).then(r=>{
+    if(r.status===401){setToken('');promptToken();return new Promise(()=>{})}
+    return r;
+  });
+}
+
 const api={
-  jobs:()=>fetch('/jobs').then(r=>r.json()),
-  job:(id)=>fetch('/jobs/'+id).then(r=>r.json()),
-  state:(id)=>fetch('/jobs/'+id+'/state').then(r=>r.ok?r.json():null).catch(()=>null),
-  describe:(id)=>fetch('/jobs/'+id+'/describe').then(r=>r.ok?r.json():null).catch(()=>null),
-  logs:(id)=>fetch('/jobs/'+id+'/logs?tail=200').then(r=>r.text()).catch(()=>''),
-  metrics:(id)=>fetch('/jobs/'+id+'/metrics').then(r=>r.ok?r.text():null).catch(()=>null),
-  validate:(b)=>fetch('/validate',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(b)}),
-  submit:(b)=>fetch('/jobs',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(b)}),
-  act:(id,a,b)=>fetch('/jobs/'+id+'/'+a,{method:'POST',headers:b?{'content-type':'application/json'}:{},body:b?JSON.stringify(b):null}),
+  jobs:()=>authFetch('/jobs').then(r=>r.json()),
+  job:(id)=>authFetch('/jobs/'+id).then(r=>r.json()),
+  state:(id)=>authFetch('/jobs/'+id+'/state').then(r=>r.ok?r.json():null).catch(()=>null),
+  describe:(id)=>authFetch('/jobs/'+id+'/describe').then(r=>r.ok?r.json():null).catch(()=>null),
+  logs:(id)=>authFetch('/jobs/'+id+'/logs?tail=200').then(r=>r.text()).catch(()=>''),
+  metrics:(id)=>authFetch('/jobs/'+id+'/metrics').then(r=>r.ok?r.text():null).catch(()=>null),
+  validate:(b)=>authFetch('/validate',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(b)}),
+  submit:(b)=>authFetch('/jobs',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(b)}),
+  act:(id,a,b)=>authFetch('/jobs/'+id+'/'+a,{method:'POST',headers:b?{'content-type':'application/json'}:{},body:b?JSON.stringify(b):null}),
 };
+
+// promptToken renders an inline token-entry gate into #app. saveToken
+// verifies against POST /auth before storing, then replays the current view.
+function promptToken(){
+  stopPoll();
+  document.getElementById('count').textContent='';
+  app.innerHTML=`<div class="card" style="max-width:400px;margin:48px auto">
+    <div class="hd">Access token required</div>
+    <div class="sub" style="margin:8px 0 14px">This controller is protected. Enter its access token to continue.</div>
+    <input id="tok" type="password" placeholder="Bearer token" autocomplete="off"
+      style="width:100%;box-sizing:border-box;padding:10px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--fg);font:inherit"
+      onkeydown="if(event.key==='Enter')saveToken()"/>
+    <div class="btns" style="margin-top:12px"><button class="btn pri" onclick="saveToken()">Save &amp; continue</button></div>
+    <div id="tokerr" class="err" style="display:none;margin-top:10px"></div>
+  </div>`;
+  const i=document.getElementById('tok');if(i)i.focus();
+}
+async function saveToken(){
+  const t=document.getElementById('tok').value.trim();
+  if(!t)return;
+  let ok=false;
+  try{ok=(await fetch('/auth',{method:'POST',headers:{'Authorization':'Bearer '+t}})).ok}catch(e){}
+  if(!ok){const e=document.getElementById('tokerr');e.style.display='block';e.textContent='Invalid token.';return}
+  setToken(t);
+  route();
+}
 
 const app=document.getElementById('app');
 let timer=null;

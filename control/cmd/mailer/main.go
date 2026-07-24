@@ -90,6 +90,7 @@ func runDashboard(args []string) int {
 	pullSecrets := fs.String("image-pull-secrets", "", "comma-separated k8s imagePullSecret names for private registries (kubernetes backend)")
 	pvcSize := fs.String("pvc-size", "1Gi", "per-job PVC size (kubernetes backend)")
 	storageClass := fs.String("storage-class", "", "PVC storage class; empty = cluster default (kubernetes backend)")
+	authToken := fs.String("auth-token", os.Getenv("MAILER_AUTH_TOKEN"), "shared bearer token required by the API + UI; empty = open (env MAILER_AUTH_TOKEN)")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -114,7 +115,7 @@ func runDashboard(args []string) int {
 	ctrl := control.New(control.Options{Store: st, Backend: be, Image: *image, Logf: log.Printf})
 	go ctrl.RunReconciler(ctx, *interval)
 
-	srv := &http.Server{Addr: *addr, Handler: api.NewServer(ctrl).Handler()}
+	srv := &http.Server{Addr: *addr, Handler: api.NewServer(ctrl, *authToken).Handler()}
 	go func() {
 		<-ctx.Done()
 		shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -127,6 +128,9 @@ func runDashboard(args []string) int {
 		go openWhenReady(ctx, url)
 	}
 	log.Printf("mailer dashboard: %s  (image=%s, db=%s)", url, *image, *dbPath)
+	if *authToken != "" {
+		log.Print("mailer dashboard: API auth ENABLED — clients need -token / MAILER_TOKEN")
+	}
 
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		fmt.Fprintf(os.Stderr, "mailer: serve: %v\n", err)
