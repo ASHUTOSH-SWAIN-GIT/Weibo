@@ -381,6 +381,9 @@ func (c *Controller) launch(ctx context.Context, job *store.Job, attempt int, re
 		Env:              c.launchEnv(job.ID),
 		ControlPort:      c.port,
 		RestoreSavepoint: restore,
+		// Pull registry-hosted SDK images when absent; the local runner
+		// image used by YAML jobs is present, so it is never pulled.
+		PullPolicy: backend.PullIfNotPresent,
 	})
 	if err != nil {
 		run.Phase = string(lifecycle.Failed)

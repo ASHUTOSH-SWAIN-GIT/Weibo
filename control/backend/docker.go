@@ -5,17 +5,29 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
+	"log"
 	"strconv"
 	"time"
 
+	"github.com/distribution/reference"
+	"github.com/docker/cli/cli/config"
+	"github.com/docker/cli/cli/config/configfile"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/image"
+	"github.com/docker/docker/api/types/registry"
 	"github.com/docker/docker/api/types/volume"
 	"github.com/docker/docker/client"
 	"github.com/docker/docker/pkg/stdcopy"
 	"github.com/docker/go-connections/nat"
 )
+
+// dockerConfigDir, when non-empty, overrides the directory registry
+// credentials are read from. Empty uses Docker's default (~/.docker or
+// $DOCKER_CONFIG). Set only in tests — docker/cli caches the default config
+// dir on first use, which would otherwise make credential tests order-dependent.
+var dockerConfigDir string
 
 // Docker runs each job as a local Docker container using the runner image.
 // The workflow document is copied into the container before start (so it
@@ -55,6 +67,80 @@ func (d *Docker) HasImage(ctx context.Context, ref string) (bool, error) {
 	return len(list) > 0, nil
 }
 
+// pullImage pulls ref according to policy, resolving registry credentials from
+// the host's Docker config. It is a no-op for PullNever, and for
+// PullIfNotPresent when the image is already present locally.
+func (d *Docker) pullImage(ctx context.Context, ref, policy string) error {
+	if policy == "" {
+		policy = PullIfNotPresent
+	}
+	if policy == PullNever {
+		return nil
+	}
+	if policy == PullIfNotPresent {
+		if ok, err := d.HasImage(ctx, ref); err == nil && ok {
+			return nil // already local; skip the pull
+		}
+	}
+	rc, err := d.cli.ImagePull(ctx, ref, image.PullOptions{RegistryAuth: d.resolveRegistryAuth(ref)})
+	if err != nil {
+		return err
+	}
+	defer rc.Close()
+	// Draining the stream to EOF is what makes the pull actually complete.
+	_, err = io.Copy(io.Discard, rc)
+	return err
+}
+
+// resolveRegistryAuth returns the base64 X-Registry-Auth string for pulling
+// ref, resolved from the host's Docker credentials — ~/.docker/config.json
+// and any configured credential helper (e.g. docker-credential-ecr-login fed
+// by node IAM). It honors a host that has run `docker login`. The docker Go
+// SDK's ImagePull does NOT read the Docker config itself, so we resolve it
+// here. Returns "" when no credentials are configured for the image's
+// registry, so public images still pull anonymously; credential-resolution
+// errors are non-fatal and degrade to an anonymous pull.
+func (d *Docker) resolveRegistryAuth(ref string) string {
+	named, err := reference.ParseNormalizedNamed(ref)
+	if err != nil {
+		return ""
+	}
+	// Docker Hub credentials are stored under the legacy index URL key.
+	key := reference.Domain(named)
+	if key == "docker.io" {
+		key = "https://index.docker.io/v1/"
+	}
+
+	var cfg *configfile.ConfigFile
+	if dockerConfigDir != "" { // test override; empty uses the default location
+		if cfg, err = config.Load(dockerConfigDir); err != nil {
+			return ""
+		}
+	} else {
+		cfg = config.LoadDefaultConfigFile(io.Discard)
+	}
+	authCfg, err := cfg.GetAuthConfig(key)
+	if err != nil {
+		return ""
+	}
+	if authCfg.Username == "" && authCfg.Password == "" &&
+		authCfg.IdentityToken == "" && authCfg.RegistryToken == "" {
+		return "" // no credentials for this registry
+	}
+	encoded, err := registry.EncodeAuthConfig(registry.AuthConfig{
+		Username:      authCfg.Username,
+		Password:      authCfg.Password,
+		Auth:          authCfg.Auth,
+		ServerAddress: authCfg.ServerAddress,
+		IdentityToken: authCfg.IdentityToken,
+		RegistryToken: authCfg.RegistryToken,
+	})
+	if err != nil {
+		return ""
+	}
+	return encoded
+}
+
 const (
 	containerWorkflowPath = "/wf/workflow.yaml"
 	containerDataDir      = "/data"
@@ -75,6 +161,17 @@ func (d *Docker) Launch(ctx context.Context, spec LaunchSpec) (string, error) {
 		port = 8080
 	}
 	portSpec := nat.Port(strconv.Itoa(port) + "/tcp")
+
+	// Pull the image (per policy) so registry-hosted images work without a
+	// manual `docker pull`. Fall back to a locally-present image so an
+	// air-gapped or locally-built image still launches.
+	if err := d.pullImage(ctx, image, spec.PullPolicy); err != nil {
+		if ok, herr := d.HasImage(ctx, image); herr == nil && ok {
+			log.Printf("docker: pull %s failed (%v); using local image", image, err)
+		} else {
+			return "", fmt.Errorf("docker: pull image %s: %w", image, err)
+		}
+	}
 
 	// Reuse a per-job named volume so restarts recover from checkpoints,
 	// plus the shared savepoints volume visible to every job.

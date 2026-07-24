@@ -409,7 +409,16 @@ func (s *TxnKafkaSink) WasCommitted(ctx context.Context, id string) (bool, error
 	// per-poll timeout tolerates a slow first fetch, so this never concludes
 	// "not committed" prematurely (which would replay a committed transaction
 	// and duplicate output).
-	found := false
+	// Finding the marker is definitive: return true immediately (common
+	// committed case, terminates fast). Concluding ABSENT is the dangerous
+	// direction — a false negative replays a committed transaction and
+	// duplicates output — so we only conclude false after two CONSECUTIVE
+	// empty polls, tolerating a transient slow first fetch. This assumes the
+	// single-pipeline invariant the docs require: the marker topic is
+	// per-pipeline (unique transactional id), so no other producer's open
+	// transaction holds the read-committed LSO below our marker. The outer
+	// recovery context still bounds the whole probe.
+	emptyPolls := 0
 	for {
 		pollCtx, cancel := context.WithTimeout(ctx, markerProbePollTimeout)
 		fetches := cl.PollFetches(pollCtx)
@@ -427,17 +436,25 @@ func (s *TxnKafkaSink) WasCommitted(ctx context.Context, id string) (bool, error
 			}
 		}
 		advanced := false
+		found := false
 		fetches.EachRecord(func(rec *kgo.Record) {
 			advanced = true
 			if string(rec.Key) == s.cfg.txnID && string(rec.Value) == id {
 				found = true
 			}
 		})
-		if !advanced {
-			break // visible log fully consumed (static topic during recovery)
+		if found {
+			return true, nil // committed marker observed — definitive
+		}
+		if advanced {
+			emptyPolls = 0
+			continue
+		}
+		emptyPolls++
+		if emptyPolls >= 2 {
+			return false, nil // visible log drained twice with no marker
 		}
 	}
-	return found, nil
 }
 
 // Describe returns dashboard metadata.

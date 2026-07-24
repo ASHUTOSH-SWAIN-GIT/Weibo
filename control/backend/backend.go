@@ -43,7 +43,22 @@ type LaunchSpec struct {
 	// RestoreSavepoint, if set, names a savepoint the runner seeds from
 	// before starting (RESTORE_SAVEPOINT). Empty means a fresh start.
 	RestoreSavepoint string
+
+	// PullPolicy controls whether the backend pulls Image before launch:
+	// PullAlways, PullNever, or PullIfNotPresent (the default when empty).
+	PullPolicy string
 }
+
+// Pull policies for LaunchSpec.PullPolicy.
+const (
+	// PullIfNotPresent pulls only when the image is absent locally. Default.
+	// Local-only images (e.g. a dev-built runner tag) are never pulled.
+	PullIfNotPresent = "ifnotpresent"
+	// PullAlways always attempts a pull before launch.
+	PullAlways = "always"
+	// PullNever never pulls; the image must already be present.
+	PullNever = "never"
+)
 
 // Status is a point-in-time container status.
 type Status struct {

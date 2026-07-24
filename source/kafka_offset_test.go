@@ -61,4 +61,23 @@ func TestCheckpointOffset_RoundTripsThroughRestore(t *testing.T) {
 	if k2.restoredOffsets[3] != 100 {
 		t.Errorf("restored offset partition 3: got %d, want 100", k2.restoredOffsets[3])
 	}
+
+	// A partition that receives no new message this run must still appear in
+	// the next checkpoint at its restored position (only partition 5 gets a
+	// new message; partition 3 stays quiet but must be retained).
+	k2.trackOffset(kafka.Message{Partition: 5, Offset: 7})
+	data2, err := k2.CheckpointOffset()
+	if err != nil {
+		t.Fatalf("CheckpointOffset: %v", err)
+	}
+	var got map[string]int64
+	if err := json.Unmarshal(data2, &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got["3"] != 100 {
+		t.Errorf("quiet restored partition 3 dropped from checkpoint: got %v", got)
+	}
+	if got["5"] != 8 {
+		t.Errorf("partition 5: got %d, want 8", got["5"])
+	}
 }

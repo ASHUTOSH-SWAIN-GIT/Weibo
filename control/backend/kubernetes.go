@@ -28,11 +28,12 @@ import (
 // ConfigMap (the workflow), an optional Secret (env), and a ClusterIP
 // Service so the controller can reach the agent's control surface.
 type Kubernetes struct {
-	cs           kubernetes.Interface
-	namespace    string
-	image        string
-	pvcSize      string
-	storageClass string
+	cs               kubernetes.Interface
+	namespace        string
+	image            string
+	pvcSize          string
+	storageClass     string
+	imagePullSecrets []string
 }
 
 // KubernetesOptions configures the backend.
@@ -42,6 +43,10 @@ type KubernetesOptions struct {
 	Image        string // runner image (must be pullable by the cluster)
 	PVCSize      string // per-job volume size, default "1Gi"
 	StorageClass string // optional; empty → cluster default
+	// ImagePullSecrets names pre-created dockerconfigjson Secrets in the
+	// namespace, referenced on every job pod so the cluster can pull from
+	// private registries. Mailer references them; it does not create them.
+	ImagePullSecrets []string
 }
 
 // NewKubernetes connects using in-cluster config (when running in a Pod)
@@ -61,11 +66,12 @@ func NewKubernetes(opts KubernetesOptions) (*Kubernetes, error) {
 // newK8s builds the backend from an injected client (used by tests).
 func newK8s(cs kubernetes.Interface, opts KubernetesOptions) *Kubernetes {
 	k := &Kubernetes{
-		cs:           cs,
-		namespace:    orString(opts.Namespace, "default"),
-		image:        opts.Image,
-		pvcSize:      orString(opts.PVCSize, "1Gi"),
-		storageClass: opts.StorageClass,
+		cs:               cs,
+		namespace:        orString(opts.Namespace, "default"),
+		image:            opts.Image,
+		pvcSize:          orString(opts.PVCSize, "1Gi"),
+		storageClass:     opts.StorageClass,
+		imagePullSecrets: opts.ImagePullSecrets,
 	}
 	return k
 }
@@ -142,7 +148,7 @@ func (k *Kubernetes) Launch(ctx context.Context, spec LaunchSpec) (string, error
 		secretName = run
 	}
 
-	job := k.buildJob(run, jobID, pvc, cmName, secretName, image, port, spec.RestoreSavepoint)
+	job := k.buildJob(run, jobID, pvc, cmName, secretName, image, port, spec.RestoreSavepoint, spec.PullPolicy)
 	if _, err := k.cs.BatchV1().Jobs(k.namespace).Create(ctx, job, metav1.CreateOptions{}); err != nil {
 		k.cleanup(ctx, run)
 		return "", fmt.Errorf("k8s: create job: %w", err)
@@ -156,7 +162,7 @@ func (k *Kubernetes) Launch(ctx context.Context, spec LaunchSpec) (string, error
 	return run, nil
 }
 
-func (k *Kubernetes) buildJob(run, jobID, pvc, cmName, secretName, image string, port int, restore string) *batchv1.Job {
+func (k *Kubernetes) buildJob(run, jobID, pvc, cmName, secretName, image string, port int, restore, pullPolicy string) *batchv1.Job {
 	env := []corev1.EnvVar{
 		{Name: "DATA_DIR", Value: k8sDataDir},
 		{Name: "SAVEPOINT_DIR", Value: k8sSavepointDir},
@@ -194,6 +200,11 @@ func (k *Kubernetes) buildJob(run, jobID, pvc, cmName, secretName, image string,
 		}})
 	}
 
+	var pullSecrets []corev1.LocalObjectReference
+	for _, name := range k.imagePullSecrets {
+		pullSecrets = append(pullSecrets, corev1.LocalObjectReference{Name: name})
+	}
+
 	return &batchv1.Job{
 		ObjectMeta: k.meta(run, jobID, run),
 		Spec: batchv1.JobSpec{
@@ -203,6 +214,7 @@ func (k *Kubernetes) buildJob(run, jobID, pvc, cmName, secretName, image string,
 				Spec: corev1.PodSpec{
 					RestartPolicy:                 corev1.RestartPolicyNever,
 					TerminationGracePeriodSeconds: int64Ptr(45), // room to drain + final checkpoint
+					ImagePullSecrets:              pullSecrets,
 					SecurityContext: &corev1.PodSecurityContext{
 						RunAsNonRoot: boolPtr(true),
 						RunAsUser:    int64Ptr(nonRootUID),
@@ -212,14 +224,15 @@ func (k *Kubernetes) buildJob(run, jobID, pvc, cmName, secretName, image string,
 						FSGroup: int64Ptr(nonRootUID),
 					},
 					Containers: []corev1.Container{{
-						Name:           "runner",
-						Image:          image,
-						Env:            env,
-						EnvFrom:        envFrom,
-						Ports:          []corev1.ContainerPort{{ContainerPort: int32(port)}},
-						VolumeMounts:   mounts,
-						LivenessProbe:  probe,
-						ReadinessProbe: probe,
+						Name:            "runner",
+						Image:           image,
+						ImagePullPolicy: k8sPullPolicy(pullPolicy),
+						Env:             env,
+						EnvFrom:         envFrom,
+						Ports:           []corev1.ContainerPort{{ContainerPort: int32(port)}},
+						VolumeMounts:    mounts,
+						LivenessProbe:   probe,
+						ReadinessProbe:  probe,
 					}},
 					Volumes: volumes,
 				},
@@ -379,6 +392,22 @@ func orString(v, def string) string {
 func int32Ptr(v int32) *int32 { return &v }
 func int64Ptr(v int64) *int64 { return &v }
 func boolPtr(v bool) *bool    { return &v }
+
+// k8sPullPolicy maps a LaunchSpec.PullPolicy to a Kubernetes pull policy.
+// Empty (or unknown) → "" so the cluster applies its own default (Always for
+// :latest / untagged, IfNotPresent otherwise).
+func k8sPullPolicy(policy string) corev1.PullPolicy {
+	switch policy {
+	case PullAlways:
+		return corev1.PullAlways
+	case PullNever:
+		return corev1.PullNever
+	case PullIfNotPresent:
+		return corev1.PullIfNotPresent
+	default:
+		return ""
+	}
+}
 
 // compile-time check.
 var _ ContainerBackend = (*Kubernetes)(nil)

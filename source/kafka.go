@@ -430,11 +430,21 @@ func (k *KafkaSource) RestoreOffset(data []byte) error {
 	if k.restoredOffsets == nil {
 		k.restoredOffsets = make(map[int]int64)
 	}
+	k.offsetMu.Lock()
+	if k.consumedOffsets == nil {
+		k.consumedOffsets = make(map[int]int64)
+	}
 	for partStr, off := range offsets {
 		var partInt int
 		fmt.Sscanf(partStr, "%d", &partInt)
 		k.restoredOffsets[partInt] = off
+		// Seed consumedOffsets so a partition that receives no new message
+		// this run still carries its restored position into the next
+		// checkpoint — otherwise a quiet partition would be dropped and a
+		// later restart would not resume it.
+		k.consumedOffsets[partInt] = off
 	}
+	k.offsetMu.Unlock()
 	return nil
 }
 

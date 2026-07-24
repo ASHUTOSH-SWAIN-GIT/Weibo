@@ -871,10 +871,17 @@ func (env *StreamExecutionEnv) restoreWorkersFromCheckpoint(data *checkpoint.Che
 // under the given owner key, using native (Pebble hard-link) restore when
 // available and falling back to inline snapshot bytes otherwise.
 func (env *StreamExecutionEnv) restoreOperatorState(data *checkpoint.CheckpointData, key string, op operator.Operator) {
-	// Native checkpoint restore (Pebble hard-links).
+	// Native checkpoint restore (Pebble hard-links). Any operator that
+	// exposes a checkpointable backend uses this path — not only Reduce.
+	// A Pebble-backed Window/WindowReduce snapshots natively (a state_ref
+	// in StateDirs), so restricting native restore to *ReduceOperator would
+	// drop it to the inline path, find no inline bytes, and lose its
+	// buffered windows and watermark.
 	if stateDir, ok := data.StateDirs[key]; ok {
-		if rop, ok := op.(*operator.ReduceOperator); ok {
-			if cp, ok := rop.Backend().(state.Checkpointable); ok {
+		if b, ok := op.(interface {
+			Backend() state.StateBackend
+		}); ok {
+			if cp, ok := b.Backend().(state.Checkpointable); ok {
 				absPath := filepath.Join(env.checkpointStorage.StateDir(data.ID), stateDir)
 				if err := cp.RestoreFrom(absPath); err != nil {
 					fmt.Printf("mailer: restore %s from native state failed: %v\n", key, err)

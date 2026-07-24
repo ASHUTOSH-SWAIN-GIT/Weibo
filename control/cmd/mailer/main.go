@@ -18,6 +18,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"runtime"
+	"strings"
 	"syscall"
 	"time"
 
@@ -64,6 +65,7 @@ func runDashboard(args []string) int {
 	backendKind := fs.String("backend", "docker", "container backend: docker | kubernetes")
 	namespace := fs.String("namespace", "default", "kubernetes namespace (kubernetes backend)")
 	kubeconfig := fs.String("kubeconfig", "", "kubeconfig path (kubernetes backend; empty = default)")
+	pullSecrets := fs.String("image-pull-secrets", "", "comma-separated k8s imagePullSecret names for private registries (kubernetes backend)")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -73,7 +75,7 @@ func runDashboard(args []string) int {
 
 	// Build and preflight the selected backend — a clear message beats a
 	// launch-time failure later.
-	be, rc := makeBackend(ctx, *backendKind, *image, *namespace, *kubeconfig)
+	be, rc := makeBackend(ctx, *backendKind, *image, *namespace, *kubeconfig, splitCSV(*pullSecrets))
 	if be == nil {
 		return rc
 	}
@@ -112,7 +114,7 @@ func runDashboard(args []string) int {
 
 // makeBackend constructs and preflights the chosen container backend. On
 // failure it prints a hint and returns (nil, exitCode).
-func makeBackend(ctx context.Context, kind, image, namespace, kubeconfig string) (backend.ContainerBackend, int) {
+func makeBackend(ctx context.Context, kind, image, namespace, kubeconfig string, pullSecrets []string) (backend.ContainerBackend, int) {
 	switch kind {
 	case "docker":
 		d, err := backend.NewDocker(image)
@@ -133,6 +135,7 @@ func makeBackend(ctx context.Context, kind, image, namespace, kubeconfig string)
 	case "kubernetes", "k8s":
 		kb, err := backend.NewKubernetes(backend.KubernetesOptions{
 			Kubeconfig: kubeconfig, Namespace: namespace, Image: image,
+			ImagePullSecrets: pullSecrets,
 		})
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "mailer: kubernetes: %v\n", err)
@@ -148,6 +151,18 @@ func makeBackend(ctx context.Context, kind, image, namespace, kubeconfig string)
 		fmt.Fprintf(os.Stderr, "mailer: unknown backend %q (want docker or kubernetes)\n", kind)
 		return nil, 2
 	}
+}
+
+// splitCSV parses a comma-separated flag value into a trimmed, non-empty
+// slice (nil when empty).
+func splitCSV(s string) []string {
+	var out []string
+	for _, part := range strings.Split(s, ",") {
+		if p := strings.TrimSpace(part); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // browserURL turns a listen address (":9000", "0.0.0.0:9000") into a URL

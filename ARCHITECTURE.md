@@ -8,142 +8,246 @@ Unlike Flink, it is **not a cluster runtime**. The engine is a single-process,
 multi-goroutine library you import. A separate **control plane** (its own Go
 module) then runs *many* such jobs, one container each, on Docker or Kubernetes.
 
+This document is organized as a set of **views**, each meant to map onto one
+diagram:
+
+1. [Component view](#view-1--components-3-tiers) — the three tiers, static.
+2. [Runtime dataflow](#view-2--runtime-dataflow-inside-one-job) — goroutines,
+   channels, and the marker stream inside one running job.
+3. [Stage internals](#view-3--stage-internals) — how a keyed / parallel stage
+   fans out and re-aligns.
+4. [Marker flow & checkpoint protocol](#view-4--marker-flow--the-checkpoint-barrier)
+   — how a barrier snapshots a consistent cut.
+5. [Exactly-once two-phase commit](#view-5--exactly-once-two-phase-commit-sequence)
+   — the coordinator sequence.
+6. [State & checkpoint storage](#view-6--state--checkpoint-storage-layout).
+7. [Control plane](#view-7--control-plane-components--sequences) — components +
+   submit / reconcile / proxy sequences.
+8. [Recovery](#view-8--recovery-decision) — the restart decision table.
+
 ---
 
-## The three tiers
+## View 1 — Components (3 tiers)
 
-Mailer is layered. Read it top-to-bottom — each tier only depends on the ones
-below it.
+Layered; each tier depends only on the ones below it.
 
 ```
-┌──────────────────────────────────────────────────────────────┐
-│  CONTROL PLANE  (control/ — separate Go module)              │
-│  submit → launch 1 container/job → reconcile to desired state│
-│  SQLite store · Docker/Kubernetes backends · REST API · UI   │
-└───────────────┬──────────────────────────────────────────────┘
-                │ launches containers running…
-┌───────────────▼──────────────────────────────────────────────┐
-│  JOB HARNESS  (sdk/, jobagent/, cmd/, workflow/runner)       │
-│  supervise ONE job in-process, expose control HTTP surface   │
-│  (/state /metrics /cancel /savepoint), graceful drain        │
-└───────────────┬──────────────────────────────────────────────┘
-                │ supervises…
-┌───────────────▼──────────────────────────────────────────────┐
-│  CORE ENGINE  (mailer.go, pipeline/, operator/, state/, …)   │
-│  Source → operator stages → Sink                             │
-│  stage-based execution · keyed parallelism · checkpointing   │
-└──────────────────────────────────────────────────────────────┘
+┌───────────────────────────────────────────────────────────────────────┐
+│  TIER 3 · CONTROL PLANE            control/  (separate Go module)      │
+│                                                                       │
+│   cmd/mailer ──> Controller ──> ContainerBackend {Docker | K8s | fake}│
+│      (CLI)          │  ▲              │ launches                       │
+│                 api/│  │store/        ▼                                │
+│              REST + UI  SQLite    one container per job                │
+│                     └── reconcile loop (desired ⇄ actual)             │
+└───────────────────────────┬───────────────────────────────────────────┘
+                            │ starts container image, env-configured
+┌───────────────────────────▼───────────────────────────────────────────┐
+│  TIER 2 · JOB HARNESS     sdk/ · jobagent/ · workflow/ · cmd/          │
+│                                                                       │
+│   cmd/mailer-runner (YAML)  ─┐                                         │
+│   any main(){sdk.Run(Build)} ─┼─> sdk.Serve ──> jobagent.Agent        │
+│   (Go SDK job)                │                    │  supervises 1 env │
+│                               │        HTTP control surface (:PORT):   │
+│                               │        /healthz /state /describe       │
+│                               │        /metrics /cancel /savepoint     │
+│   workflow/{parse,validate,compiler} builds the env for the YAML path  │
+└───────────────────────────┬───────────────────────────────────────────┘
+                            │ StreamExecutionEnv (source+ops+sink wired)
+┌───────────────────────────▼───────────────────────────────────────────┐
+│  TIER 1 · CORE ENGINE     mailer.go · pipeline/ · operator/ · state/ … │
+│                                                                       │
+│   Source ─> [stage] ─edge─> [stage] ─edge─> … ─> Sink                 │
+│   planner · edges (backpressure) · keyed parallelism · watermarks      │
+│   checkpoint coordinator · state backends (memory | Pebble)            │
+└───────────────────────────────────────────────────────────────────────┘
 ```
 
 - **Why the split?** The core engine stays dependency-light — `go get mailer`
-  never pulls the Docker/Kubernetes/SQLite clients, which live only in the
-  `control/` module.
-- **One job = one container = one OS process.** There is no cross-node
-  coordination inside a job; scale-out is "run more jobs" (Kafka partitions
-  distribute the work across consumer-group members).
+  never pulls Docker/Kubernetes/SQLite clients; those live only in `control/`.
+- **One job = one container = one OS process.** No cross-node coordination inside
+  a job. Scale-out = run more jobs (Kafka partitions distribute across the
+  consumer group).
 
 ---
 
-## Tier 1 — Core Engine
+## View 2 — Runtime dataflow inside one job
 
-The dataflow engine. Entry point is `StreamExecutionEnv` (`mailer.go`), built
-with a lazy fluent API (`stream.go`) and run with `Execute()`.
-
-```go
-env := mailer.NewEnv()
-env.FromSource(kafkaSource).
-    Map(parse).Filter(valid).
-    KeyBy(customerKey).WithPartitions(8).
-    Window(window.NewTumbling(5 * time.Minute)).
-    Reduce(sumAmount).
-    ToSink(kafkaSink)
-env.Execute(ctx)
-```
-
-### Record — the unit of data (`types/record.go`)
-
-Every item carries `Key`, `Value` (`[]byte`), `Timestamp`, `Offset`, `Partition`,
-`Headers`. The same `Record` channel also carries **watermarks** and **checkpoint
-barriers** in-band — control signals flow with the data, which is what makes
-consistent snapshots possible.
-
-### Sources & Sinks (`source/`, `sink/`)
-
-- **Sources:** `KafkaSource` (multi-partition, consumer groups, SASL/TLS,
-  deserializers, watermark generation), plus `SliceSource`/`GeneratorSource` for
-  tests.
-- **Sinks:** `KafkaSink` (at-least-once), `TxnKafkaSink` (transactional, for
-  exactly-once), `PostgresSink` (batch upserts), `StdoutSink`, `BlackholeSink`.
-- Both are small interfaces; `auth/` holds the SASL/TLS config shared by the
-  Kafka connectors.
-
-### Operators (`operator/`)
-
-> ⚠️ `operator/` is the **dataflow operator library**, *not* the Kubernetes
-> operator. The k8s integration lives in `control/backend/`.
-
-`Operator` is the transform interface. Concrete ops: `Map` (1:1), `FlatMap`
-(1:N), `Filter`, `Process` (error-aware with drop/DLQ/fail policy), `KeyBy`
-(hash-partition by key), `Reduce` (per-key accumulator), `Window` (buffers into
-time windows in the state backend, fires on watermark, drops late records).
-
-Operators advertise *optional capability interfaces* the engine detects at plan
-time — e.g. `SingleProcessor` (chain without channels), `Cloneable` (per-key
-state isolation), `StateConfigurable` (receive a state backend),
-`BarrierSnapshotter` (race-free snapshot as a barrier passes), `NativeSnapshotter`
-(hard-link checkpoints).
-
-### Execution model — stages & edges (`pipeline/`)
-
-`Execute()` runs a **planner** (`planner.go`) that groups the operator chain into
-**stages**:
+When `env.Execute(ctx)` runs, the **planner** (`pipeline/planner.go`) groups the
+operator chain into an ordered list of **stages**, wires **bounded edges**
+between them, and starts **one goroutine per stage**. This is the diagram to draw
+for "how a running pipeline actually looks."
 
 ```
-[Source] →edge→ [Map→Filter] →edge→ [KeyBy: Window→Reduce ×N workers] →edge→ [Sink]
+                     ctx (graceful)          hardCtx (force-unwind on fatal error)
+                         │                          │
+  ┌───────────────┐  edge-0   ┌──────────────┐  (internal ch)   ┌───────────────┐
+  │ SourceStage   │─────────▶ │ injectBarriers│───────────────▶ │ Stage 1       │
+  │ goroutine     │  Records  │  goroutine    │  Records+Barrier │ stateless/keyed│
+  │               │  + Water- │               │  + Watermarks    │ goroutine(s)  │
+  │ source.Run()  │  marks    │ • per-partition│                 └──────┬────────┘
+  │ (WatermarkSrc │           │   offset track │                        │ edge-1
+  │  wraps Kafka) │           │ • barrier on    │                        ▼
+  └───────────────┘           │   ticker        │                 ┌───────────────┐
+        ▲                     └──────┬──────────┘                 │ Stage 2 …     │
+        │ FetchMessage               │ registerAlignedOffsets     └──────┬────────┘
+   Kafka broker                      ▼ (id → {partition:offset})         │ edge-(n-2)
+                          ┌────────────────────┐                         ▼
+                          │ Coordinator (E1)   │◀── OnStateSnapshot ┌───────────────┐
+                          │ finalize goroutine │◀── OnSinkPrepared  │ SinkStage     │
+                          └────────────────────┘   (barrierDetect)  │ goroutine     │
+                                                                    │ sink.Write()  │
+                                                                    └──────┬────────┘
+                                                                           ▼
+                                                                     Kafka / Postgres
 ```
 
-- **Inside a stage:** operators run as direct function calls — no channels, no
-  goroutine hops. Consecutive stateless ops (Map/Filter/FlatMap/Process) with the
-  same parallelism fuse into one stage.
-- **`KeyBy` starts a keyed stage:** a router hash-dispatches records to N stateful
-  workers (same key → same worker), each with cloned operators and isolated state.
-- **Edges** (`edge.go`) are the only channels — bounded, default capacity 1024,
-  *between* stages.
-- **Backpressure is free:** a send to a full edge blocks. A slow sink fills its
-  input edge → blocks the stage before it → … → the source stops fetching from
-  Kafka. Bounded memory, zero drops, no tuning.
-- **Barriers & watermarks** (`markers.go`) are broadcast to every worker of a
-  parallel stage and re-aligned at the stage exit, so snapshots stay consistent
-  at any parallelism.
-- **Shutdown is two-phase:** cancel the context → source stops → downstream drains
-  via cascading channel closes (a final barrier rides the drain so state is saved)
-  → only a drain past `WithShutdownTimeout` is force-aborted.
+Key facts for the diagram:
 
-### State (`state/`)
+- **Nodes = goroutines.** Each stage is its own goroutine (`stage.Run(runCtx,
+  hardCtx, in, out)`). `injectBarriers` and the coordinator's `finalize` are
+  their own goroutines too. A keyed/parallel stage internally spawns *more*
+  goroutines (View 3).
+- **Edges = the only channels between stages** (`pipeline/edge.go`), bounded
+  (default capacity 1024, `WithBufferSize`). `edge-i` connects stage `i` → stage
+  `i+1`. A send to a full edge blocks → **backpressure** propagates upstream to
+  the source, which stops calling `FetchMessage`. Zero drops, bounded memory.
+- **Inside a single stage, operators are direct function calls** — no channels.
+  Consecutive stateless ops (Map/Filter/FlatMap/Process) at the same parallelism
+  fuse into one `StatelessStage`.
+- **Two contexts:** `runCtx` = graceful stop (source stops, everything drains);
+  `hardCtx` = force-unwind, cancelled on any fatal stage/coordinator error or
+  when the `WithShutdownTimeout` drain deadline passes.
+- **`injectBarriers` sits between the source and stage 1** (`mailer.go`). It reads
+  the source's output, tracks `offsets[partition] = record.Offset+1` for every
+  data record (the *barrier-aligned* offset map), and on each checkpoint tick
+  injects a **barrier** record after registering that offset snapshot.
 
-`StateBackend` interface with `ValueState` (one value/key) and `ListState`
-(list/key). Two backends, chosen with `WithStateBackend`:
+### The record stream carries three kinds of item (`types/record.go`)
 
-- **`InMemory()`** (default) — RAM; state serialized into checkpoints. Wins below
-  ~100k keys.
-- **`Pebble(dir)`** — disk-backed LSM. State bounded by disk, not RAM. Checkpoints
-  are **native**: the operator hard-links its LSM files at the barrier instead of
-  serializing, so checkpoint cost scales with *changed* data. (At 5M keys: ~0.7 MB
-  heap vs 579 MB in-memory; benchmarks in `bench/`.)
+Everything flows through the same `chan types.Record`:
 
-Each keyed worker gets its own isolated backend.
+| Kind | Flag | Origin | Consumed by |
+|------|------|--------|-------------|
+| **Data** | (none) | Source | operators |
+| **Watermark** | `IsWatermark` | `WatermarkSource` at the source | Window (fires closed windows), passes through |
+| **Barrier** | `IsBarrier` + `CheckpointID` | `injectBarriers` goroutine | stateful ops (snapshot), sink (commit), coordinator |
 
-### Checkpointing & delivery guarantees (`checkpoint/`)
+A data `Record` = `Key []byte`, `Value []byte`, `Timestamp`, `Offset`,
+`Partition`, `Headers map[string][]byte`.
 
-Barrier-based (**Chandy-Lamport**): barriers flow through the graph, operators
-snapshot on arrival. A checkpoint = source offsets + all operator state, written
-to a file (fsync, status pointers).
+---
 
-The `coordinator.go` drives a **two-phase commit** for exactly-once: align source
-offsets → snapshot operator state → commit the sink transaction → promote the
-checkpoint file to `completed`. A per-checkpoint transaction marker resolves
-crashes between sink commit and checkpoint completion. `savepoint.go` promotes a
-checkpoint to a named, durable snapshot for upgrades/redeploys.
+## View 3 — Stage internals
+
+Two stage types fan out; draw each as a sub-diagram.
+
+### Keyed stage (`pipeline/keyed_stage.go`) — starts at `KeyBy`
+
+```
+                       ┌── workerIn[0] ─▶ Worker 0: Op₀ᶜˡᵒⁿᵉ→Op₁ᶜˡᵒⁿᵉ ─▶ workerOut[0] ──┐
+   in ──▶ Router ──────┼── workerIn[1] ─▶ Worker 1: Op₀ᶜˡᵒⁿᵉ→Op₁ᶜˡᵒⁿᵉ ─▶ workerOut[1] ──┼─▶ alignedMerge ──▶ out
+ (goroutine)  │ hash   └── workerIn[N] ─▶ Worker N: Op₀ᶜˡᵒⁿᵉ→Op₁ᶜˡᵒⁿᵉ ─▶ workerOut[N] ──┘   (goroutine)
+              │ key→worker                (each a goroutine,                              emits each
+              │                            isolated state backend)                        marker ONCE
+              └ broadcast barriers+watermarks to ALL workers
+```
+
+- **Router** hash-dispatches *data* by key (`same key → same worker`) and
+  **broadcasts** barriers + watermarks to every worker.
+- **Workers** each own a *clone* of every stateful operator (`Cloneable`) with its
+  own `StateBackend`, registered under the checkpoint owner id `worker-<idx>`.
+- **`alignedMerge`** re-serializes worker outputs and emits each marker
+  **exactly once**, only after *all* N workers have delivered it — so a barrier
+  can never be overtaken and the snapshot is a consistent cut at any parallelism.
+
+### Parallel stateless stage (`pipeline/stateless_stage.go`) — `WithParallelism(n)`
+
+Same shape, but the dispatcher is **round-robin** (stateless, order across
+workers not preserved) and workers hold no keyed state. `Parallelism == 1` is the
+degenerate case: `in → runWorker → out` with no fan-out.
+
+---
+
+## View 4 — Marker flow & the checkpoint barrier
+
+A **checkpoint** is a consistent snapshot of *(all source-partition offsets)* +
+*(all operator state)*. It is taken by flowing a **barrier** through the graph
+(Chandy-Lamport). Draw this as a swimlane: barrier position over time.
+
+```
+ injectBarriers        Stage 1            Keyed stage             barrierDetect        SinkStage
+ ──────────────        ───────            ───────────             ─────────────        ─────────
+ tick →                                                                               
+ registerAligned                                                                      
+   Offsets(id) ──┐                                                                     
+ emit ▮barrier   └▶ …data… ▮ ─▶ snapshot ▮ ─▶ broadcast ▮ to workers                   
+                            op state       each worker snapshots (worker-<idx>)        
+                            (op-<i>)        alignedMerge emits ▮ once                   
+                                                     └────────────▶ collectSnapshots(id)
+                                                                    → coord.OnState-    
+                                                                       Snapshot ──┐     
+                                                                                  └▶ ▮ reaches sink
+                                                                                     → produce marker
+                                                                                       in open txn,
+                                                                                       Flush, onPrepared
+```
+
+Mechanics:
+
+- A **stateful operator** implements `BarrierSnapshotter`: the instant the barrier
+  passes through its `Process` loop (between two data records — the race-free
+  point), it snapshots its state synchronously and hands it back via a callback,
+  keyed `op-<i>` (top-level) or `worker-<idx>` (keyed clone).
+- **Native vs inline snapshot:** if the operator's backend is `Checkpointable`
+  (Pebble), it hard-links its LSM files and returns a small `state_ref` marker
+  (checkpoint cost ∝ *changed* data); otherwise it serializes state to JSON
+  inline.
+- **Offsets are barrier-aligned:** `injectBarriers` registered the exact
+  per-partition offset map *before* emitting the barrier, so the snapshot covers
+  precisely the records ahead of the barrier. (`CheckpointOffset()` on the source
+  is only a fallback, and tracks per-partition consumed offsets — never
+  `reader.Stats()`, which would drop all-but-one partition in a consumer group.)
+
+---
+
+## View 5 — Exactly-once two-phase commit (sequence)
+
+Only when `KafkaSource(exactly-once) → TxnKafkaSink + WithCheckpointing`. The
+`checkpoint.Coordinator` (`checkpoint/coordinator.go`) drives it. Draw as a
+sequence diagram across: **injectBarriers · operators · TxnKafkaSink · Coordinator
+· Storage · Kafka broker**.
+
+```
+ injectBarriers   operators        TxnKafkaSink          Coordinator            Storage        Broker
+ ─────────────    ─────────        ────────────          ───────────            ───────        ──────
+ OnBarrierInjected(id, offsets) ─────────────────────────▶ pending[id].offsets                 
+   emit ▮ ──▶ snapshot ▮ …                                                                      
+                        collectSnapshots(id) ────────────▶ OnStateSnapshot(id, state, dirs)     
+   ▮ ─────────────────────────────▶ produce marker (in txn)                                      
+                                    Flush() ──────────────────────────────────────────────────▶ (staged, invisible)
+                                    OnSinkPrepared(id,err)▶ events<-id                            
+                                                          finalize(id):                          
+                                                          1. Save(prepared) ─────▶ fsync file    
+                                                          2. CommitSink(id) ──▶ EndTxn(TryCommit) ▶ (marker+data visible)
+                                                          3. UpdateStatus(completed) ▶ file       
+                                                          4. CommitOffsets ──────────────────────▶ (advisory group commit)
+                                                          signal ▶ open next txn
+```
+
+- **The checkpoint file is the transaction log.** `prepared` is written *before*
+  the sink commit; `completed` *after*. A crash between step 2 and step 3 is
+  resolved on recovery by the **marker probe** (`WasCommitted`): the marker record
+  rides *inside* the transaction, so its `read_committed` visibility proves the
+  transaction committed.
+- **Concurrency safety:** `OnSinkPrepared` runs on the sink's write goroutine and
+  hands the id to the coordinator's `finalize` goroutine via a channel; a
+  send-WaitGroup makes the `Stop`/`close` race-free. A per-transaction
+  `produceErr` is reset on Commit/Abort so one transient error can't poison later
+  checkpoints.
+- **Uncoordinated mode** (any other sink, checkpointing on): no coordinator. The
+  `SinkStage.OnBarrier = saveCheckpoint` fires *after* the sink drains everything
+  ahead of the barrier → exactly-once **state**, at-least-once **output**.
 
 | Configuration | Guarantee |
 |---|---|
@@ -151,158 +255,107 @@ checkpoint to a named, durable snapshot for upgrades/redeploys.
 | Any source → plain sink, checkpointing on | Exactly-once **state**, at-least-once **output** |
 | No checkpointing | At-most-once across restarts |
 
-*(Exactly-once requires output consumers to use `read_committed`, a stable
-`transactionalID`, and the marker topic to survive.)*
-
-### Observability (`observability/`)
-
-Prometheus metrics at every level — pipeline, operator, worker, stage, edge
-(`mailer_edge_queue_size` pinned at capacity pinpoints the bottleneck) — plus a
-built-in web dashboard. `metadata.go`'s `Describe()` emits the pipeline topology
-as JSON for the dashboard.
-
 ---
 
-## Tier 2 — Job Harness
-
-Turns a configured `StreamExecutionEnv` into a **supervised, remotely
-controllable job**. Two front doors (YAML and Go SDK) converge on one lifecycle.
-
-### `jobagent/` — the per-job supervisor + control contract
-
-`Agent` wraps one `StreamExecutionEnv`. `Run(ctx)` registers a checkpoint
-listener, moves phase Starting→Running, calls `Execute`, and classifies the exit
-(clean cancel = Finished, error = Failed). It serves an HTTP control surface
-(`http.go`) that **every runner container embeds**:
-
-| Route | Purpose |
-|---|---|
-| `GET /healthz` | Liveness + phase |
-| `GET /state` | Lifecycle snapshot (phase, uptime, records in/out, last checkpoint) |
-| `GET /describe` | Compiled pipeline topology |
-| `GET /metrics` | Prometheus exposition |
-| `POST /cancel` | Graceful drain |
-| `POST /savepoint?label=` | Drain, final checkpoint, promote to named savepoint |
-
-### `sdk/` — harness for hand-written Go jobs
-
-`sdk.Run(build)` is the entrypoint for a Go pipeline (`func main(){ sdk.Run(Build) }`).
-It configures the env from env vars (`DATA_DIR`, `PORT`, `SAVEPOINT_DIR`,
-`CHECKPOINT_INTERVAL`, `RESTORE_SAVEPOINT`), then calls the shared `sdk.Serve` —
-which restores any savepoint, starts a `jobagent`, runs to completion, and
-promotes a final savepoint on request. **This is why SDK and YAML jobs behave
-identically** — they share `Serve`.
-
-### `workflow/` — declarative YAML/JSON pipelines (no user code)
-
-Describe a pipeline as a document instead of Go:
+## View 6 — State & checkpoint storage layout
 
 ```
-workflow.yaml → Parse → Validate → Resolve Secrets → Compile → Execute
+StateBackend (per stateful operator / per keyed worker)
+├── InMemory()  — map[namespace]map[key][]byte in RAM; serialized into checkpoints
+└── Pebble(dir) — LSM on disk; state bounded by disk, not heap
+        ValueState(namespace)  key → []byte        (Reduce accumulator, watermark)
+        ListState(namespace)   key → [][]byte      (Window buffered records)
+
+Checkpoint file storage (checkpoint/, FileStorage)
+  <dir>/checkpoint-<id>.json          # {offsets, operator snapshots|state_refs, status}
+  <dir>/checkpoint-<id>.state/        # native hard-link dir (Pebble), per owner
+        op-<i>/ | worker-<idx>/
+  status pointer: prepared → completed   (atomic write+rename, fsync)
+  savepoints/<label>                   # promoted checkpoint (shared volume / S3-ready)
 ```
 
-- **`spec.go`** — the whole schema as Go structs. Tagged unions for source
-  (`kafka`/`slice`/`generator`), sink (`kafka`/`txnKafka`/`postgres`/`stdout`/
-  `blackhole`), and operators.
-- **`parse.go`** — strict decode (unknown fields rejected); `Load()` dispatches by
-  extension.
-- **`validate.go`** — exhaustive up-front validation (structural, per-field config,
-  pipeline ordering — `reduce`/`window` require a preceding `keyBy` — and
-  delivery-guarantee consistency). Invalid workflows never reach runtime.
-- **`operators/`** — declarative built-ins (filter/select/rename/set/keyBy/
-  count+sum reduce/window) implemented over a JSON record model (`record/`), so no
-  Go functions are needed. `map`/`flatMap`/`process` refs are reserved for a
-  future function registry and rejected today.
-- **`secrets/`** — `${VAR}` placeholders expanded (only in sensitive fields like
-  DSNs and SASL creds) from the environment; never echoed in errors.
-- **`compiler/`** — turns a validated spec into the **same `StreamExecutionEnv`**
-  the fluent API produces: `Validate → resolveSecrets → CompileSource →
-  CompileRuntime → applyOperators → CompileSink`. Derives job-isolated
-  `<dataRoot>/<name>/{state,checkpoints}` dirs. Opens **no network connections**
-  except an eager Postgres pool (so an unreachable DB fails at submit). SQL
-  identifiers are regex-guarded; `json.Number` used throughout for numeric
-  fidelity.
-- **`runner/`** — thin orchestration: `CompileFile` / `RunFile`.
-
-### `cmd/` — binaries
-
-- **`cmd/mailer-workflow`** — developer CLI: `--file`, `--dry-run`, `--describe`.
-  Compiles and runs a workflow directly (no container).
-- **`cmd/mailer-runner`** — the **generic entrypoint baked into the runner image**.
-  Configured entirely by env vars (`WORKFLOW`, `DATA_DIR`, `PORT`, …), it compiles
-  the mounted document and hands it to `sdk.Serve` under a jobagent. One prebuilt
-  image runs *any* YAML job. (`Dockerfile.runner` builds it.)
+- **Windowing** stores records in `ListState` keyed by `"<recordKey>/<start>/<end>"`
+  and the watermark in `ValueState`; the set of open windows is exactly the key
+  set. `WindowReduce` folds a window's records at fire and emits one aggregate,
+  evicting the records (memory bounded by *open* windows).
+- **Recovery restores symmetrically:** both `op-<i>` (top-level ops, incl.
+  non-keyed Window/Reduce) and `worker-<idx>` (keyed clones), each via native
+  `RestoreFrom` when the backend is `Checkpointable`, else inline `Restore`.
 
 ---
 
-## Tier 3 — Control Plane (`control/`, separate Go module)
+## View 7 — Control plane: components & sequences
 
-The **JobManager equivalent** for the one-container-per-job model: submit a
-workflow, it launches a runner container, tracks lifecycle, and continuously
-reconciles running containers toward each job's desired state. Survives its own
-crashes because the store is the source of truth.
+### Components (`control/`, separate module)
 
-| Package | Role |
-|---|---|
-| `store/` | **SQLite persistence** (jobs, runs, transitions). Source of truth. Never stores secrets. |
-| `lifecycle/` | Coarse phase state machine + restart policy (bounded attempts, backoff). |
-| `backend/` | `ContainerBackend` interface + **Docker** / **Kubernetes** / fake impls. |
-| (root) | `Controller`: submit/cancel/restart/savepoint + the reconciler loop. |
-| `api/` | REST server over the controller. |
-| `ui/` | Single self-contained embedded HTML dashboard. |
-| `cmd/mailer` | The `mailer` CLI (`mailer dashboard`). |
+```
+        HTTP (REST + embedded SPA)
+   client ──▶ api/  ──▶  Controller  ──▶  store/  (SQLite: jobs, runs, transitions)
+                (root)      │  ▲                    source of truth; NO secrets
+                           │  └── secrets: in-memory map[jobID]→env only
+                           ▼
+                     ContainerBackend  (backend/)
+                      ├── Docker      one container/job, per-job volume
+                      ├── Kubernetes  one batch/v1 Job + PVC + ConfigMap + Secret + Service
+                      └── fake        in-memory (tests)
+                     lifecycle/  phase state machine + restart policy
+```
 
-### Controller & reconciler
+### Submit sequence (`POST /jobs`)
 
-- **`Submit`** validates by dry-run compiling the workflow, persists the `Job`
-  (spec with `${VAR}` intact), stores secrets **in memory only**, launches the
-  first container. Supports `kind: yaml` (generic runner image) and `kind: sdk`
-  (prebuilt Go image).
-- **Reconciler** (`reconcile.go`) — a ~3s ticker: reads active runs, polls backend
-  `Status`, drives phase transitions, applies the restart policy to crashed
-  containers, marks clean exits Finished. On controller restart it re-reads active
-  runs and **re-attaches** to live containers.
-- **Exactly-once safeguards:** *single-live-run fencing* (never two containers for
-  one job → two transactional producers with the same id never coexist) and a
-  *stable transactional id* (`MAILER_JOB_ID` injected into container env, reused
-  verbatim on restart).
+```
+client ─POST /jobs (YAML|manifest)─▶ api ─▶ Controller.Submit
+  1. dry-run compile (workflow/compiler)   ── validates; Postgres sink opens a pool
+  2. store.CreateJob (spec keeps ${VAR})   ── secrets held in memory only
+  3. backend.Launch(LaunchSpec{image, workflowDoc, env, MAILER_JOB_ID})
+        └─▶ container starts: mailer-runner|sdk.Run → jobagent serves :PORT
+  4. return {id, graph, delivery}
+```
 
-### Backends — where containers run (same jobs/API/UI on both)
+### Reconcile loop (`control/reconcile.go`, ~3s ticker)
 
-- **Docker** (default) — one container/job on the local daemon; per-job named
-  volume for state+checkpoints, shared `mailer-savepoints` volume, workflow
-  injected via tar copy.
-- **Kubernetes** — one `batch/v1` **Job** per job (`backoffLimit: 0`,
-  `RestartPolicyNever` — mailer's reconciler owns restarts, not k8s). Per job:
-  a **PVC** (state+checkpoints, reused across restarts), a **ConfigMap** (workflow),
-  an optional **Secret** (env), and a **ClusterIP Service** so the controller can
-  reach the agent's control surface. Runs as distroless nonroot with `fsGroup`;
-  `/healthz` liveness/readiness probes.
+```
+every tick:
+  for run in store.ActiveRuns():
+     st = backend.Status(run)          # running | exited | gone
+     desired == stopped  → Stop + finishRun(Cancelled)
+     exited(0)           → Finished
+     exited(≠0)/gone     → restart policy (bounded attempts + backoff) → new run | Failed
+  (on controller restart: re-read ActiveRuns, RE-ATTACH to live containers)
+```
 
-### REST API (`api/`)
+### Live-state proxy (dashboard ⇄ running job)
 
-`POST /jobs` (submit), `GET /jobs`, `GET /jobs/{id}`, `POST /jobs/{id}/cancel|restart|savepoint`,
-`GET /jobs/{id}/logs`. The live-state routes — `GET /jobs/{id}/state|metrics|describe`
-— **proxy straight to the running container's jobagent**, closing the loop from
-dashboard back down to the core engine.
+```
+GET /jobs/{id}/state|metrics|describe ─▶ Controller.ControlAddress(id) ─▶ jobagent :PORT
+POST /jobs/{id}/cancel|restart|savepoint ─▶ same proxy (savepoint drains + final checkpoint)
+```
+
+- **Exactly-once across restarts** is protected by two rules: *single-live-run
+  fencing* (never two containers for one job, so two transactional producers with
+  the same id never coexist) and a *stable transactional id* pinned to
+  `MAILER_JOB_ID`.
 
 ---
 
-## End-to-end flow (a YAML job, submitted to the control plane)
+## View 8 — Recovery decision
 
-1. `POST /jobs` → **Controller.Submit** dry-run compiles (`workflow/compiler`),
-   persists the `Job` to SQLite, holds secrets in memory, calls `backend.Launch`.
-2. **Backend** (Docker/k8s) starts a **runner container** with the workflow doc +
-   resolved env. Inside, `cmd/mailer-runner` compiles the doc into a
-   `StreamExecutionEnv` and hands it to `sdk.Serve` → a **jobagent** runs it.
-3. **Core engine** executes: Source → operator stages → Sink, checkpointing per
-   the config.
-4. **Reconciler** polls `backend.Status`, restarts failures per policy, records
-   transitions.
-5. **Dashboard/API** proxies `/state` · `/metrics` · `/describe` and issues
-   `/cancel` · `/savepoint` to the in-container agent. Savepoint = drain + final
-   checkpoint promoted to a named blob; the per-job volume/PVC preserves state
-   across restarts.
+On startup with checkpointing, `resolveCoordinatedRecovery` picks the state to
+restore:
+
+```
+latest checkpoint on disk?
+├── completed              → restore it
+├── prepared + marker visible (WasCommitted == true)  → promote to completed, restore
+├── prepared + marker absent (WasCommitted == false)  → abort txn, restore previous completed
+└── none                   → start from the source's configured offset
+then: restore operator state (op-<i> + worker-<idx>) and seek source offsets
+```
+
+`WasCommitted` drains the marker topic under `read_committed`: it returns *true*
+immediately on seeing the marker (definitive), and only concludes *absent* after
+two consecutive empty polls — never a premature false negative that would replay
+a committed transaction.
 
 ---
 
@@ -310,42 +363,42 @@ dashboard back down to the core engine.
 
 ```
 mailer/
-├── mailer.go, stream.go, metadata.go   # core: env, fluent API, Describe()
-├── types/          # Record (data / watermark / barrier)
-├── pipeline/       # stage-based execution: planner, stages, edges, markers, metrics
-├── operator/       # dataflow operators (Map/Filter/KeyBy/Reduce/Window/Process)
+├── mailer.go, stream.go, metadata.go   # env, fluent API, Execute wiring, Describe()
+├── types/          # Record (data / watermark / barrier), NewWatermark/NewBarrier
+├── pipeline/       # planner, stages (Source/Stateless/Keyed/Sink), edges, markers, metrics
+├── operator/       # Map/Filter/FlatMap/Process/KeyBy/Reduce/Window(+WindowReduce)
 ├── window/         # tumbling / sliding / session assigners
-├── watermark/      # bounded out-of-orderness strategies
-├── state/          # StateBackend: in-memory + Pebble (LSM), native checkpoints
-├── source/         # Kafka + slice/generator
-├── sink/           # Kafka, TxnKafka, Postgres, stdout, blackhole
-├── checkpoint/     # barrier snapshots, file storage, 2-phase coordinator, savepoints
+├── watermark/      # bounded out-of-orderness generator
+├── state/          # StateBackend: InMemory + Pebble(LSM); Value/ListState; Checkpointable
+├── source/         # KafkaSource (+ watermark wrap, offset tracking) · slice/generator
+├── sink/           # Kafka · TxnKafka (2PC) · Postgres · stdout · blackhole · failure policy/DLQ
+├── checkpoint/     # CheckpointData, FileStorage, Coordinator (2PC), savepoints, archive
 ├── auth/           # SASL/TLS shared by Kafka source & sink
-├── observability/  # Prometheus metrics + built-in dashboard
-├── jobagent/       # per-job supervisor + control HTTP surface
-├── sdk/            # harness for hand-written Go jobs (Run / Serve)
-├── workflow/       # declarative YAML/JSON: spec, parse, validate, compiler, runner
-├── cmd/            # mailer-workflow (CLI), mailer-runner (container entrypoint)
-├── control/        # ⟵ SEPARATE MODULE: control plane
-│   ├── store/ lifecycle/ backend/ api/ ui/ cmd/mailer
-│   └── controller.go, reconcile.go
-├── bench/          # state-backend scaling benchmarks
-├── examples/       # wordcount, windowing, backpressure, exactly-once, kafka/pg …
-└── test/           # integration: recovery, exactly-once crash sweep, shutdown
+├── observability/  # Prometheus registry (pipeline/op/worker/stage/edge) + dashboard assets
+├── jobagent/       # per-job supervisor (Agent) + HTTP control surface
+├── sdk/            # sdk.Run / sdk.Serve — harness shared by SDK and YAML jobs
+├── workflow/       # spec · parse · validate · secrets · compiler · operators · record · runner
+├── cmd/            # mailer-workflow (dev CLI) · mailer-runner (container entrypoint)
+├── control/        # ⟵ SEPARATE MODULE: Controller, reconcile, store, lifecycle, backend, api, ui
+├── bench/          # state-backend scaling benchmarks (memory vs Pebble)
+├── examples/       # wordcount, windowing, backpressure, exactly-once, kafka-orders, pg-orders …
+└── test/           # integration: recovery, exactly-once crash sweep, shutdown-under-load
 ```
 
 ## Key design decisions
 
-- **Single-process engine, multi-job control plane.** Simplicity and
-  embeddability at the engine level; orchestration is a separate, optional module.
-- **Barrier-based checkpointing** (Chandy-Lamport) — proven in Flink; a snapshot
-  is always a consistent cut because barriers can't be overtaken.
-- **Bounded edges for backpressure** instead of credit-based flow control —
-  simpler, and the bottleneck is directly visible in `mailer_edge_queue_size`.
+- **Single-process engine, multi-job control plane** — embeddable core; optional
+  orchestration in a separate module.
+- **Barrier-based checkpointing** (Chandy-Lamport) — a snapshot is always a
+  consistent cut because a barrier can't be overtaken (aligned merge).
+- **Bounded edges for backpressure** instead of credit-based flow control — the
+  bottleneck is directly visible in `mailer_edge_queue_size`.
+- **Barrier-aligned offsets are authoritative**; the source's `CheckpointOffset`
+  is a per-partition fallback.
 - **YAML and Go SDK jobs share one lifecycle** (`sdk.Serve` + `jobagent`), so the
   control plane treats them identically.
 - **Store is the source of truth; secrets are never persisted** — the controller
-  can crash and re-attach without losing jobs, and `${VAR}` placeholders keep
-  credentials out of SQLite.
-- **`segmentio/kafka-go`** (pure Go, no CGO) for simple builds/cross-compilation.
+  re-attaches after a crash; `${VAR}` placeholders keep credentials out of SQLite.
+- **`segmentio/kafka-go`** (source) and **`franz-go`** (transactional sink) — pure
+  Go, no CGO.
 ```
