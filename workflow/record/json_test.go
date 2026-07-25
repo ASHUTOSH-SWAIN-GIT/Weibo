@@ -5,8 +5,8 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/types"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/workflow/record"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/types"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/workflow/record"
 )
 
 func decode(t *testing.T, jsonStr string) record.JSONRecord {

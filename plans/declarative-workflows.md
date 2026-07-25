@@ -1,6 +1,6 @@
 # Declarative Workflows (Phase 2)
 
-Goal: define and run common Mailer pipelines from YAML/JSON instead of Go.
+Goal: define and run common Weibo pipelines from YAML/JSON instead of Go.
 
 ```
 workflow.yaml → Parse → Validate → Compile → Execute
@@ -12,7 +12,7 @@ The initial design considered logic-by-reference for every transform,
 but the shipped compiler is intentionally narrower and more portable:
 common operators are declarative built-ins over the JSON record model.
 The workflow file expresses topology plus config, and the compiler turns
-that config into ordinary Mailer SDK objects.
+that config into ordinary Weibo SDK objects.
 
 ```yaml
 pipeline:
@@ -54,7 +54,7 @@ building blocks, not arbitrary code.
 
 - **2.6 Built-in stateless operators** (DONE): `workflow/operators` —
   declarative filter (9 comparison ops), select_fields, rename_fields,
-  set_fields. Each `BuildX(cfg)` returns an ordinary Mailer function
+  set_fields. Each `BuildX(cfg)` returns an ordinary Weibo function
   (`func(Record) bool` / `func(Record) Record`) over the JSON record
   model, so a YAML operator behaves like a hand-written SDK function.
   Robust numeric coercion (json.Number-aware) makes YAML-int and
@@ -80,7 +80,7 @@ building blocks, not arbitrary code.
   declaratively-modified record.
 
 - **2.10 Runtime compilation** (DONE): `workflow/compiler/runtime.go` —
-  `CompileRuntime(name, dataRoot, EnvSpec) (*mailer.StreamExecutionEnv, error)`
+  `CompileRuntime(name, dataRoot, EnvSpec) (*weibo.StreamExecutionEnv, error)`
   applies bufferSize/shutdownTimeout/checkpointing/state-backend, and
   roots state + checkpoints in job-specific dirs
   (`<dataRoot>/<name>/{state,checkpoints}`, name sanitized against
@@ -90,7 +90,7 @@ building blocks, not arbitrary code.
 
 - **2.11 Workflow compiler** (DONE): `workflow/compiler/compiler.go` —
   `Compiler{Connections, BaseDataDir}.Compile(*WorkflowSpec) →
-  *mailer.StreamExecutionEnv` (and `CompileWorkflow → CompiledWorkflow`
+  *weibo.StreamExecutionEnv` (and `CompileWorkflow → CompiledWorkflow`
   with graph + delivery guarantee). Order: validate → resolve
   connections (`${VAR}`) → source → runtime env → operators → sink.
   Operators are now **fully declarative** (no registry): filter
@@ -113,7 +113,7 @@ ref-based but are not compilable declaratively.
   memory/Pebble parity, window restore behavior, exactly-once
   validation, secret redaction, isolated state dirs, and fuzz targets.
 - **2.14 Runner + CLI** (DONE): `workflow/runner` exposes
-  `CompileFile`/`RunFile`, `cmd/mailer-workflow` runs YAML/JSON files
+  `CompileFile`/`RunFile`, `cmd/weibo-workflow` runs YAML/JSON files
   with `--dry-run`, `--describe`, `--data-dir`, and examples live under
   `examples/workflows/`.
 

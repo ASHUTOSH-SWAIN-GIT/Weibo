@@ -87,10 +87,10 @@ Records for key "Alice" always enter Worker 2, so Window₂ and Reduce₂ always
 Metrics added to `observability/metrics/metrics.go`:
 
 ```
-mailer_operator_worker_records_in_total{operator, worker}
-mailer_operator_worker_records_out_total{operator, worker}
-mailer_operator_worker_errors_total{operator, worker}
-mailer_operator_worker_processing_duration_seconds{operator, worker}
+weibo_operator_worker_records_in_total{operator, worker}
+weibo_operator_worker_records_out_total{operator, worker}
+weibo_operator_worker_errors_total{operator, worker}
+weibo_operator_worker_processing_duration_seconds{operator, worker}
 ```
 
 Wired in `wireKeyedStage` via `workerCountedRead` and `workerTimedRead` wrappers on each cloned operator's output channel.  Latency is batch-measured (100 records) to keep overhead low.

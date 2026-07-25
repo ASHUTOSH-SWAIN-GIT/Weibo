@@ -1,6 +1,6 @@
 // Package operators provides built-in stateless operators for
 // declarative workflows. Each builder turns a typed config into an
-// ordinary Mailer function — a func(types.Record) bool for filters, or
+// ordinary Weibo function — a func(types.Record) bool for filters, or
 // a func(types.Record) types.Record for field transforms — so a YAML
 // operator behaves exactly like an equivalent hand-written SDK function.
 //

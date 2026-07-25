@@ -1,4 +1,4 @@
-module github.com/ASHUTOSH-SWAIN-GIT/mailer
+module github.com/ASHUTOSH-SWAIN-GIT/weibo
 
 go 1.26.2
 

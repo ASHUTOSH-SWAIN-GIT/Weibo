@@ -1,4 +1,4 @@
-# mailer-runner
+# weibo-runner
 
 The generic job entrypoint baked into the runner container image (job
 orchestration, phase P2). One prebuilt image runs **any** YAML/JSON workflow:
@@ -13,7 +13,7 @@ mount the document, point `WORKFLOW` at it, mount a volume for durable state.
 | `SAVEPOINT_DIR`      | no  | `/savepoints`| Shared blobstore for savepoints. Mount a shared volume so any job can restore any savepoint. |
 | `RESTORE_SAVEPOINT`  | no  | —            | Name of a savepoint to seed state from before starting. |
 | `PORT`               | no  | `8080`       | Agent HTTP control port. |
-| `MAILER_JOB_ID`      | no  | —            | Injected by the controller; reference it (`transactionalID: ${MAILER_JOB_ID}`) to pin a stable exactly-once id across restarts. |
+| `WEIBO_JOB_ID`      | no  | —            | Injected by the controller; reference it (`transactionalID: ${WEIBO_JOB_ID}`) to pin a stable exactly-once id across restarts. |
 
 Secret placeholders (`${VAR}`) in the workflow resolve from the process
 environment at compile time — pass them with `-e`.
@@ -37,7 +37,7 @@ checkpoint before the process exits.
 ## Build
 
 ```sh
-docker build -f Dockerfile.runner -t mailer-runner:dev .
+docker build -f Dockerfile.runner -t weibo-runner:dev .
 ```
 
 ## Run
@@ -45,9 +45,9 @@ docker build -f Dockerfile.runner -t mailer-runner:dev .
 ```sh
 docker run -d -p 8080:8080 \
   -v "$PWD/examples/workflows/order-totals.yaml:/wf/job.yaml:ro" \
-  -v mailer-job-data:/data \
+  -v weibo-job-data:/data \
   -e WORKFLOW=/wf/job.yaml \
-  mailer-runner:dev
+  weibo-runner:dev
 
 curl localhost:8080/state
 docker stop <container>          # SIGTERM → graceful drain

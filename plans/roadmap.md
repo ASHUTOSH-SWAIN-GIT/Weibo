@@ -1,4 +1,4 @@
-# Mailer — Roadmap
+# Weibo — Roadmap
 
 What to work on next, prioritized. Compiled from a dual (Claude + Codex) code
 audit and a production-style Kafka load test (continuous stream → window → sink,
@@ -12,7 +12,7 @@ first; new capabilities come after the guarantees are solid.
 > (state-copy on `Get`, `WithHeader` map clone, watermark ctx-leak, tar
 > path-traversal guard, Postgres schema-qualified quoting, Kafka `batchSize`,
 > API 400 on bad JSON, validation-message fixes, doc drift), the Grafana
-> compose fix, the mailer-test observability stack, and the dashboard's built-in
+> compose fix, the weibo-test observability stack, and the dashboard's built-in
 > **Metrics** page.
 
 ---
@@ -30,7 +30,7 @@ threaten exactly-once. Each needs a fix **plus a regression test**.
    list. Fix: track committed offset per `(topic, partition)` from consumed
    messages, not aggregate reader stats.
 
-2. **Non-keyed stateful state lost on restart** — `mailer.go` (~line 854).
+2. **Non-keyed stateful state lost on restart** — `weibo.go` (~line 854).
    A `Window`/`Reduce` used *without* `KeyBy` is snapshotted under `op-<i>` keys
    but recovery only restores `worker-<idx>`, so its state silently resets on
    restart — contradicting the "restore all stateful operators" contract. Fix:
@@ -143,8 +143,8 @@ The production test showed these gaps directly.
     repo root; the `control/` module isn't vetted/tested in CI, and the `fmt`
     job already caught unformatted files. Add `control/` to the CI matrix and a
     `gofmt` pre-commit hook.
-23. **SDK-job Docker build ergonomics.** The `replace => ../mailer` can't resolve
-    inside a Docker build; the mailer-test workaround compiles the binary on the
+23. **SDK-job Docker build ergonomics.** The `replace => ../weibo` can't resolve
+    inside a Docker build; the weibo-test workaround compiles the binary on the
     host first. Document this as the supported pattern (or provide a
     multi-module build context) for anyone shipping SDK jobs.
 24. **Node 20 → 24 deprecation warnings** in the GitHub Actions run — bump the

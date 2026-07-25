@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/state"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/state"
 )
 
 // Each backend gets its own test run via this table.

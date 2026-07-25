@@ -10,10 +10,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/control"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/control/api"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/control/backend"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/control/store"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/control"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/control/api"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/control/backend"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/control/store"
 )
 
 const wf = `name: wordcount
@@ -291,7 +291,7 @@ func TestServesUI(t *testing.T) {
 		t.Fatalf("content-type: %q", ct)
 	}
 	body, _ := io.ReadAll(resp.Body)
-	if !strings.Contains(strings.ToLower(string(body)), "mailer") {
+	if !strings.Contains(strings.ToLower(string(body)), "weibo") {
 		t.Fatal("index.html not served")
 	}
 }

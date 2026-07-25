@@ -26,7 +26,7 @@ const (
 type LaunchSpec struct {
 	JobID string // used to name the container and its data volume
 	Name  string // human-readable workflow name
-	Image string // runner image, e.g. mailer-runner:dev
+	Image string // runner image, e.g. weibo-runner:dev
 
 	// WorkflowDoc is the raw workflow file content. The backend makes it
 	// available to the container and points WORKFLOW at it.

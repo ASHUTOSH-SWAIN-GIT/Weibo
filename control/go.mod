@@ -1,9 +1,13 @@
-module github.com/ASHUTOSH-SWAIN-GIT/mailer/control
+module github.com/ASHUTOSH-SWAIN-GIT/weibo/control
 
 go 1.26.2
 
+// Build against the local core module in this repo (the renamed module has no
+// published tag yet). Drop this once a github.com/.../weibo version is tagged.
+replace github.com/ASHUTOSH-SWAIN-GIT/weibo => ../
+
 require (
-	github.com/ASHUTOSH-SWAIN-GIT/mailer v0.6.0
+	github.com/ASHUTOSH-SWAIN-GIT/weibo v0.6.0
 	github.com/distribution/reference v0.6.0
 	github.com/docker/cli v27.5.1+incompatible
 	github.com/docker/docker v27.5.1+incompatible

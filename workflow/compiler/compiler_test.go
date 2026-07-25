@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/workflow"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/workflow/compiler"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/workflow"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/workflow/compiler"
 )
 
 // declarativeWF builds a fully declarative workflow (no user code):
@@ -34,7 +34,7 @@ func declarativeWF() *workflow.WorkflowSpec {
 }
 
 // The success condition: a workflow compiles into a complete, runnable
-// Mailer pipeline without starting it.
+// Weibo pipeline without starting it.
 func TestCompile_CompletePipelineWithoutStarting(t *testing.T) {
 	c := &compiler.Compiler{BaseDataDir: t.TempDir()}
 
@@ -127,7 +127,7 @@ func TestCompile_UnresolvedConnectionFails(t *testing.T) {
 	wf.Sink = workflow.SinkSpec{
 		Type: "postgres",
 		Postgres: &workflow.PostgresSinkSpec{
-			DSN: "${MAILER_TEST_MISSING_DSN}", Table: "t", Mapping: map[string]string{"amount": "amount"},
+			DSN: "${WEIBO_TEST_MISSING_DSN}", Table: "t", Mapping: map[string]string{"amount": "amount"},
 		},
 	}
 	if _, err := c.Compile(wf); err == nil {

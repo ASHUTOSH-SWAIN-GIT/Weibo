@@ -6,8 +6,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/observability/metrics"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/observability/metrics"
 	"github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
 )
@@ -16,7 +16,7 @@ import (
 // may be called from HTTP handlers while Run executes on another
 // goroutine.
 type Agent struct {
-	env *mailer.StreamExecutionEnv
+	env *weibo.StreamExecutionEnv
 
 	mu     sync.Mutex
 	st     State
@@ -31,7 +31,7 @@ type Agent struct {
 // New creates an agent that will run the given configured environment.
 // The env must already have its source, sink, and any operators wired
 // (e.g. from the workflow compiler); the agent does not build pipelines.
-func New(env *mailer.StreamExecutionEnv) *Agent {
+func New(env *weibo.StreamExecutionEnv) *Agent {
 	return &Agent{
 		env: env,
 		st:  State{Phase: PhaseStarting},

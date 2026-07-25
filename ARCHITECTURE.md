@@ -1,6 +1,6 @@
-# Mailer — Architecture
+# Weibo — Architecture
 
-Mailer is a **stream-processing engine in Go, inspired by Apache Flink**. It reads
+Weibo is a **stream-processing engine in Go, inspired by Apache Flink**. It reads
 unbounded streams (Kafka), applies stateful/windowed transformations, and writes
 to sinks — with checkpointing, durable state, and up to end-to-end exactly-once.
 
@@ -35,7 +35,7 @@ Layered; each tier depends only on the ones below it.
 ┌───────────────────────────────────────────────────────────────────────┐
 │  TIER 3 · CONTROL PLANE            control/  (separate Go module)      │
 │                                                                       │
-│   cmd/mailer ──> Controller ──> ContainerBackend {Docker | K8s | fake}│
+│   cmd/weibo ──> Controller ──> ContainerBackend {Docker | K8s | fake}│
 │      (CLI)          │  ▲              │ launches                       │
 │                 api/│  │store/        ▼                                │
 │              REST + UI  SQLite    one container per job                │
@@ -45,7 +45,7 @@ Layered; each tier depends only on the ones below it.
 ┌───────────────────────────▼───────────────────────────────────────────┐
 │  TIER 2 · JOB HARNESS     sdk/ · jobagent/ · workflow/ · cmd/          │
 │                                                                       │
-│   cmd/mailer-runner (YAML)  ─┐                                         │
+│   cmd/weibo-runner (YAML)  ─┐                                         │
 │   any main(){sdk.Run(Build)} ─┼─> sdk.Serve ──> jobagent.Agent        │
 │   (Go SDK job)                │                    │  supervises 1 env │
 │                               │        HTTP control surface (:PORT):   │
@@ -55,7 +55,7 @@ Layered; each tier depends only on the ones below it.
 └───────────────────────────┬───────────────────────────────────────────┘
                             │ StreamExecutionEnv (source+ops+sink wired)
 ┌───────────────────────────▼───────────────────────────────────────────┐
-│  TIER 1 · CORE ENGINE     mailer.go · pipeline/ · operator/ · state/ … │
+│  TIER 1 · CORE ENGINE     weibo.go · pipeline/ · operator/ · state/ … │
 │                                                                       │
 │   Source ─> [stage] ─edge─> [stage] ─edge─> … ─> Sink                 │
 │   planner · edges (backpressure) · keyed parallelism · watermarks      │
@@ -63,7 +63,7 @@ Layered; each tier depends only on the ones below it.
 └───────────────────────────────────────────────────────────────────────┘
 ```
 
-- **Why the split?** The core engine stays dependency-light — `go get mailer`
+- **Why the split?** The core engine stays dependency-light — `go get weibo`
   never pulls Docker/Kubernetes/SQLite clients; those live only in `control/`.
 - **One job = one container = one OS process.** No cross-node coordination inside
   a job. Scale-out = run more jobs (Kafka partitions distribute across the
@@ -118,7 +118,7 @@ Key facts for the diagram:
 - **Two contexts:** `runCtx` = graceful stop (source stops, everything drains);
   `hardCtx` = force-unwind, cancelled on any fatal stage/coordinator error or
   when the `WithShutdownTimeout` drain deadline passes.
-- **`injectBarriers` sits between the source and stage 1** (`mailer.go`). It reads
+- **`injectBarriers` sits between the source and stage 1** (`weibo.go`). It reads
   the source's output, tracks `offsets[partition] = record.Offset+1` for every
   data record (the *barrier-aligned* offset map), and on each checkpoint tick
   injects a **barrier** record after registering that offset snapshot.
@@ -307,8 +307,8 @@ Checkpoint file storage (checkpoint/, FileStorage)
 client ─POST /jobs (YAML|manifest)─▶ api ─▶ Controller.Submit
   1. dry-run compile (workflow/compiler)   ── validates; Postgres sink opens a pool
   2. store.CreateJob (spec keeps ${VAR})   ── secrets held in memory only
-  3. backend.Launch(LaunchSpec{image, workflowDoc, env, MAILER_JOB_ID})
-        └─▶ container starts: mailer-runner|sdk.Run → jobagent serves :PORT
+  3. backend.Launch(LaunchSpec{image, workflowDoc, env, WEIBO_JOB_ID})
+        └─▶ container starts: weibo-runner|sdk.Run → jobagent serves :PORT
   4. return {id, graph, delivery}
 ```
 
@@ -334,7 +334,7 @@ POST /jobs/{id}/cancel|restart|savepoint ─▶ same proxy (savepoint drains + f
 - **Exactly-once across restarts** is protected by two rules: *single-live-run
   fencing* (never two containers for one job, so two transactional producers with
   the same id never coexist) and a *stable transactional id* pinned to
-  `MAILER_JOB_ID`.
+  `WEIBO_JOB_ID`.
 
 ---
 
@@ -362,8 +362,8 @@ a committed transaction.
 ## Package map
 
 ```
-mailer/
-├── mailer.go, stream.go, metadata.go   # env, fluent API, Execute wiring, Describe()
+weibo/
+├── weibo.go, stream.go, metadata.go   # env, fluent API, Execute wiring, Describe()
 ├── types/          # Record (data / watermark / barrier), NewWatermark/NewBarrier
 ├── pipeline/       # planner, stages (Source/Stateless/Keyed/Sink), edges, markers, metrics
 ├── operator/       # Map/Filter/FlatMap/Process/KeyBy/Reduce/Window(+WindowReduce)
@@ -378,7 +378,7 @@ mailer/
 ├── jobagent/       # per-job supervisor (Agent) + HTTP control surface
 ├── sdk/            # sdk.Run / sdk.Serve — harness shared by SDK and YAML jobs
 ├── workflow/       # spec · parse · validate · secrets · compiler · operators · record · runner
-├── cmd/            # mailer-workflow (dev CLI) · mailer-runner (container entrypoint)
+├── cmd/            # weibo-workflow (dev CLI) · weibo-runner (container entrypoint)
 ├── control/        # ⟵ SEPARATE MODULE: Controller, reconcile, store, lifecycle, backend, api, ui
 ├── bench/          # state-backend scaling benchmarks (memory vs Pebble)
 ├── examples/       # wordcount, windowing, backpressure, exactly-once, kafka-orders, pg-orders …
@@ -392,7 +392,7 @@ mailer/
 - **Barrier-based checkpointing** (Chandy-Lamport) — a snapshot is always a
   consistent cut because a barrier can't be overtaken (aligned merge).
 - **Bounded edges for backpressure** instead of credit-based flow control — the
-  bottleneck is directly visible in `mailer_edge_queue_size`.
+  bottleneck is directly visible in `weibo_edge_queue_size`.
 - **Barrier-aligned offsets are authoritative**; the source's `CheckpointOffset`
   is a per-partition fallback.
 - **YAML and Go SDK jobs share one lifecycle** (`sdk.Serve` + `jobagent`), so the

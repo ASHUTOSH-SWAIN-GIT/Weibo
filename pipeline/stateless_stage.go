@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/observability/metrics"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/operator"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/types"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/observability/metrics"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/operator"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/types"
 )
 
 // StatelessStage executes a chain of stateless operators (Map, Filter,

@@ -3,8 +3,8 @@ package sink_test
 import (
 	"testing"
 
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/auth"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/sink"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/auth"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/sink"
 )
 
 // The transactional sink accepts SASL + TLS for hosted clusters and

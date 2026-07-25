@@ -1,4 +1,4 @@
-package mailer_test
+package weibo_test
 
 import (
 	"context"
@@ -9,10 +9,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/checkpoint"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/state"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/types"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/checkpoint"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/state"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/types"
 )
 
 // trackingBackend wraps a MemoryBackend to observe injection and
@@ -64,7 +64,7 @@ func TestStateBackend_InjectedPerKeyedWorker(t *testing.T) {
 	tf := newTrackingFactory()
 	sk := newCaptureSink()
 
-	env := mailer.NewEnv().WithStateBackend(tf.factory)
+	env := weibo.NewEnv().WithStateBackend(tf.factory)
 	env.FromSource(newReplaySource(eoParts3())).
 		KeyBy(func(r types.Record) []byte { return r.Key }).WithPartitions(3).
 		Reduce(countReduceFn).
@@ -116,7 +116,7 @@ func TestStateBackend_InjectedForTopLevelOperator(t *testing.T) {
 
 	// Reduce WITHOUT KeyBy runs as a standalone channel stage; its
 	// backend owner is the operator index.
-	env := mailer.NewEnv().WithStateBackend(tf.factory)
+	env := weibo.NewEnv().WithStateBackend(tf.factory)
 	env.FromSource(newReplaySource([][]types.Record{dataRows("a", 10)})).
 		Reduce(countReduceFn).
 		ToSink(sk)
@@ -130,7 +130,7 @@ func TestStateBackend_InjectedForTopLevelOperator(t *testing.T) {
 }
 
 func TestStateBackend_FactoryErrorFailsExecute(t *testing.T) {
-	env := mailer.NewEnv().WithStateBackend(func(ownerID string) (state.StateBackend, error) {
+	env := weibo.NewEnv().WithStateBackend(func(ownerID string) (state.StateBackend, error) {
 		return nil, errors.New("disk on fire")
 	})
 	env.FromSource(newReplaySource(eoParts3())).
@@ -162,7 +162,7 @@ func TestStateBackend_RecoveryWithInjectedBackends(t *testing.T) {
 			}
 		}
 		sk := newCaptureSink()
-		env := mailer.NewEnv().
+		env := weibo.NewEnv().
 			WithStateBackend(tf.factory).
 			WithCheckpointing(5*time.Millisecond, storage)
 		env.FromSource(src).

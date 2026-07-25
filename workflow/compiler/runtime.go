@@ -6,17 +6,17 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/checkpoint"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/state"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/workflow"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/checkpoint"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/state"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/workflow"
 )
 
 // DefaultDataRoot is where per-workflow state and checkpoints live when
 // no directory is configured.
 const DefaultDataRoot = "./data"
 
-// CompileRuntime builds a *mailer.StreamExecutionEnv configured from a
+// CompileRuntime builds a *weibo.StreamExecutionEnv configured from a
 // workflow's runtime settings (buffer size, shutdown timeout,
 // checkpointing, state backend). The returned env has no source or sink
 // yet — the caller wires those with FromSource/…/ToSink.
@@ -30,13 +30,13 @@ const DefaultDataRoot = "./data"
 // dataRoot defaults to DefaultDataRoot ("./data"). A directory
 // explicitly set in the spec is honored as that resource's root, with
 // the workflow name nested under it — so isolation holds either way.
-func CompileRuntime(workflowName, dataRoot string, rt *workflow.EnvSpec) (*mailer.StreamExecutionEnv, error) {
+func CompileRuntime(workflowName, dataRoot string, rt *workflow.EnvSpec) (*weibo.StreamExecutionEnv, error) {
 	if dataRoot == "" {
 		dataRoot = DefaultDataRoot
 	}
 	name := sanitizeName(workflowName)
 
-	env := mailer.NewEnv()
+	env := weibo.NewEnv()
 	if rt == nil {
 		return env, nil
 	}

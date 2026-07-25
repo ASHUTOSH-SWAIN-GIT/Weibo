@@ -1,4 +1,4 @@
-package mailer_test
+package weibo_test
 
 import (
 	"context"
@@ -9,10 +9,10 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/observability/metrics"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/source"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/types"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/observability/metrics"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/source"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/types"
 )
 
 // slowSink consumes records with a fixed per-record delay and counts them.
@@ -46,7 +46,7 @@ func TestBackpressure_FastSourceSlowSink_NoDrops(t *testing.T) {
 	const n = 2000
 	sk := &slowSink{delay: 50 * time.Microsecond}
 
-	env := mailer.NewEnv().WithBufferSize(8)
+	env := weibo.NewEnv().WithBufferSize(8)
 	env.FromSource(source.NewSliceSource(makeRecords(n))).
 		Map(func(r types.Record) types.Record { return r }, "noop").
 		Filter(func(r types.Record) bool { return true }, "keep-all").
@@ -66,7 +66,7 @@ func TestBackpressure_ParallelStatelessDelivery(t *testing.T) {
 	const n = 1000
 	sk := &slowSink{}
 
-	env := mailer.NewEnv().WithBufferSize(64)
+	env := weibo.NewEnv().WithBufferSize(64)
 	env.FromSource(source.NewSliceSource(makeRecords(n))).
 		Map(func(r types.Record) types.Record { return r }, "par-map").WithParallelism(4).
 		ToSink(sk)
@@ -89,7 +89,7 @@ func TestObservability_StageAndEdgeMetrics(t *testing.T) {
 	sourceInBefore := testutil.ToFloat64(metrics.StageRecordsInTotal.WithLabelValues("source", "source"))
 	sinkInBefore := testutil.ToFloat64(metrics.StageRecordsInTotal.WithLabelValues("sink", "sink"))
 
-	env := mailer.NewEnv().WithBufferSize(32)
+	env := weibo.NewEnv().WithBufferSize(32)
 	env.FromSource(source.NewSliceSource(makeRecords(n))).
 		Map(func(r types.Record) types.Record { return r }, "noop").
 		ToSink(sk)
@@ -118,7 +118,7 @@ func TestObservability_StageAndEdgeMetrics(t *testing.T) {
 func TestShutdown_GracefulDrainOnCancel(t *testing.T) {
 	sk := &slowSink{delay: time.Millisecond}
 
-	env := mailer.NewEnv().WithBufferSize(16).WithShutdownTimeout(5 * time.Second)
+	env := weibo.NewEnv().WithBufferSize(16).WithShutdownTimeout(5 * time.Second)
 	env.FromSource(source.NewSliceSource(makeRecords(10000))).
 		Map(func(r types.Record) types.Record { return r }, "noop").
 		ToSink(sk)

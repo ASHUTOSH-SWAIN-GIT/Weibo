@@ -32,11 +32,11 @@ never be advertised as exactly-once.
 | `source/kafka.go` `runSerial` (lines ~191–202) | Commits each message (or batch of `commitBatch`) to the broker **immediately after** pushing the record downstream | **Loss window**: offset is durable before the sink ever sees the record. Crash ⇒ record skipped on restart. |
 | `source/kafka.go` `Drain` | Flushes pending batch commits on graceful shutdown | Same semantics, shutdown-time. |
 | `source/kafka.go` parallel mode | Never commits to the broker; durability only via `CheckpointOffset`/`RestoreOffset` + `SetOffset` | Broker lag metrics lie; two sources of truth. |
-| `mailer.go` `saveCheckpoint` → `CheckpointOffset` | Stores `reader.Stats().Offset` per partition into the checkpoint file | **Not barrier-aligned** (next section). |
+| `weibo.go` `saveCheckpoint` → `CheckpointOffset` | Stores `reader.Stats().Offset` per partition into the checkpoint file | **Not barrier-aligned** (next section). |
 
 ### Where checkpoints are saved today
 
-`injectBarriers` (mailer.go) puts a barrier into the stream after the
+`injectBarriers` (weibo.go) puts a barrier into the stream after the
 source stage on a ticker. When the barrier passes `barrierDetect`
 (wired just **before** the sink stage), `saveCheckpoint` synchronously
 snapshots operator/worker state + source offsets and writes the file.
@@ -242,7 +242,7 @@ type CheckpointData struct { // extended
   timeouts (a checkpoint that doesn't complete within N seconds ⇒
   abort + pipeline error), and the recovery decision table.
 
-### Engine wiring (`mailer.go` / `pipeline`)
+### Engine wiring (`weibo.go` / `pipeline`)
 
 - `types.Record` gains a `Partition int` field; `KafkaToRecord` sets it
   from `kafka.Message.Partition` (needed by the in-band offset tracker;

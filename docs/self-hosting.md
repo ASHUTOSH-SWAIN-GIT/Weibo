@@ -1,7 +1,7 @@
-# Self-hosting Mailer
+# Self-hosting Weibo
 
-How to run the Mailer control plane on a single VM (EC2, a droplet, bare
-metal) so developers can `mailer deploy` jobs to it, watch them in the UI, and
+How to run the Weibo control plane on a single VM (EC2, a droplet, bare
+metal) so developers can `weibo deploy` jobs to it, watch them in the UI, and
 manage their lifecycle — safely enough for a small team.
 
 This guide covers a **Docker** deployment (the default, one VM). For a cluster,
@@ -18,18 +18,18 @@ see [Kubernetes backend](#backend-selection-docker-vs-kubernetes).
 
 ## Architecture in one paragraph
 
-One long-running **controller** process (`mailer dashboard`) serves the REST
+One long-running **controller** process (`weibo dashboard`) serves the REST
 API and the web UI, and drives **one container per job** on the local Docker
 daemon. Jobs come in two shapes: a **YAML workflow** (runs the generic
-`mailer-runner` image with the workflow document injected) or an **SDK job** (a
+`weibo-runner` image with the workflow document injected) or an **SDK job** (a
 prebuilt Go pipeline image you build and push). The controller persists job
 state to SQLite and a reconciler keeps every job converging on its desired
-state. Developers talk to it entirely over REST — `mailer deploy`, `mailer
-jobs`, `mailer logs`, etc. — so nothing but the controller needs Docker.
+state. Developers talk to it entirely over REST — `weibo deploy`, `weibo
+jobs`, `weibo logs`, etc. — so nothing but the controller needs Docker.
 
 ```
-developer ──(REST + bearer token)──▶ controller (mailer dashboard) ──▶ Docker ──▶ job containers
-   mailer deploy / jobs / logs           API + UI on :9000                 one per job
+developer ──(REST + bearer token)──▶ controller (weibo dashboard) ──▶ Docker ──▶ job containers
+   weibo deploy / jobs / logs           API + UI on :9000                 one per job
 ```
 
 ---
@@ -60,16 +60,16 @@ Public images need no login.
 
 ### 3. Build and push the runner image
 
-The `mailer-runner` image runs any YAML workflow. Build it from the repo root
+The `weibo-runner` image runs any YAML workflow. Build it from the repo root
 and push it to a registry the VM can pull from:
 
 ```sh
-docker build -f Dockerfile.runner -t <registry>/mailer-runner:1.0 .
-docker push <registry>/mailer-runner:1.0
+docker build -f Dockerfile.runner -t <registry>/weibo-runner:1.0 .
+docker push <registry>/weibo-runner:1.0
 ```
 
 > On the VM itself you can skip the push and build locally as
-> `mailer-runner:dev`; YAML jobs never trigger a pull for a locally-present
+> `weibo-runner:dev`; YAML jobs never trigger a pull for a locally-present
 > runner image. A registry image is only required when the runner image is not
 > already on the host (or on a Kubernetes cluster).
 
@@ -79,18 +79,18 @@ Generate a strong bearer token and start the dashboard headless, bound to the
 runner image and protected by the token:
 
 ```sh
-export MAILER_AUTH_TOKEN="$(openssl rand -hex 32)"
-mailer dashboard \
+export WEIBO_AUTH_TOKEN="$(openssl rand -hex 32)"
+weibo dashboard \
   -addr 127.0.0.1:9000 \
-  -image <registry>/mailer-runner:1.0 \
-  -db /var/lib/mailer/control.db \
+  -image <registry>/weibo-runner:1.0 \
+  -db /var/lib/weibo/control.db \
   -no-open
 ```
 
 - `-addr 127.0.0.1:9000` binds to loopback only — reach it over an SSH tunnel
   or front it with a TLS proxy (see [Security](#security-checklist)). Use
   `-addr :9000` only behind such a proxy.
-- `-auth-token` is read from `MAILER_AUTH_TOKEN`; the log prints
+- `-auth-token` is read from `WEIBO_AUTH_TOKEN`; the log prints
   `API auth ENABLED` when a token is set.
 - `-no-open` keeps it from trying to open a browser on the server.
 
@@ -103,20 +103,20 @@ loopback-bound controller, open a tunnel first:
 
 ```sh
 ssh -N -L 9000:127.0.0.1:9000 user@vm        # in one terminal
-export MAILER_CONTROLLER=http://localhost:9000
-export MAILER_TOKEN="<the shared token>"
+export WEIBO_CONTROLLER=http://localhost:9000
+export WEIBO_TOKEN="<the shared token>"
 ```
 
 **A YAML workflow** — nothing to build, just submit:
 
 ```sh
-mailer deploy -file examples/workflows/wordcount.yaml
-mailer jobs
-mailer logs <job-id>
+weibo deploy -file examples/workflows/wordcount.yaml
+weibo jobs
+weibo logs <job-id>
 ```
 
-**An SDK job** — `mailer deploy` builds the image from the manifest's `image:`,
-pushes it, then submits. A minimal `mailer.yaml`:
+**An SDK job** — `weibo deploy` builds the image from the manifest's `image:`,
+pushes it, then submits. A minimal `weibo.yaml`:
 
 ```yaml
 kind: sdk
@@ -130,34 +130,34 @@ resources:
 ```
 
 ```sh
-mailer deploy -file mailer.yaml -dockerfile Dockerfile -context .
+weibo deploy -file weibo.yaml -dockerfile Dockerfile -context .
 # build → push → submit; then:
-mailer jobs
-mailer status <job-id>
-mailer cancel <job-id>
+weibo jobs
+weibo status <job-id>
+weibo cancel <job-id>
 ```
 
 > **SDK build caveat:** if your SDK job's `go.mod` uses a
-> `replace => ../mailer` local path, it will not resolve inside a Docker build
+> `replace => ../weibo` local path, it will not resolve inside a Docker build
 > context. Either depend on a tagged module version, or build the job binary on
-> the host and `COPY` it into the image. Then `mailer deploy -no-build -no-push`
+> the host and `COPY` it into the image. Then `weibo deploy -no-build -no-push`
 > skips the docker steps and just submits.
 
 ### CLI command reference
 
 All management commands are pure REST — they work against a controller on any
-host and honor `MAILER_CONTROLLER` / `MAILER_TOKEN`.
+host and honor `WEIBO_CONTROLLER` / `WEIBO_TOKEN`.
 
 | Command | Purpose |
 | --- | --- |
-| `mailer dashboard`            | Start the controller + UI (the server process). |
-| `mailer deploy`               | Build, push, and submit a job manifest. |
-| `mailer jobs`                 | List jobs. |
-| `mailer status <id>`          | One job's detail, latest run, and history. |
-| `mailer logs <id> [-tail N]`  | Print a job's container logs. |
-| `mailer cancel <id>`          | Gracefully stop a job. |
-| `mailer restart <id> [-savepoint L]` | Resume a job (optionally from a savepoint). |
-| `mailer savepoint <id> -label L` | Stop a job with a named savepoint. |
+| `weibo dashboard`            | Start the controller + UI (the server process). |
+| `weibo deploy`               | Build, push, and submit a job manifest. |
+| `weibo jobs`                 | List jobs. |
+| `weibo status <id>`          | One job's detail, latest run, and history. |
+| `weibo logs <id> [-tail N]`  | Print a job's container logs. |
+| `weibo cancel <id>`          | Gracefully stop a job. |
+| `weibo restart <id> [-savepoint L]` | Resume a job (optionally from a savepoint). |
+| `weibo savepoint <id> -label L` | Stop a job with a named savepoint. |
 
 ---
 
@@ -165,7 +165,7 @@ host and honor `MAILER_CONTROLLER` / `MAILER_TOKEN`.
 
 The controller pulls a job's `image` before launch using the **same credentials
 the Docker CLI uses** — it reads `~/.docker/config.json` for the user running
-`mailer dashboard`. So whatever `docker pull <image>` can fetch, the controller
+`weibo dashboard`. So whatever `docker pull <image>` can fetch, the controller
 can too.
 
 - **Docker Hub / GHCR / generic registries:** `docker login <registry>` on the
@@ -192,7 +192,7 @@ can too.
   at all (anonymous pull).
 
 Pull policy: images are pulled only when **absent** locally; a local build (e.g.
-`mailer-runner:dev`) is never pulled over. A pull failure falls back to a
+`weibo-runner:dev`) is never pulled over. A pull failure falls back to a
 locally-present image so an air-gapped host still launches.
 
 ---
@@ -210,8 +210,8 @@ not let it cross an untrusted network in cleartext.
       reach it via an SSH tunnel or the TLS proxy on the same host. Use a public
       `-addr :9000` **only** when a TLS proxy sits in front.
 - [ ] **Set a strong token and rotate it.** `openssl rand -hex 32`. To rotate:
-      restart the dashboard with a new `MAILER_AUTH_TOKEN` and redistribute it;
-      clients update `MAILER_TOKEN`. Browsers re-prompt automatically on the
+      restart the dashboard with a new `WEIBO_AUTH_TOKEN` and redistribute it;
+      clients update `WEIBO_TOKEN`. Browsers re-prompt automatically on the
       next 401.
 - [ ] **Job control port is already loopback-only.** The Docker backend
       publishes each job's control surface on `127.0.0.1` only — it is not
@@ -219,13 +219,13 @@ not let it cross an untrusted network in cleartext.
 - [ ] **Cap job resources as a runaway guardrail.** Set `resources.cpu` /
       `resources.memory` in SDK manifests so a buggy job can't starve the VM.
 - [ ] **Restrict who can reach the daemon.** The controller has full Docker
-      access (it launches containers). Treat the VM and the `MAILER_AUTH_TOKEN`
+      access (it launches containers). Treat the VM and the `WEIBO_AUTH_TOKEN`
       as production secrets; limit SSH access.
 - [ ] **Persist the SQLite DB on durable storage.** Point `-db` at a path on a
-      persistent volume (e.g. `/var/lib/mailer/control.db`) so job records
+      persistent volume (e.g. `/var/lib/weibo/control.db`) so job records
       survive a redeploy of the controller.
 
-> **No token = open API.** Running `mailer dashboard` without `-auth-token`
+> **No token = open API.** Running `weibo dashboard` without `-auth-token`
 > leaves the API fully open (the pre-auth behavior). That is fine for a laptop
 > or a fully private network, but never for anything reachable by others.
 
@@ -243,16 +243,16 @@ not let it cross an untrusted network in cleartext.
 **Docker** — nothing extra to configure:
 
 ```sh
-mailer dashboard -image <registry>/mailer-runner:1.0
+weibo dashboard -image <registry>/weibo-runner:1.0
 ```
 
 **Kubernetes** — the runner image must be pullable *by the cluster* (push it to
 a registry the nodes can reach). Relevant flags:
 
 ```sh
-mailer dashboard -backend kubernetes \
-  -namespace mailer \
-  -image <registry>/mailer-runner:1.0 \
+weibo dashboard -backend kubernetes \
+  -namespace weibo \
+  -image <registry>/weibo-runner:1.0 \
   -pvc-size 2Gi \
   -storage-class gp3 \
   -image-pull-secrets regcred
@@ -260,7 +260,7 @@ mailer dashboard -backend kubernetes \
 
 - `-pvc-size` / `-storage-class` size and place each job's state volume.
 - `-image-pull-secrets` names pre-created `dockerconfigjson` Secrets in the
-  namespace for private registries (Mailer references them; it does not create
+  namespace for private registries (Weibo references them; it does not create
   them).
 - **Live-metrics note:** the dashboard proxies a job's `/state` and `/metrics`
   through the ClusterIP Service, which needs in-cluster networking. Job
@@ -275,24 +275,24 @@ Run the controller as a managed service so it restarts on crash and boot. Put
 the token in an environment file readable only by root:
 
 ```sh
-# /etc/mailer/mailer.env   (chmod 600)
-MAILER_AUTH_TOKEN=<your-strong-token>
+# /etc/weibo/weibo.env   (chmod 600)
+WEIBO_AUTH_TOKEN=<your-strong-token>
 ```
 
 ```ini
-# /etc/systemd/system/mailer.service
+# /etc/systemd/system/weibo.service
 [Unit]
-Description=Mailer control plane
+Description=Weibo control plane
 After=docker.service
 Requires=docker.service
 
 [Service]
-User=mailer
-EnvironmentFile=/etc/mailer/mailer.env
-ExecStart=/usr/local/bin/mailer dashboard \
+User=weibo
+EnvironmentFile=/etc/weibo/weibo.env
+ExecStart=/usr/local/bin/weibo dashboard \
   -addr 127.0.0.1:9000 \
-  -image <registry>/mailer-runner:1.0 \
-  -db /var/lib/mailer/control.db \
+  -image <registry>/weibo-runner:1.0 \
+  -db /var/lib/weibo/control.db \
   -no-open
 Restart=on-failure
 RestartSec=3
@@ -302,12 +302,12 @@ WantedBy=multi-user.target
 ```
 
 ```sh
-sudo useradd -r -G docker mailer            # service account with Docker access
-sudo install -d -o mailer /var/lib/mailer
+sudo useradd -r -G docker weibo            # service account with Docker access
+sudo install -d -o weibo /var/lib/weibo
 sudo systemctl daemon-reload
-sudo systemctl enable --now mailer
-journalctl -u mailer -f                     # watch it start
+sudo systemctl enable --now weibo
+journalctl -u weibo -f                     # watch it start
 ```
 
-The `mailer` service account needs membership in the `docker` group to reach the
+The `weibo` service account needs membership in the `docker` group to reach the
 daemon. Front the loopback address with your TLS proxy for external access.

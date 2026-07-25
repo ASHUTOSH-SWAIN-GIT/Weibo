@@ -5,8 +5,8 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/workflow"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/workflow/secrets"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/workflow"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/workflow/secrets"
 )
 
 var secretRefRe = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}`)

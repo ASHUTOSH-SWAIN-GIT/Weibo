@@ -40,8 +40,8 @@ package runner
 import (
     "context"
 
-    "github.com/ASHUTOSH-SWAIN-GIT/mailer/workflow/compiler"
-    "github.com/ASHUTOSH-SWAIN-GIT/mailer/workflow/secrets"
+    "github.com/ASHUTOSH-SWAIN-GIT/weibo/workflow/compiler"
+    "github.com/ASHUTOSH-SWAIN-GIT/weibo/workflow/secrets"
 )
 
 type Options struct {
@@ -77,12 +77,12 @@ Error wrapping:
 
 ## CLI
 
-Add `cmd/mailer-workflow/main.go`.
+Add `cmd/weibo-workflow/main.go`.
 
 Command:
 
 ```sh
-go run ./cmd/mailer-workflow --file workflow.yaml
+go run ./cmd/weibo-workflow --file workflow.yaml
 ```
 
 Flags:
@@ -164,8 +164,8 @@ Tests:
 
 Files:
 
-- `cmd/mailer-workflow/main.go`
-- `cmd/mailer-workflow/main_test.go` if useful; otherwise cover via
+- `cmd/weibo-workflow/main.go`
+- `cmd/weibo-workflow/main_test.go` if useful; otherwise cover via
   shell-style integration tests under `test/workflow`.
 
 Implementation:
@@ -224,8 +224,8 @@ Required updates:
 
 ```sh
 export POSTGRES_DSN='postgres://...'
-go run ./cmd/mailer-workflow --file examples/workflows/postgres-sink.yaml
-go run ./cmd/mailer-workflow --file examples/workflows/postgres-sink.yaml --dry-run --describe
+go run ./cmd/weibo-workflow --file examples/workflows/postgres-sink.yaml
+go run ./cmd/weibo-workflow --file examples/workflows/postgres-sink.yaml --dry-run --describe
 ```
 
 ## Security Requirements
@@ -252,7 +252,7 @@ Concrete checks:
 Unit tests:
 
 - `go test ./workflow/...`
-- `go test ./cmd/mailer-workflow`
+- `go test ./cmd/weibo-workflow`
 
 Integration tests:
 
@@ -281,9 +281,9 @@ go test ./test/workflow -run=^$ -fuzz=FuzzNumericConversions -fuzztime=10s
 ## Open Decisions
 
 1. Binary name:
-   - Recommended now: `mailer-workflow`
-   - Future option: a broader `mailer` CLI with subcommands
-     (`mailer workflow run ...`)
+   - Recommended now: `weibo-workflow`
+   - Future option: a broader `weibo` CLI with subcommands
+     (`weibo workflow run ...`)
 2. Whether `--describe` should print SDK `DescribeJSON()` or the
    compiler graph.
    - Recommended: print SDK `DescribeJSON()` because it is what the

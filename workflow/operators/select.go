@@ -3,8 +3,8 @@ package operators
 import (
 	"fmt"
 
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/types"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/workflow/record"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/types"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/workflow/record"
 )
 
 // SelectConfig configures a built-in select_fields (projection): keep
@@ -34,7 +34,7 @@ func (cfg SelectConfig) Validate() error {
 	return nil
 }
 
-// BuildSelect returns an ordinary Mailer map function that projects each
+// BuildSelect returns an ordinary Weibo map function that projects each
 // record to the configured fields. A field absent from the input is
 // simply omitted from the output.
 func BuildSelect(cfg SelectConfig) func(types.Record) types.Record {

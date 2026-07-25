@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/operator"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/sink"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/source"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/state"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/operator"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/sink"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/source"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/state"
 )
 
 // PlanConfig is the input to BuildPlan.
@@ -186,7 +186,7 @@ func BuildPlan(cfg PlanConfig) ([]Stage, error) {
 			onSnap := cfg.OnSnapshot
 			bs.SetBarrierSnapshot(func(id string, snap []byte, err error) {
 				if err != nil {
-					fmt.Printf("mailer: barrier snapshot failed for %s: %v\n", key, err)
+					fmt.Printf("weibo: barrier snapshot failed for %s: %v\n", key, err)
 					return
 				}
 				onSnap(id, key, snap)

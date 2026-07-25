@@ -27,19 +27,19 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/checkpoint"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/sink"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/source"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/types"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/checkpoint"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/sink"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/source"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/types"
 )
 
 func main() {
-	env := mailer.NewEnv().
+	env := weibo.NewEnv().
 		// The checkpoint interval is also the output visibility
 		// latency: records become readable (read_committed) when
 		// their interval's transaction commits.
-		WithCheckpointing(5*time.Second, checkpoint.NewFileStorage("/tmp/mailer-eo-checkpoints"))
+		WithCheckpointing(5*time.Second, checkpoint.NewFileStorage("/tmp/weibo-eo-checkpoints"))
 
 	// KafkaExactlyOnce(): no eager offset commits — offsets commit
 	// with the checkpoint, after the sink transaction.

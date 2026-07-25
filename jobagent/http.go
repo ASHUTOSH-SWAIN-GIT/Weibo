@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/observability/metrics"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/observability/metrics"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 

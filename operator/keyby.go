@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"hash/fnv"
 
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/types"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/types"
 )
 
 const defaultPartitions = 16

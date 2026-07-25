@@ -14,9 +14,9 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/source"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/types"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/source"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/types"
 )
 
 const total = 5000
@@ -48,10 +48,10 @@ func main() {
 
 	// WithBufferSize(32): tiny edges so backpressure kicks in almost
 	// immediately. The source can emit millions/s, but it will be
-	// blocked to the sink's ~5k/s — watch mailer_edge_queue_size sit
-	// at capacity and mailer_stage_send_block_seconds_total grow if
+	// blocked to the sink's ~5k/s — watch weibo_edge_queue_size sit
+	// at capacity and weibo_stage_send_block_seconds_total grow if
 	// you scrape the Prometheus registry.
-	env := mailer.NewEnv().WithBufferSize(32)
+	env := weibo.NewEnv().WithBufferSize(32)
 
 	env.
 		FromSource(source.NewSliceSource(records)).

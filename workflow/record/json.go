@@ -32,7 +32,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/types"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/types"
 )
 
 // JSONRecord is a decoded JSON object: field name → value. Nested

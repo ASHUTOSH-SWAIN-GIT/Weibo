@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/operator"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/pipeline"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/types"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/operator"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/pipeline"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/types"
 )
 
 func runStatelessStage(t *testing.T, stage *pipeline.StatelessStage, records []types.Record) []types.Record {

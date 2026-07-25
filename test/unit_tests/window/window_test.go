@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/window"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/window"
 )
 
 func TestTumbling_AssignWindows_Basic(t *testing.T) {

@@ -6,16 +6,16 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/sink"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/source"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/types"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/watermark"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/window"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/sink"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/source"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/types"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/watermark"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/window"
 )
 
 func main() {
-	env := mailer.NewEnv()
+	env := weibo.NewEnv()
 
 	// Simulate order events arriving over time.
 	// Each order has a timestamp (event time) and an amount.

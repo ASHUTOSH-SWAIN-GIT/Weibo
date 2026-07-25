@@ -1,12 +1,12 @@
-package mailer
+package weibo
 
 import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/operator"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/sink"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/source"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/operator"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/sink"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/source"
 )
 
 // PipelineInfo is the JSON-serializable description of a pipeline.

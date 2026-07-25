@@ -4,9 +4,9 @@ import (
 	"context"
 	"time"
 
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/control/backend"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/control/lifecycle"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/control/store"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/control/backend"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/control/lifecycle"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/control/store"
 )
 
 // Reconcile drives every active run toward its job's desired state once.

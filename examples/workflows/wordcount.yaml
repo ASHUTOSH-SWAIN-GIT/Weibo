@@ -5,7 +5,7 @@ source:
   type: generator
   records:
     - {key: hello, value: '{"word":"hello"}'}
-    - {key: mailer, value: '{"word":"mailer"}'}
+    - {key: weibo, value: '{"word":"weibo"}'}
     - {key: hello, value: '{"word":"hello"}'}
 
 pipeline:

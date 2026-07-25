@@ -43,11 +43,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/sink"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/source"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/state"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/types"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/sink"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/source"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/state"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/types"
 )
 
 const (
@@ -270,7 +270,7 @@ func BenchmarkPipelineThroughput(b *testing.B) {
 						records[j] = types.NewRecord([]byte(keyOf(j)), valOf(j))
 					}
 
-					env := mailer.NewEnv().WithStateBackend(bk.factory(b.TempDir()))
+					env := weibo.NewEnv().WithStateBackend(bk.factory(b.TempDir()))
 					env.FromSource(source.NewSliceSource(records)).
 						KeyBy(func(r types.Record) []byte { return r.Key }).WithPartitions(4).
 						Reduce(func(accum []byte, curr types.Record) []byte { return curr.Value }).

@@ -10,12 +10,12 @@ import (
 )
 
 // controllerFlags registers the -controller and -token flags shared by every
-// management subcommand, defaulting to the MAILER_CONTROLLER / MAILER_TOKEN
+// management subcommand, defaulting to the WEIBO_CONTROLLER / WEIBO_TOKEN
 // environment so remote use needs no repeated flags.
 func controllerFlags(fs *flag.FlagSet) (controller, token *string) {
-	base := envOr("MAILER_CONTROLLER", "http://localhost:9000")
-	controller = fs.String("controller", base, "controller base URL (env MAILER_CONTROLLER)")
-	token = fs.String("token", os.Getenv("MAILER_TOKEN"), "bearer token, if the controller requires one (env MAILER_TOKEN)")
+	base := envOr("WEIBO_CONTROLLER", "http://localhost:9000")
+	controller = fs.String("controller", base, "controller base URL (env WEIBO_CONTROLLER)")
+	token = fs.String("token", os.Getenv("WEIBO_TOKEN"), "bearer token, if the controller requires one (env WEIBO_TOKEN)")
 	return controller, token
 }
 
@@ -61,7 +61,7 @@ func runStatus(args []string) int {
 	}
 	id := fs.Arg(0)
 	if id == "" {
-		fmt.Fprintln(os.Stderr, "usage: mailer status <job-id> [flags]")
+		fmt.Fprintln(os.Stderr, "usage: weibo status <job-id> [flags]")
 		return 2
 	}
 	d, err := newClient(*controller, *token).getJob(context.Background(), id)
@@ -113,7 +113,7 @@ func runLogs(args []string) int {
 	}
 	id := fs.Arg(0)
 	if id == "" {
-		fmt.Fprintln(os.Stderr, "usage: mailer logs <job-id> [-tail N] [flags]")
+		fmt.Fprintln(os.Stderr, "usage: weibo logs <job-id> [-tail N] [flags]")
 		return 2
 	}
 	out, err := newClient(*controller, *token).logs(context.Background(), id, *tail)
@@ -136,7 +136,7 @@ func runCancel(args []string) int {
 	}
 	id := fs.Arg(0)
 	if id == "" {
-		fmt.Fprintln(os.Stderr, "usage: mailer cancel <job-id> [flags]")
+		fmt.Fprintln(os.Stderr, "usage: weibo cancel <job-id> [flags]")
 		return 2
 	}
 	if err := newClient(*controller, *token).cancel(context.Background(), id); err != nil {
@@ -156,7 +156,7 @@ func runRestart(args []string) int {
 	}
 	id := fs.Arg(0)
 	if id == "" {
-		fmt.Fprintln(os.Stderr, "usage: mailer restart <job-id> [-savepoint label] [flags]")
+		fmt.Fprintln(os.Stderr, "usage: weibo restart <job-id> [-savepoint label] [flags]")
 		return 2
 	}
 	job, err := newClient(*controller, *token).restart(context.Background(), id, *savepoint)
@@ -181,7 +181,7 @@ func runSavepoint(args []string) int {
 	}
 	id := fs.Arg(0)
 	if id == "" || *label == "" {
-		fmt.Fprintln(os.Stderr, "usage: mailer savepoint <job-id> -label <name> [flags]")
+		fmt.Fprintln(os.Stderr, "usage: weibo savepoint <job-id> -label <name> [flags]")
 		return 2
 	}
 	if err := newClient(*controller, *token).savepoint(context.Background(), id, *label); err != nil {
@@ -194,7 +194,7 @@ func runSavepoint(args []string) int {
 // --- small shared helpers ---
 
 func fail(err error) int {
-	fmt.Fprintf(os.Stderr, "mailer: %v\n", err)
+	fmt.Fprintf(os.Stderr, "weibo: %v\n", err)
 	return 1
 }
 

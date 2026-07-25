@@ -8,7 +8,7 @@ import (
 	"github.com/segmentio/kafka-go/sasl/scram"
 )
 
-// BuildSASLMechanism maps a mailer SASLConfig to a kafka-go SASL mechanism.
+// BuildSASLMechanism maps a weibo SASLConfig to a kafka-go SASL mechanism.
 // Returns an error if the mechanism is unsupported.
 func BuildSASLMechanism(cfg SASLConfig) (sasl.Mechanism, error) {
 	switch cfg.Mechanism {

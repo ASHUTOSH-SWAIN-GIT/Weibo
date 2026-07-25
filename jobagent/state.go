@@ -1,10 +1,10 @@
-// Package jobagent supervises a single Mailer job in-process and exposes
-// its lifecycle over HTTP. One agent owns one *mailer.StreamExecutionEnv:
+// Package jobagent supervises a single Weibo job in-process and exposes
+// its lifecycle over HTTP. One agent owns one *weibo.StreamExecutionEnv:
 // it runs Execute in a goroutine, tracks lifecycle transitions, serves
 // /state, /describe, /metrics, /healthz, and translates POST /cancel into
 // a graceful context cancellation.
 //
-// This is the control contract every runner embeds (see the mailer-runner
+// This is the control contract every runner embeds (see the weibo-runner
 // binary and the job-orchestration plan, phase P1). It adds no container
 // or scheduling concerns — those live in the separate control plane.
 package jobagent

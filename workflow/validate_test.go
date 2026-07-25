@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/workflow"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/workflow"
 )
 
 func writeFile(path, content string) error { return os.WriteFile(path, []byte(content), 0o644) }

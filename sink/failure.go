@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/types"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/types"
 )
 
 // FailurePolicy determines what happens when a sink write fails
@@ -41,14 +41,14 @@ func applyFailurePolicy(ctx context.Context, policy FailurePolicy, dlq DLQ, r ty
 
 	case FailurePolicyDLQ:
 		if dlq == nil {
-			return fmt.Errorf("mailer/sink: DLQ is nil but FailurePolicyDLQ is configured")
+			return fmt.Errorf("weibo/sink: DLQ is nil but FailurePolicyDLQ is configured")
 		}
 		return dlq.Write(ctx, r)
 
 	case FailurePolicyFail:
-		return fmt.Errorf("mailer/sink: write failed after all retries, record key=%q", string(r.Key))
+		return fmt.Errorf("weibo/sink: write failed after all retries, record key=%q", string(r.Key))
 
 	default:
-		return fmt.Errorf("mailer/sink: write failed after all retries")
+		return fmt.Errorf("weibo/sink: write failed after all retries")
 	}
 }

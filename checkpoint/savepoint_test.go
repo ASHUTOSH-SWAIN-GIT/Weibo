@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/checkpoint"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/checkpoint"
 )
 
 func TestFileBlobstore_RoundTripAndGuards(t *testing.T) {

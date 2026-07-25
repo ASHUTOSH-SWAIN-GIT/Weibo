@@ -3,7 +3,7 @@ package source
 import (
 	"time"
 
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/auth"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/auth"
 )
 
 // kafkaSourceConfig holds the resolved configuration for a KafkaSource.

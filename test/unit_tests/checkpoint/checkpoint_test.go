@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/checkpoint"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/checkpoint"
 )
 
 func TestFileStorage_SaveAndLoad(t *testing.T) {

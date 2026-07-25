@@ -4,8 +4,8 @@ import (
 	"context"
 	"time"
 
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/types"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/watermark"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/types"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/watermark"
 )
 
 // WatermarkSource wraps a Source and injects watermark records into the stream

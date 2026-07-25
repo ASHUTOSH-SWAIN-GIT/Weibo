@@ -1,14 +1,14 @@
-# Mailer — Self-Hosted Deployment System
+# Weibo — Self-Hosted Deployment System
 
 Status: PROPOSAL.
 
 ## Context
 
-Make Mailer a **self-hosted stream-processing platform**: a user writes a pipeline
-with the Mailer SDK, builds it into a Docker image, pushes it to any OCI registry,
-and deploys it *by image reference* through the Mailer controller, which runs inside
+Make Weibo a **self-hosted stream-processing platform**: a user writes a pipeline
+with the Weibo SDK, builds it into a Docker image, pushes it to any OCI registry,
+and deploys it *by image reference* through the Weibo controller, which runs inside
 the user's own infrastructure (primarily a single VM/EC2 with Docker) and pulls &
-runs the container there. Data never leaves the user's network; Mailer only
+runs the container there. Data never leaves the user's network; Weibo only
 orchestrates.
 
 **Most of this already exists.** The controller already speaks only to a
@@ -25,7 +25,7 @@ via curl" and "push to a registry, one-command deploy on your own box":
 
 ### Scope decisions
 - **Backend:** Docker-first; add Kubernetes parity only where cheap.
-- **CLI:** full `mailer deploy` = `docker build` → `docker push` → submit, plus
+- **CLI:** full `weibo deploy` = `docker build` → `docker push` → submit, plus
   management commands.
 - **Registry auth:** assume a pre-authenticated host (operator ran `docker login`
   or uses an ECR credential helper + node IAM). No credential storage in the
@@ -70,7 +70,7 @@ fallback to a locally-present image. K8s gets pull-policy + pull-secret passthro
   `ImagePullPolicy` from `spec.PullPolicy`; add `ImagePullSecrets []string` to
   `KubernetesOptions` (`:39-45`) → `PodSpec.ImagePullSecrets` (`:203`).
 - `control/controller.go`: `launch` (`:376`) sets `LaunchSpec.PullPolicy`
-  (default `ifnotpresent` so YAML jobs on the local `mailer-runner:dev` never
+  (default `ifnotpresent` so YAML jobs on the local `weibo-runner:dev` never
   attempt a bogus pull).
 
 **Backward compat:** YAML jobs (local runner image) → `ifnotpresent` + local
@@ -83,11 +83,11 @@ where it's absent, confirm the controller pulls it.
 
 ---
 
-## Phase 2 — `mailer deploy` full CLI + management commands
+## Phase 2 — `weibo deploy` full CLI + management commands
 
 **Goal:** one command from source to running job, plus thin REST management commands.
 
-**Changes** (all in `control/cmd/mailer/`)
+**Changes** (all in `control/cmd/weibo/`)
 - `main.go`: extend the subcommand switch (`:35-45`) and `usage()` with
   `deploy`, `jobs`, `logs`, `cancel`, `restart`, `savepoint`, `status`. Keep
   `dashboard` unchanged.
@@ -96,8 +96,8 @@ where it's absent, confirm the controller pulls it.
   `restart(savepoint)`, `savepoint`, `logs(tail)`. Management subcommands are thin
   wrappers that print a compact table (or raw text for logs). Pure REST → works
   against a controller on another host.
-- New `deploy.go`: `runDeploy` — flags `-file` (default `mailer.yaml`),
-  `-dockerfile`, `-context`, `-controller` (env `MAILER_CONTROLLER`, default
+- New `deploy.go`: `runDeploy` — flags `-file` (default `weibo.yaml`),
+  `-dockerfile`, `-context`, `-controller` (env `WEIBO_CONTROLLER`, default
   `http://localhost:9000`), `-no-build`, `-no-push`, `-env KEY=VAL` (repeatable).
   Shell out via `os/exec` (already imported): `docker build -t <image> …` then
   `docker push <image>` (stream output), then POST the **raw manifest** to
@@ -109,9 +109,9 @@ where it's absent, confirm the controller pulls it.
 buildkit/auth; keeps the CLI thin) — distinct from Phase 1's server-side SDK pull.
 Only `dashboard` and `deploy` touch local docker; everything else is REST.
 
-**Verify:** `go build ./control/cmd/mailer`. Manual: in `mailer-test/sdk-job/`,
-`mailer deploy -controller http://host:9000`; confirm build→push→job appears via
-`mailer jobs`, `mailer logs <id>` streams, `cancel`/`restart` work.
+**Verify:** `go build ./control/cmd/weibo`. Manual: in `weibo-test/sdk-job/`,
+`weibo deploy -controller http://host:9000`; confirm build→push→job appears via
+`weibo jobs`, `weibo logs <id>` streams, `cancel`/`restart` work.
 
 ---
 
@@ -144,7 +144,7 @@ Only `dashboard` and `deploy` touch local docker; everything else is REST.
   (`corev1.ResourceRequirements`, requests=limits) via `resource.MustParse`
   (`resource` already imported, `:13`). Wire `-pvc-size` / `-storage-class`
   (already on `KubernetesOptions` + `ensurePVC` `:243-268`, just unwired) and the
-  Phase-1 `-image-pull-secrets` flag through `makeBackend` (`cmd/mailer/main.go:133-136`).
+  Phase-1 `-image-pull-secrets` flag through `makeBackend` (`cmd/weibo/main.go:133-136`).
 
 **Verify:** unit-test the two Docker parsers (`"500m"`→5e8, `"1Gi"`→1073741824).
 Manual: deploy with `resources: {cpu: "500m", memory: "256Mi"}`; `docker inspect`
@@ -164,11 +164,11 @@ empty token = today's fully-open behavior.
   on all routes **except** `GET /healthz` and `GET /{$}` (the HTML shell must load
   so the browser can prompt). Optional `POST /auth` returns 200 iff the token is
   valid (nicer UI verify).
-- `control/cmd/mailer/{main.go,client.go}`: `-auth-token` flag (env
-  `MAILER_AUTH_TOKEN`) on `runDashboard` → `api.NewServer(ctrl, token)` (`:91`);
-  `-token` flag (env `MAILER_TOKEN`) on the client → sets the `Authorization`
+- `control/cmd/weibo/{main.go,client.go}`: `-auth-token` flag (env
+  `WEIBO_AUTH_TOKEN`) on `runDashboard` → `api.NewServer(ctrl, token)` (`:91`);
+  `-token` flag (env `WEIBO_TOKEN`) on the client → sets the `Authorization`
   header on every request (no header when empty).
-- `control/ui/index.html`: token in `localStorage['mailer_token']`; add an
+- `control/ui/index.html`: token in `localStorage['weibo_token']`; add an
   `authFetch(url, opts)` wrapper that injects the header and route the `api.*`
   methods (`:116-126`) through it. On a `401`, clear the token and render a small
   inline token-entry form into `#app` (`:110`); on save, store and re-run the
@@ -193,15 +193,15 @@ works, without fails cleanly. With no token configured: unchanged.
 **Deliverables** (Markdown under `docs/` + flag/log polish)
 - **Operator quickstart:** install Docker, `docker login` (or ECR helper + node
   IAM) so the controller can pull; build/push the runner image; run
-  `mailer dashboard -addr :9000 -image <registry>/mailer-runner:tag -auth-token <secret>`;
-  then developer-side `mailer deploy`.
+  `weibo dashboard -addr :9000 -image <registry>/weibo-runner:tag -auth-token <secret>`;
+  then developer-side `weibo deploy`.
 - **Registry auth doc:** how Phase-1 credential resolution honors `docker login`
   and ECR (`credsStore`/`credHelpers`), and how to verify.
 - **Security checklist:** front the controller with a TLS reverse proxy (the API/UI
   is plain HTTP — the bearer token must not cross the network in cleartext); bind
   `-addr` to a private interface / SSH tunnel; rotate the token; note the Docker
   control port is already `127.0.0.1`-only (`docker.go:119`); use resource limits
-  as a runaway-job guardrail. Optional: systemd unit for `mailer dashboard`.
+  as a runaway-job guardrail. Optional: systemd unit for `weibo dashboard`.
 - **Backend selection doc:** Docker (default, single VM) vs Kubernetes
   (`-backend kubernetes` with `-pvc-size`/`-storage-class`/`-image-pull-secrets`).
 
@@ -223,5 +223,5 @@ sample SDK job → observe in UI with auth on → cancel).
 - `control/backend/backend.go` — `LaunchSpec` (PullPolicy, Resources)
 - `control/controller.go` — manifest schema, submit/launch, re-parse-at-launch
 - `control/api/api.go` — auth middleware
-- `control/cmd/mailer/main.go` (+ new `client.go`, `deploy.go`) — CLI
+- `control/cmd/weibo/main.go` (+ new `client.go`, `deploy.go`) — CLI
 - Secondary: `control/backend/kubernetes.go`, `control/ui/index.html`, `control/go.mod`

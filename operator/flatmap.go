@@ -1,6 +1,6 @@
 package operator
 
-import "github.com/ASHUTOSH-SWAIN-GIT/mailer/types"
+import "github.com/ASHUTOSH-SWAIN-GIT/weibo/types"
 
 // FlatMapOperator applies a 1:many transformation to each record.
 // The function returns a slice of records. If the slice is empty,

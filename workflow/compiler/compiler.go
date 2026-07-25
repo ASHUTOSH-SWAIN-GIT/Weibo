@@ -3,12 +3,12 @@ package compiler
 import (
 	"fmt"
 
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/workflow"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/workflow/secrets"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/workflow"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/workflow/secrets"
 )
 
-// Compiler turns a declarative workflow into an executable Mailer
+// Compiler turns a declarative workflow into an executable Weibo
 // environment. It does not start the pipeline and, apart from creating
 // job directories and (for a Postgres sink) opening a connection pool,
 // establishes no connections.
@@ -47,7 +47,7 @@ type PipelineGraph struct {
 // CompiledWorkflow bundles the executable environment with a static
 // description of what was compiled.
 type CompiledWorkflow struct {
-	Env      *mailer.StreamExecutionEnv
+	Env      *weibo.StreamExecutionEnv
 	Name     string
 	Graph    PipelineGraph
 	Delivery DeliveryGuarantee
@@ -57,11 +57,11 @@ type CompiledWorkflow struct {
 	CheckpointDir string
 }
 
-// Compile validates and compiles a workflow into an executable Mailer
+// Compile validates and compiles a workflow into an executable Weibo
 // environment, ready to Execute. It returns an error without producing
 // an environment if the workflow is invalid or references anything the
 // declarative compiler cannot build.
-func (c *Compiler) Compile(spec *workflow.WorkflowSpec) (*mailer.StreamExecutionEnv, error) {
+func (c *Compiler) Compile(spec *workflow.WorkflowSpec) (*weibo.StreamExecutionEnv, error) {
 	cw, err := c.CompileWorkflow(spec)
 	if err != nil {
 		return nil, err

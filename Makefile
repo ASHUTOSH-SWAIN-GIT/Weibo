@@ -1,4 +1,4 @@
-# mailer Makefile
+# weibo Makefile
 #
 # Common development tasks. All targets use bash and assume the working
 # directory is the repo root.
@@ -15,7 +15,7 @@ COVER_HTML ?= coverage.html
 
 .PHONY: help
 help: ## Show available targets
-	@awk 'BEGIN {FS = ":.*##"; printf "mailer make targets:\n\n"} \
+	@awk 'BEGIN {FS = ":.*##"; printf "weibo make targets:\n\n"} \
 		/^[a-zA-Z_-]+:.*?##/ { printf "  \033[1;34m%-20s\033[0m %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
 
 # --- build --------------------------------------------------------------------
@@ -84,4 +84,4 @@ ci: build vet fmt-check test-race ## Run the full local CI suite
 
 .PHONY: clean
 clean: clean-coverage ## Remove build artifacts
-	rm -f /tmp/mailer-*
+	rm -f /tmp/weibo-*

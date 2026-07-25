@@ -4,9 +4,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/workflow"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/workflow/compiler"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/workflow/operators"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/workflow"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/workflow/compiler"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/workflow/operators"
 )
 
 func TestCompilationBuildsGraphWithoutSecrets(t *testing.T) {

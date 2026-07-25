@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/workflow"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/workflow/record"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/workflow"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/workflow/record"
 )
 
 func TestInvalidOperatorOrderingRejected(t *testing.T) {

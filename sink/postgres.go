@@ -9,11 +9,11 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/types"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/types"
 )
 
 // PostgresSink writes records to a Postgres database in batches.
-// It implements the Sink interface for use in mailer pipelines.
+// It implements the Sink interface for use in weibo pipelines.
 //
 // Configure a PostgresSink with functional options via NewPostgresSink:
 //
@@ -49,18 +49,18 @@ func NewPostgresSink(opts ...PostgresSinkOption) *PostgresSink {
 	cfg.applyDefaults()
 
 	if cfg.dsn == "" {
-		panic("mailer/sink: PostgresSink requires PostgresDSN(...)")
+		panic("weibo/sink: PostgresSink requires PostgresDSN(...)")
 	}
 	if cfg.mapper == nil {
-		panic("mailer/sink: PostgresSink requires PostgresMapper(...)")
+		panic("weibo/sink: PostgresSink requires PostgresMapper(...)")
 	}
 	if err := cfg.validateWriteMode(); err != nil {
-		panic(fmt.Sprintf("mailer/sink: %v", err))
+		panic(fmt.Sprintf("weibo/sink: %v", err))
 	}
 
 	pool, err := pgxpool.New(context.Background(), cfg.dsn)
 	if err != nil {
-		panic(fmt.Sprintf("mailer/sink: postgres connection failed: %v", err))
+		panic(fmt.Sprintf("weibo/sink: postgres connection failed: %v", err))
 	}
 
 	return &PostgresSink{cfg: cfg, pool: pool}

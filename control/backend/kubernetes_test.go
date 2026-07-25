@@ -14,7 +14,7 @@ import (
 
 func k8sBackend(t *testing.T) *Kubernetes {
 	t.Helper()
-	return newK8s(fake.NewSimpleClientset(), KubernetesOptions{Image: "mailer-runner:dev", Namespace: "mailer"})
+	return newK8s(fake.NewSimpleClientset(), KubernetesOptions{Image: "weibo-runner:dev", Namespace: "weibo"})
 }
 
 // Launch must create the full object set with correct config.
@@ -26,7 +26,7 @@ func TestK8sLaunch_CreatesObjects(t *testing.T) {
 		JobID:            "abc123",
 		Name:             "wordcount",
 		WorkflowDoc:      []byte("name: wordcount\n"),
-		Env:              map[string]string{"MAILER_JOB_ID": "abc123", "API_KEY": "s3cr3t"},
+		Env:              map[string]string{"WEIBO_JOB_ID": "abc123", "API_KEY": "s3cr3t"},
 		ControlPort:      8080,
 		RestoreSavepoint: "before-upgrade",
 	})
@@ -35,31 +35,31 @@ func TestK8sLaunch_CreatesObjects(t *testing.T) {
 	}
 
 	// PVC (per job).
-	if _, err := k.cs.CoreV1().PersistentVolumeClaims("mailer").Get(ctx, "mailer-abc123-data", metav1.GetOptions{}); err != nil {
+	if _, err := k.cs.CoreV1().PersistentVolumeClaims("weibo").Get(ctx, "weibo-abc123-data", metav1.GetOptions{}); err != nil {
 		t.Fatalf("pvc not created: %v", err)
 	}
 	// ConfigMap holds the workflow.
-	cm, err := k.cs.CoreV1().ConfigMaps("mailer").Get(ctx, id, metav1.GetOptions{})
+	cm, err := k.cs.CoreV1().ConfigMaps("weibo").Get(ctx, id, metav1.GetOptions{})
 	if err != nil || cm.Data["workflow.yaml"] != "name: wordcount\n" {
 		t.Fatalf("configmap wrong: %v / %q", err, cm.Data["workflow.yaml"])
 	}
 	// Secret holds the env (never inline in the pod spec).
-	sec, err := k.cs.CoreV1().Secrets("mailer").Get(ctx, id, metav1.GetOptions{})
+	sec, err := k.cs.CoreV1().Secrets("weibo").Get(ctx, id, metav1.GetOptions{})
 	if err != nil || sec.StringData["API_KEY"] != "s3cr3t" {
 		t.Fatalf("secret wrong: %v", err)
 	}
 	// Service for the control surface.
-	if _, err := k.cs.CoreV1().Services("mailer").Get(ctx, id, metav1.GetOptions{}); err != nil {
+	if _, err := k.cs.CoreV1().Services("weibo").Get(ctx, id, metav1.GetOptions{}); err != nil {
 		t.Fatalf("service not created: %v", err)
 	}
 
 	// The Job's pod spec.
-	job, err := k.cs.BatchV1().Jobs("mailer").Get(ctx, id, metav1.GetOptions{})
+	job, err := k.cs.BatchV1().Jobs("weibo").Get(ctx, id, metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("job not created: %v", err)
 	}
 	if bl := job.Spec.BackoffLimit; bl == nil || *bl != 0 {
-		t.Errorf("backoffLimit must be 0 (mailer owns restarts), got %v", bl)
+		t.Errorf("backoffLimit must be 0 (weibo owns restarts), got %v", bl)
 	}
 	pod := job.Spec.Template.Spec
 	if pod.RestartPolicy != corev1.RestartPolicyNever {
@@ -100,10 +100,10 @@ func TestK8sLaunch_NoEnvNoSecret(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := k.cs.CoreV1().Secrets("mailer").Get(ctx, id, metav1.GetOptions{}); !apierrors.IsNotFound(err) {
+	if _, err := k.cs.CoreV1().Secrets("weibo").Get(ctx, id, metav1.GetOptions{}); !apierrors.IsNotFound(err) {
 		t.Errorf("no secret expected when env empty, got %v", err)
 	}
-	job, _ := k.cs.BatchV1().Jobs("mailer").Get(ctx, id, metav1.GetOptions{})
+	job, _ := k.cs.BatchV1().Jobs("weibo").Get(ctx, id, metav1.GetOptions{})
 	if len(job.Spec.Template.Spec.Containers[0].EnvFrom) != 0 {
 		t.Error("no envFrom expected when env empty")
 	}
@@ -123,11 +123,11 @@ func TestK8sStatus_Phases(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			cs := fake.NewSimpleClientset(&batchv1.Job{
-				ObjectMeta: metav1.ObjectMeta{Name: "mailer-x", Namespace: "mailer"},
+				ObjectMeta: metav1.ObjectMeta{Name: "weibo-x", Namespace: "weibo"},
 				Status:     c.js,
 			})
-			k := newK8s(cs, KubernetesOptions{Namespace: "mailer"})
-			st, err := k.Status(ctx, "mailer-x")
+			k := newK8s(cs, KubernetesOptions{Namespace: "weibo"})
+			st, err := k.Status(ctx, "weibo-x")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -153,7 +153,7 @@ func TestK8sStop_DeletesJob(t *testing.T) {
 	if err := k.Stop(ctx, id, 30*time.Second); err != nil {
 		t.Fatalf("Stop: %v", err)
 	}
-	if _, err := k.cs.BatchV1().Jobs("mailer").Get(ctx, id, metav1.GetOptions{}); !apierrors.IsNotFound(err) {
+	if _, err := k.cs.BatchV1().Jobs("weibo").Get(ctx, id, metav1.GetOptions{}); !apierrors.IsNotFound(err) {
 		t.Errorf("job should be deleted, got %v", err)
 	}
 	// Stop on an already-gone job is not an error.
@@ -172,17 +172,17 @@ func TestK8sRemove_KeepsPVC(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, check := range []func() error{
-		func() error { _, e := k.cs.BatchV1().Jobs("mailer").Get(ctx, id, metav1.GetOptions{}); return e },
-		func() error { _, e := k.cs.CoreV1().Services("mailer").Get(ctx, id, metav1.GetOptions{}); return e },
-		func() error { _, e := k.cs.CoreV1().ConfigMaps("mailer").Get(ctx, id, metav1.GetOptions{}); return e },
-		func() error { _, e := k.cs.CoreV1().Secrets("mailer").Get(ctx, id, metav1.GetOptions{}); return e },
+		func() error { _, e := k.cs.BatchV1().Jobs("weibo").Get(ctx, id, metav1.GetOptions{}); return e },
+		func() error { _, e := k.cs.CoreV1().Services("weibo").Get(ctx, id, metav1.GetOptions{}); return e },
+		func() error { _, e := k.cs.CoreV1().ConfigMaps("weibo").Get(ctx, id, metav1.GetOptions{}); return e },
+		func() error { _, e := k.cs.CoreV1().Secrets("weibo").Get(ctx, id, metav1.GetOptions{}); return e },
 	} {
 		if err := check(); !apierrors.IsNotFound(err) {
 			t.Errorf("resource should be removed, got %v", err)
 		}
 	}
 	// PVC survives.
-	if _, err := k.cs.CoreV1().PersistentVolumeClaims("mailer").Get(ctx, "mailer-j3-data", metav1.GetOptions{}); err != nil {
+	if _, err := k.cs.CoreV1().PersistentVolumeClaims("weibo").Get(ctx, "weibo-j3-data", metav1.GetOptions{}); err != nil {
 		t.Errorf("PVC must survive Remove: %v", err)
 	}
 }

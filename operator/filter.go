@@ -1,6 +1,6 @@
 package operator
 
-import "github.com/ASHUTOSH-SWAIN-GIT/mailer/types"
+import "github.com/ASHUTOSH-SWAIN-GIT/weibo/types"
 
 // FilterOperator keeps records that match the predicate and drops the rest.
 type FilterOperator struct {

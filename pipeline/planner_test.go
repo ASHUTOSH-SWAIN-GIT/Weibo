@@ -5,12 +5,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/operator"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/pipeline"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/sink"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/source"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/types"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/window"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/operator"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/pipeline"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/sink"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/source"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/types"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/window"
 )
 
 func buildPlan(t *testing.T, ops ...operator.Operator) []pipeline.Stage {

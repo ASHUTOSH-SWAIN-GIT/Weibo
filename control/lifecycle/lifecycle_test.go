@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/control/lifecycle"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/control/lifecycle"
 )
 
 func TestTerminalAndTransitions(t *testing.T) {

@@ -5,11 +5,11 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/observability/metrics"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/operator"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/sink"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/source"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/types"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/observability/metrics"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/operator"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/sink"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/source"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/types"
 )
 
 // internalBuf is the capacity of channels internal to a stage
@@ -59,14 +59,14 @@ func (s *SourceStage) Run(runCtx, hardCtx context.Context, _ <-chan types.Record
 			if runCtx.Err() == nil {
 				metrics.SourceErrorsTotal.Inc()
 			}
-			fmt.Printf("mailer: source error: %v\n", err)
+			fmt.Printf("weibo: source error: %v\n", err)
 		}
 		// Flush pending offset commits before downstream drains.
 		if d, ok := s.Source.(source.Drainable); ok {
 			flushCtx, cancel := context.WithTimeout(context.Background(), s.DrainTimeout)
 			defer cancel()
 			if err := d.Drain(flushCtx); err != nil {
-				fmt.Printf("mailer: source drain error: %v\n", err)
+				fmt.Printf("weibo: source drain error: %v\n", err)
 			}
 		}
 	}()

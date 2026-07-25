@@ -3,8 +3,8 @@ package operators
 import (
 	"fmt"
 
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/types"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/workflow/record"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/types"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/workflow/record"
 )
 
 // FilterConfig configures a built-in filter: keep records where the
@@ -37,7 +37,7 @@ func (cfg FilterConfig) Validate() error {
 	return nil
 }
 
-// BuildFilter returns an ordinary Mailer predicate. A record whose JSON
+// BuildFilter returns an ordinary Weibo predicate. A record whose JSON
 // cannot be decoded is dropped (returns false).
 func BuildFilter(cfg FilterConfig) func(types.Record) bool {
 	op := CompareOp(cfg.Operator)

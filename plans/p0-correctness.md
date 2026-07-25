@@ -17,7 +17,7 @@ Barriers are keyless records. The router in `wireKeyedStage` treats them like
 data:
 
 ```go
-// mailer.go — router goroutine
+// weibo.go — router goroutine
 w := kb.Route(r)
 workerIns[w] <- r
 ```
@@ -103,8 +103,8 @@ consumer loop between it and `merged`.
 
 | File | Change |
 |------|--------|
-| `mailer.go` | Router broadcast; merger alignment counting |
-| `mailer_test.go` (or `test/`) | Alignment + restore-consistency tests |
+| `weibo.go` | Router broadcast; merger alignment counting |
+| `weibo_test.go` (or `test/`) | Alignment + restore-consistency tests |
 
 Ship this on its own commit/PR before starting P0-2. The refactor migrates
 this exact logic into `pipeline/keyed_stage.go`, so nothing is thrown away.
@@ -115,7 +115,7 @@ this exact logic into `pipeline/keyed_stage.go`, so nothing is thrown away.
 
 ## Current architecture
 
-Every operator gets a bounded 256-cap channel (`mailer.go:160`), and the
+Every operator gets a bounded 256-cap channel (`weibo.go:160`), and the
 `countedRead`/`timedRead` metric wrappers each add another 256-buffer channel
 — so one operator hop buffers up to ~768 records.
 
@@ -216,7 +216,7 @@ Walk the operator list once:
 | Always | Stage 1 is SourceStage |
 | Stateless op (Map, Filter, FlatMap, Process) | Append to current StatelessStage if parallelism matches, else new one |
 | Parallelism differs (C4) | New StatelessStage |
-| `KeyByOperator.IsRouter()` | New KeyedStage; consume following `Cloneable` ops into it (reuse `takeStateful`, `mailer.go:253`) |
+| `KeyByOperator.IsRouter()` | New KeyedStage; consume following `Cloneable` ops into it (reuse `takeStateful`, `weibo.go:253`) |
 | Stateless op after keyed stage | New StatelessStage |
 | Always | Last stage is SinkStage |
 
@@ -238,8 +238,8 @@ Example — `Source → Map → Filter → KeyBy(4) → Window → Reduce → Ma
 
 ## Phase 3 — Wiring in `Execute()`
 
-**File: `mailer.go` at the repo root** (the package lives at the root — there
-is no `mailer/` subdir). Replace the per-operator loop (`mailer.go:149-171`):
+**File: `weibo.go` at the repo root** (the package lives at the root — there
+is no `weibo/` subdir). Replace the per-operator loop (`weibo.go:149-171`):
 
 ```go
 plan, err := pipeline.BuildPlan(env.source, env.operators, env.sink)
@@ -361,7 +361,7 @@ barriers flow inline in order.
 
 ## Phase 6 — Keyed stage execution
 
-**`pipeline/keyed_stage.go`** — migrate `wireKeyedStage` (`mailer.go:274`)
+**`pipeline/keyed_stage.go`** — migrate `wireKeyedStage` (`weibo.go:274`)
 into a `KeyedStage` implementing `Stage`. Structure unchanged (router → N
 workers with cloned operators → merger); the router broadcast and merger
 alignment are exactly the P0-1 fix, carried over. Keep: per-worker `Clone()`,
@@ -419,18 +419,18 @@ requires. `barrierDetect` + `saveCheckpoint` stay as-is.
 Per-edge (sampled by a 1s ticker):
 
 ```
-mailer_edge_queue_size{edge}          = len(edge.Ch)
-mailer_edge_queue_capacity{edge}      = cap(edge.Ch)
-mailer_edge_send_block_seconds{edge}  — time blocked in sendRecord
+weibo_edge_queue_size{edge}          = len(edge.Ch)
+weibo_edge_queue_capacity{edge}      = cap(edge.Ch)
+weibo_edge_send_block_seconds{edge}  — time blocked in sendRecord
 ```
 
 Per-stage:
 
 ```
-mailer_stage_records_in_total{stage,type}
-mailer_stage_records_out_total{stage,type}
-mailer_stage_errors_total{stage}
-mailer_stage_workers{stage}
+weibo_stage_records_in_total{stage,type}
+weibo_stage_records_out_total{stage,type}
+weibo_stage_errors_total{stage}
+weibo_stage_workers{stage}
 ```
 
 Existing per-operator metrics: reimplemented inline (C5), same names/labels.
@@ -463,7 +463,7 @@ after that lands.
 | `pipeline/stateless_stage.go` | New — worker pool + C1 alignment |
 | `pipeline/keyed_stage.go` | New — migrated wireKeyedStage (with P0-1 fix) |
 | `pipeline/metrics.go` | New — edge/stage metrics |
-| `mailer.go` (repo root) | Modify — plan + wire + two-phase shutdown |
+| `weibo.go` (repo root) | Modify — plan + wire + two-phase shutdown |
 | `stream.go` | Modify — WithParallelism |
 | `operator/operator.go` | Add — SingleProcessor, Parallel interfaces |
 | `operator/map.go`, `filter.go`, `flatmap.go`, `process.go` | Add — ProcessOne |
@@ -477,7 +477,7 @@ after that lands.
 4. `pipeline/planner.go` + planning tests.
 5. `pipeline/stateless_stage.go` — serial path first, then parallel with C1.
 6. `pipeline/keyed_stage.go` — migrate wireKeyedStage (P0-1 logic carries over).
-7. `mailer.go` — wire plan + edges, two-phase shutdown (C3), delete old loop.
+7. `weibo.go` — wire plan + edges, two-phase shutdown (C3), delete old loop.
 8. Metrics migration (C5) — inline counters, delete wrapper channels.
 9. Config (`WithBufferSize`, `WithParallelism`) + validation.
 10. Backpressure / alignment / shutdown tests; update examples.

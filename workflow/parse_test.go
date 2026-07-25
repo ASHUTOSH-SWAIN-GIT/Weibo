@@ -8,7 +8,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/workflow"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/workflow"
 )
 
 func marshalYAML(wf *workflow.Workflow) ([]byte, error) { return yaml.Marshal(wf) }
@@ -32,7 +32,7 @@ func TestLoad_YAML_OrderTotals(t *testing.T) {
 	if wf.Env.Checkpointing == nil || wf.Env.Checkpointing.Interval.Std() != 30*time.Second {
 		t.Errorf("checkpointing: got %+v", wf.Env.Checkpointing)
 	}
-	if wf.Env.State == nil || wf.Env.State.Backend != "pebble" || wf.Env.State.Dir != "/var/lib/mailer/state" {
+	if wf.Env.State == nil || wf.Env.State.Backend != "pebble" || wf.Env.State.Dir != "/var/lib/weibo/state" {
 		t.Errorf("state: got %+v", wf.Env.State)
 	}
 

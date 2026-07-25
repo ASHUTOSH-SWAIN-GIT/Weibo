@@ -1,8 +1,8 @@
 package operator
 
 import (
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/state"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/types"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/state"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/types"
 )
 
 // Operator transforms an input stream into an output stream.

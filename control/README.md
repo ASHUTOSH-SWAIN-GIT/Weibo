@@ -1,12 +1,12 @@
-# mailer control plane
+# weibo control plane
 
-The Mailer job control plane (job-orchestration plan, phase P3): submit a
+The Weibo job control plane (job-orchestration plan, phase P3): submit a
 workflow, and the controller launches one runner container for it, tracks its
 lifecycle, and keeps it converging on your desired state — the JobManager
 equivalent for the single-container-per-job model.
 
 This is a **separate Go module** (`control/`) so the core engine stays
-dependency-light: `go get github.com/ASHUTOSH-SWAIN-GIT/mailer` never pulls the
+dependency-light: `go get github.com/ASHUTOSH-SWAIN-GIT/weibo` never pulls the
 Docker/SQLite clients that live here.
 
 ## Layout
@@ -18,37 +18,37 @@ Docker/SQLite clients that live here.
 | `backend`                  | `ContainerBackend` interface + Docker + Kubernetes impls + in-memory fake. |
 | (root) `control`           | `Controller`: submit/cancel/restart + the reconciler loop. |
 | `api`                      | REST server over the controller. |
-| `cmd/mailer`               | The `mailer` CLI (`mailer dashboard`). |
+| `cmd/weibo`               | The `weibo` CLI (`weibo dashboard`). |
 
 ## Run
 
 Build the runner image once (from the repo root — see
-`cmd/mailer-runner/README.md`), then launch the dashboard:
+`cmd/weibo-runner/README.md`), then launch the dashboard:
 
 ```sh
-docker build -f Dockerfile.runner -t mailer-runner:dev .   # repo root
-cd control && go run ./cmd/mailer dashboard                # starts controller + opens the UI
+docker build -f Dockerfile.runner -t weibo-runner:dev .   # repo root
+cd control && go run ./cmd/weibo dashboard                # starts controller + opens the UI
 ```
 
-`mailer dashboard` boots the controller and opens the web UI in your browser.
+`weibo dashboard` boots the controller and opens the web UI in your browser.
 Add `-no-open` to run it headless (e.g. on a server), or `-addr :9000` to
 change the port. Everything — submit, watch, cancel, restart, savepoint —
 happens in that one UI.
 
 ## CLI
 
-`mailer dashboard` is the server; the rest are thin REST clients that talk to a
-running controller (local or remote) over `MAILER_CONTROLLER` (default
-`http://localhost:9000`) and `MAILER_TOKEN`:
+`weibo dashboard` is the server; the rest are thin REST clients that talk to a
+running controller (local or remote) over `WEIBO_CONTROLLER` (default
+`http://localhost:9000`) and `WEIBO_TOKEN`:
 
 ```sh
-mailer deploy -file mailer.yaml   # build (SDK) + push + submit a job
-mailer jobs                       # list jobs
-mailer status <id>                # detail + latest run + history
-mailer logs <id> [-tail N]        # container logs
-mailer cancel <id>                # graceful stop
-mailer restart <id> [-savepoint L]
-mailer savepoint <id> -label L    # stop-with-savepoint
+weibo deploy -file weibo.yaml   # build (SDK) + push + submit a job
+weibo jobs                       # list jobs
+weibo status <id>                # detail + latest run + history
+weibo logs <id> [-tail N]        # container logs
+weibo cancel <id>                # graceful stop
+weibo restart <id> [-savepoint L]
+weibo savepoint <id> -label L    # stop-with-savepoint
 ```
 
 For a production single-VM deployment (registry auth, bearer-token auth, TLS,
@@ -63,11 +63,11 @@ changes.
 **Docker** (default) — one container per job on the local daemon:
 
 ```sh
-mailer dashboard                         # -backend docker is the default
+weibo dashboard                         # -backend docker is the default
 ```
 
 **Kubernetes** — one `batch/v1` Job per job on a cluster (a `Job`, not a
-Deployment, so a completed job isn't auto-restarted — mailer's reconciler owns
+Deployment, so a completed job isn't auto-restarted — weibo's reconciler owns
 restarts). Each job gets a per-job PVC (state + checkpoints), a ConfigMap (the
 workflow), an optional Secret (env), and a ClusterIP Service, with `/healthz`
 liveness/readiness probes and `fsGroup` so the non-root runner can write the
@@ -75,14 +75,14 @@ volume.
 
 ```sh
 # The image must be pullable by the cluster — push it, or for kind:
-kind load docker-image mailer-runner:dev
-mailer dashboard -backend kubernetes -namespace default -image mailer-runner:dev
+kind load docker-image weibo-runner:dev
+weibo dashboard -backend kubernetes -namespace default -image weibo-runner:dev
 ```
 
 Notes for the Kubernetes backend:
 
-- **Image:** `mailer-runner:dev` is local; a real cluster needs it in a registry
-  (`-image <registry>/mailer-runner:tag`), or loaded into kind.
+- **Image:** `weibo-runner:dev` is local; a real cluster needs it in a registry
+  (`-image <registry>/weibo-runner:tag`), or loaded into kind.
 - **Live state proxy:** the dashboard reaches a job's `/state` and `/metrics`
   via the ClusterIP Service DNS, so those work when the controller runs
   **in-cluster**. Run the controller on the host (against a remote cluster) and
@@ -108,9 +108,9 @@ Notes for the Kubernetes backend:
 | `POST /auth`                  | Returns 200 iff the bearer token is valid (UI token check). |
 
 **Auth:** start the controller with `-auth-token <secret>` (env
-`MAILER_AUTH_TOKEN`) to require `Authorization: Bearer <secret>` on every route
+`WEIBO_AUTH_TOKEN`) to require `Authorization: Bearer <secret>` on every route
 except `GET /` and `GET /healthz`. The CLI sends it via `-token` /
-`MAILER_TOKEN`; the UI prompts and stores it. No token = open API (the default).
+`WEIBO_TOKEN`; the UI prompts and stores it. No token = open API (the default).
 
 ### Example
 
@@ -149,7 +149,7 @@ Two safeguards keep exactly-once intact when a job restarts:
   never coexist.
 - **Stable transactional id** — the job's spec (with its `transactionalID`) is
   stored and reused verbatim on every restart. Pin it to the job by referencing
-  the injected `MAILER_JOB_ID` (`transactionalID: ${MAILER_JOB_ID}`).
+  the injected `WEIBO_JOB_ID` (`transactionalID: ${WEIBO_JOB_ID}`).
 
 ## Design notes
 

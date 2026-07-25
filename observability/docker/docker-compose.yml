@@ -19,4 +19,4 @@ services:
     volumes:
       - ./grafana-datasources.yml:/etc/grafana/provisioning/datasources/datasources.yml
       - ./dashboards.yml:/etc/grafana/provisioning/dashboards/dashboards.yml
-      - ./mailer.json:/etc/grafana/provisioning/dashboards/mailer.json
+      - ./weibo.json:/etc/grafana/provisioning/dashboards/weibo.json

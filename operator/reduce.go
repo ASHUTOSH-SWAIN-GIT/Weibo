@@ -2,8 +2,8 @@ package operator
 
 import (
 	"encoding/json"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/state"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/types"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/state"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/types"
 )
 
 // ReduceFn takes the current accumulator and the incoming record,

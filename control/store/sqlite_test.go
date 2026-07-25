@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/control/store"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/workflow/compiler"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/control/store"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/workflow/compiler"
 	_ "modernc.org/sqlite"
 )
 

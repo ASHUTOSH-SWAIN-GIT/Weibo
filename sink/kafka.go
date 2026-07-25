@@ -7,14 +7,14 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/auth"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/types"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/auth"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/types"
 
 	"github.com/segmentio/kafka-go"
 )
 
 // KafkaSink writes records to a single Kafka topic.
-// It implements the Sink interface for use in mailer pipelines.
+// It implements the Sink interface for use in weibo pipelines.
 //
 // Configure a KafkaSink with functional options via NewKafkaSink:
 //
@@ -30,7 +30,7 @@ import (
 // Records are written in batches for efficiency. On context cancellation,
 // the sink drains remaining records for up to 5 seconds before flushing.
 //
-// mailer.Record fields are mapped to kafka.Message as follows:
+// weibo.Record fields are mapped to kafka.Message as follows:
 //   - Key       -> Message.Key
 //   - Value     -> Message.Value (or serializer output if configured)
 //   - Timestamp -> Message.Time
@@ -50,10 +50,10 @@ func NewKafkaSink(opts ...KafkaSinkOption) *KafkaSink {
 	cfg.applyDefaults()
 
 	if len(cfg.brokers) == 0 {
-		panic("mailer/sink: KafkaSink requires KafkaSinkBrokers(...)")
+		panic("weibo/sink: KafkaSink requires KafkaSinkBrokers(...)")
 	}
 	if cfg.topic == "" {
-		panic("mailer/sink: KafkaSink requires KafkaSinkTopic(...)")
+		panic("weibo/sink: KafkaSink requires KafkaSinkTopic(...)")
 	}
 
 	w := &kafka.Writer{
@@ -74,7 +74,7 @@ func NewKafkaSink(opts ...KafkaSinkOption) *KafkaSink {
 	return &KafkaSink{cfg: cfg, writer: w}
 }
 
-// toKafkaAcks maps the mailer AcksLevel enum to kafka-go's RequiredAcks value.
+// toKafkaAcks maps the weibo AcksLevel enum to kafka-go's RequiredAcks value.
 func toKafkaAcks(level AcksLevel) kafka.RequiredAcks {
 	switch level {
 	case AcksNone:
@@ -94,7 +94,7 @@ func buildTransport(saslCfg *auth.SASLConfig, tlsCfg *auth.TLSConfig) *kafka.Tra
 	if saslCfg != nil {
 		mechanism, err := auth.BuildSASLMechanism(*saslCfg)
 		if err != nil {
-			panic(fmt.Sprintf("mailer/sink: %v", err))
+			panic(fmt.Sprintf("weibo/sink: %v", err))
 		}
 		t.SASL = mechanism
 	}
@@ -102,7 +102,7 @@ func buildTransport(saslCfg *auth.SASLConfig, tlsCfg *auth.TLSConfig) *kafka.Tra
 	if tlsCfg != nil {
 		tlsConf, err := auth.BuildTLSConfig(*tlsCfg)
 		if err != nil {
-			panic(fmt.Sprintf("mailer/sink: %v", err))
+			panic(fmt.Sprintf("weibo/sink: %v", err))
 		}
 		t.TLS = tlsConf
 	}
@@ -247,7 +247,7 @@ func (k *KafkaSink) writeWithRetry(ctx context.Context, msgs []kafka.Message) er
 	return lastErr
 }
 
-// recordToKafka converts a mailer.Record to a kafka.Message.
+// recordToKafka converts a weibo.Record to a kafka.Message.
 // If a serializer is configured, it runs on the record to produce the
 // message value; otherwise Record.Value is used directly.
 func (k *KafkaSink) recordToKafka(r types.Record) kafka.Message {
@@ -256,7 +256,7 @@ func (k *KafkaSink) recordToKafka(r types.Record) kafka.Message {
 	if k.cfg.serializer != nil {
 		out, err := k.cfg.serializer.Serialize(r)
 		if err != nil {
-			fmt.Printf("mailer/sink: serialize error: %v\n", err)
+			fmt.Printf("weibo/sink: serialize error: %v\n", err)
 		} else {
 			value = out
 		}
@@ -280,7 +280,7 @@ func (k *KafkaSink) recordToKafka(r types.Record) kafka.Message {
 	}
 }
 
-// RecordToKafka converts a mailer.Record to a kafka.Message.
+// RecordToKafka converts a weibo.Record to a kafka.Message.
 // Exported for backwards compatibility and testing. Does not run any
 // configured serializer — use the sink's internal recordToKafka for that.
 func RecordToKafka(r types.Record) kafka.Message {

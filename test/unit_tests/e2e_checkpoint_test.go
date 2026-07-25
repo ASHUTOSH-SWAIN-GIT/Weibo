@@ -1,14 +1,14 @@
-package mailer_test
+package weibo_test
 
 import (
 	"encoding/binary"
 	"testing"
 	"time"
 
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/checkpoint"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/operator"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/types"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/window"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/checkpoint"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/operator"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/types"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/window"
 )
 
 // countReduceFn is a simple reduce function that counts records per key.

@@ -5,7 +5,7 @@ import (
 	"regexp"
 	"time"
 
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/types"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/types"
 )
 
 var postgresIdentRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)

@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/workflow/compiler"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/workflow/compiler"
 	_ "modernc.org/sqlite" // pure-Go driver: keeps the controller CGO-free
 )
 

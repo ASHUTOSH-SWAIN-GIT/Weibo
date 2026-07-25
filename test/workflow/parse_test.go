@@ -11,14 +11,14 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/sink"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/source"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/types"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/window"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/workflow"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/workflow/compiler"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/workflow/record"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/sink"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/source"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/types"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/window"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/workflow"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/workflow/compiler"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/workflow/record"
 )
 
 func TestParseYAMLAndJSON(t *testing.T) {
@@ -114,7 +114,7 @@ func runWorkflowYAML(t *testing.T, yamlDoc string, baseDir string) []string {
 
 func runSDKOrders(t *testing.T, stateBackend, stateDir, checkpointDir string) []string {
 	t.Helper()
-	env := mailer.NewEnv()
+	env := weibo.NewEnv()
 	if stateBackend == "pebble" {
 		env, _ = compiler.CompileRuntime("orders-sdk", t.TempDir(), &workflow.EnvSpec{
 			State: &workflow.StateSpec{Backend: "pebble", Dir: stateDir},

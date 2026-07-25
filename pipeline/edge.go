@@ -8,7 +8,7 @@ package pipeline
 import (
 	"context"
 
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/types"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/types"
 )
 
 // Edge is a bounded channel connecting two stages. A full edge blocks

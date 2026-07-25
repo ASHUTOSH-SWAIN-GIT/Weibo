@@ -6,9 +6,9 @@ import (
 	"strconv"
 	"sync"
 
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/observability/metrics"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/operator"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/types"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/observability/metrics"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/operator"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/types"
 )
 
 // KeyedStage executes stateful operators (Window, Reduce) with keyed
@@ -62,7 +62,7 @@ func NewKeyedStage(kb *operator.KeyByOperator, ops []operator.Operator, hooks St
 					onSnapshot := hooks.OnSnapshot
 					bs.SetBarrierSnapshot(func(id string, snap []byte, err error) {
 						if err != nil {
-							fmt.Printf("mailer: barrier snapshot failed for %s: %v\n", key, err)
+							fmt.Printf("weibo: barrier snapshot failed for %s: %v\n", key, err)
 							return
 						}
 						onSnapshot(id, key, snap)

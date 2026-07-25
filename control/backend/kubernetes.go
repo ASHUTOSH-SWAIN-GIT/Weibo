@@ -21,7 +21,7 @@ import (
 // Kubernetes runs each job as a batch/v1 Job on a cluster — the same jobs
 // the Docker backend runs locally, so the controller, reconciler, API, and
 // web UI are unchanged. A Job (not a Deployment) is used so a completed
-// pod is not auto-restarted by Kubernetes: mailer's own reconciler owns
+// pod is not auto-restarted by Kubernetes: weibo's own reconciler owns
 // restart decisions (backoffLimit is 0).
 //
 // Per job: a per-job PVC (state + checkpoints, reused across restarts), a
@@ -45,7 +45,7 @@ type KubernetesOptions struct {
 	StorageClass string // optional; empty → cluster default
 	// ImagePullSecrets names pre-created dockerconfigjson Secrets in the
 	// namespace, referenced on every job pod so the cluster can pull from
-	// private registries. Mailer references them; it does not create them.
+	// private registries. Weibo references them; it does not create them.
 	ImagePullSecrets []string
 }
 
@@ -112,8 +112,8 @@ func (k *Kubernetes) Launch(ctx context.Context, spec LaunchSpec) (string, error
 		port = 8080
 	}
 	jobID := spec.JobID
-	run := fmt.Sprintf("mailer-%s-%d", jobID, time.Now().UnixNano())
-	pvc := "mailer-" + jobID + "-data"
+	run := fmt.Sprintf("weibo-%s-%d", jobID, time.Now().UnixNano())
+	pvc := "weibo-" + jobID + "-data"
 
 	// Per-job volume, reused across restarts for state/checkpoints.
 	if err := k.ensurePVC(ctx, pvc, jobID); err != nil {
@@ -208,7 +208,7 @@ func (k *Kubernetes) buildJob(run, jobID, pvc, cmName, secretName, image string,
 	return &batchv1.Job{
 		ObjectMeta: k.meta(run, jobID, run),
 		Spec: batchv1.JobSpec{
-			BackoffLimit: int32Ptr(0), // no k8s retries; mailer reconciler restarts
+			BackoffLimit: int32Ptr(0), // no k8s retries; weibo reconciler restarts
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{Labels: labels(jobID, run)},
 				Spec: corev1.PodSpec{
@@ -246,7 +246,7 @@ func (k *Kubernetes) buildService(run, jobID string, port int) *corev1.Service {
 	return &corev1.Service{
 		ObjectMeta: k.meta(run, jobID, run),
 		Spec: corev1.ServiceSpec{
-			Selector: map[string]string{"mailer.run": run},
+			Selector: map[string]string{"weibo.run": run},
 			Ports: []corev1.ServicePort{{
 				Port: int32(port), TargetPort: intstr.FromInt(port),
 			}},
@@ -310,7 +310,7 @@ func (k *Kubernetes) Status(ctx context.Context, id string) (Status, error) {
 
 // podExitCode returns a failed pod's container exit code, or 1 if unknown.
 func (k *Kubernetes) podExitCode(ctx context.Context, run string) int {
-	pods, err := k.cs.CoreV1().Pods(k.namespace).List(ctx, metav1.ListOptions{LabelSelector: "mailer.run=" + run})
+	pods, err := k.cs.CoreV1().Pods(k.namespace).List(ctx, metav1.ListOptions{LabelSelector: "weibo.run=" + run})
 	if err != nil {
 		return 1
 	}
@@ -334,7 +334,7 @@ func (k *Kubernetes) Stop(ctx context.Context, id string, timeout time.Duration)
 }
 
 func (k *Kubernetes) Logs(ctx context.Context, id string, tail int) (string, error) {
-	pods, err := k.cs.CoreV1().Pods(k.namespace).List(ctx, metav1.ListOptions{LabelSelector: "mailer.run=" + id})
+	pods, err := k.cs.CoreV1().Pods(k.namespace).List(ctx, metav1.ListOptions{LabelSelector: "weibo.run=" + id})
 	if err != nil {
 		return "", err
 	}
@@ -376,9 +376,9 @@ func (k *Kubernetes) meta(name, jobID, run string) metav1.ObjectMeta {
 }
 
 func labels(jobID, run string) map[string]string {
-	m := map[string]string{"app.kubernetes.io/managed-by": "mailer", "mailer.job": jobID}
+	m := map[string]string{"app.kubernetes.io/managed-by": "weibo", "weibo.job": jobID}
 	if run != "" {
-		m["mailer.run"] = run
+		m["weibo.run"] = run
 	}
 	return m
 }

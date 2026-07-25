@@ -5,14 +5,14 @@ import (
 	"io"
 	"testing"
 
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/sink"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/source"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/sink"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/source"
 )
 
 // The harness wires the builder's pipeline and runs it to completion.
 func TestRunBuild_Completes(t *testing.T) {
-	build := func(env *mailer.StreamExecutionEnv) {
+	build := func(env *weibo.StreamExecutionEnv) {
 		env.FromSource(source.FromSlices([]string{"a", "b"}, []string{"1", "2"})).
 			ToSink(sink.NewBlackholeSink())
 	}
@@ -25,7 +25,7 @@ func TestRunBuild_Completes(t *testing.T) {
 
 // With checkpointing enabled the harness configures storage without error.
 func TestRunBuild_Checkpointing(t *testing.T) {
-	build := func(env *mailer.StreamExecutionEnv) {
+	build := func(env *weibo.StreamExecutionEnv) {
 		env.FromSource(source.FromSlices([]string{"a"}, []string{"1"})).
 			ToSink(sink.NewBlackholeSink())
 	}
@@ -39,7 +39,7 @@ func TestRunBuild_Checkpointing(t *testing.T) {
 // A bad CHECKPOINT_INTERVAL is a usage error.
 func TestRunBuild_BadInterval(t *testing.T) {
 	env := map[string]string{"DATA_DIR": t.TempDir(), "CHECKPOINT_INTERVAL": "nonsense"}
-	code := runBuild(context.Background(), func(*mailer.StreamExecutionEnv) {}, func(k string) string { return env[k] }, io.Discard, io.Discard)
+	code := runBuild(context.Background(), func(*weibo.StreamExecutionEnv) {}, func(k string) string { return env[k] }, io.Discard, io.Discard)
 	if code != 2 {
 		t.Fatalf("exit code: got %d, want 2", code)
 	}

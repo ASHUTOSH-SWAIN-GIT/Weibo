@@ -1,4 +1,4 @@
-// Command mailer-runner is the generic job entrypoint baked into the
+// Command weibo-runner is the generic job entrypoint baked into the
 // runner container image. It reads a mounted workflow document, compiles
 // it, and runs it under a jobagent supervisor that exposes the control
 // surface (/state, /cancel, /metrics, ...) on an HTTP port.
@@ -23,8 +23,8 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/sdk"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/workflow/runner"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/sdk"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/workflow/runner"
 )
 
 const (
@@ -46,7 +46,7 @@ func main() {
 func run(ctx context.Context, getenv func(string) string, stdout, stderr io.Writer) int {
 	workflowPath := getenv("WORKFLOW")
 	if workflowPath == "" {
-		fmt.Fprintln(stderr, "mailer-runner: WORKFLOW is required (path to the workflow file)")
+		fmt.Fprintln(stderr, "weibo-runner: WORKFLOW is required (path to the workflow file)")
 		return exitUsage
 	}
 	dataDir := getenv("DATA_DIR")
@@ -57,7 +57,7 @@ func run(ctx context.Context, getenv func(string) string, stdout, stderr io.Writ
 	// The engine derives per-job state/checkpoint dirs under DATA_DIR;
 	// make sure the mounted base exists.
 	if err := os.MkdirAll(dataDir, 0o755); err != nil {
-		fmt.Fprintf(stderr, "mailer-runner: create data dir %s: %v\n", dataDir, err)
+		fmt.Fprintf(stderr, "weibo-runner: create data dir %s: %v\n", dataDir, err)
 		return exitError
 	}
 
@@ -65,10 +65,10 @@ func run(ctx context.Context, getenv func(string) string, stdout, stderr io.Writ
 	// environment (runner.Options default resolver).
 	cw, err := runner.CompileFile(workflowPath, runner.Options{BaseDataDir: dataDir})
 	if err != nil {
-		fmt.Fprintf(stderr, "mailer-runner: compile %s: %v\n", workflowPath, err)
+		fmt.Fprintf(stderr, "weibo-runner: compile %s: %v\n", workflowPath, err)
 		return exitError
 	}
-	fmt.Fprintf(stdout, "mailer-runner: job=%s delivery=%s data=%s\n", cw.Name, cw.Delivery, dataDir)
+	fmt.Fprintf(stdout, "weibo-runner: job=%s delivery=%s data=%s\n", cw.Name, cw.Delivery, dataDir)
 
 	// The lifecycle (agent, serve, savepoints, graceful shutdown) is shared
 	// with SDK jobs so both behave identically.

@@ -3,7 +3,7 @@ package source
 import (
 	"context"
 
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/types"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/types"
 )
 
 // CommitPolicy determines what happens when a Kafka offset commit

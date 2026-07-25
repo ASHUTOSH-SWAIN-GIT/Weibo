@@ -1,4 +1,4 @@
-// Package control is the Mailer job control plane: it accepts workflow
+// Package control is the Weibo job control plane: it accepts workflow
 // submissions, launches one container per job through a ContainerBackend,
 // persists everything to a Store, and reconciles the running containers
 // toward each job's desired state. It is the JobManager equivalent for
@@ -21,12 +21,12 @@ import (
 	"gopkg.in/yaml.v3"
 	"k8s.io/apimachinery/pkg/api/resource"
 
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/control/backend"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/control/lifecycle"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/control/store"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/workflow"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/workflow/compiler"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/workflow/secrets"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/control/backend"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/control/lifecycle"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/control/store"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/workflow"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/workflow/compiler"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/workflow/secrets"
 )
 
 // Options configures a Controller.
@@ -385,7 +385,7 @@ func (c *Controller) validate(doc []byte, env map[string]string) (string, compil
 	if err != nil {
 		return "", "", compiler.PipelineGraph{}, err
 	}
-	tmp, err := os.MkdirTemp("", "mailer-validate-")
+	tmp, err := os.MkdirTemp("", "weibo-validate-")
 	if err != nil {
 		return "", "", compiler.PipelineGraph{}, err
 	}
@@ -511,11 +511,11 @@ func (c *Controller) getSecrets(jobID string) map[string]string {
 }
 
 // launchEnv builds the container environment: the job's secrets plus
-// MAILER_JOB_ID. Authors can pin a stable transactional id across
-// restarts by referencing it (e.g. transactionalID: ${MAILER_JOB_ID}),
+// WEIBO_JOB_ID. Authors can pin a stable transactional id across
+// restarts by referencing it (e.g. transactionalID: ${WEIBO_JOB_ID}),
 // which — with single-live-run fencing — keeps exactly-once safe.
 func (c *Controller) launchEnv(jobID string) map[string]string {
-	env := map[string]string{"MAILER_JOB_ID": jobID}
+	env := map[string]string{"WEIBO_JOB_ID": jobID}
 	maps.Copy(env, c.getSecrets(jobID))
 	return env
 }

@@ -256,7 +256,7 @@ func (c *Coordinator) finalize(ctx context.Context, id string) {
 	// the checkpoint file is the recovery source of truth).
 	if c.CommitOffsets != nil && p.offsets != nil {
 		if err := c.CommitOffsets(ctx, p.offsets); err != nil {
-			fmt.Printf("mailer: checkpoint %s: advisory offset commit failed: %v\n", id, err)
+			fmt.Printf("weibo: checkpoint %s: advisory offset commit failed: %v\n", id, err)
 		}
 	}
 	c.step(ctx, StepOffsetsCommitted, id)
@@ -287,7 +287,7 @@ func (c *Coordinator) step(ctx context.Context, s Step, id string) bool {
 func (c *Coordinator) abortFatal(ctx context.Context, id string, err error) {
 	if c.AbortSink != nil {
 		if aerr := c.AbortSink(ctx, id); aerr != nil {
-			fmt.Printf("mailer: checkpoint %s: sink abort failed: %v\n", id, aerr)
+			fmt.Printf("weibo: checkpoint %s: sink abort failed: %v\n", id, aerr)
 		}
 	}
 	c.cleanupStateDirs(id)

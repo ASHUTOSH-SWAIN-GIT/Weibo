@@ -40,7 +40,7 @@ type Docker struct {
 }
 
 // NewDocker connects to the Docker daemon from the environment. image is
-// the runner image tag to launch (e.g. "mailer-runner:dev").
+// the runner image tag to launch (e.g. "weibo-runner:dev").
 func NewDocker(image string) (*Docker, error) {
 	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
 	if err != nil {
@@ -149,7 +149,7 @@ const (
 	// sharedSavepointVolume is mounted into every job, so a savepoint
 	// written by one job is visible to another — a shared namespace like
 	// an object-store bucket, which an S3 backend replaces later (P6).
-	sharedSavepointVolume = "mailer-savepoints"
+	sharedSavepointVolume = "weibo-savepoints"
 )
 
 func (d *Docker) Launch(ctx context.Context, spec LaunchSpec) (string, error) {
@@ -176,7 +176,7 @@ func (d *Docker) Launch(ctx context.Context, spec LaunchSpec) (string, error) {
 
 	// Reuse a per-job named volume so restarts recover from checkpoints,
 	// plus the shared savepoints volume visible to every job.
-	volName := "mailer-" + spec.JobID
+	volName := "weibo-" + spec.JobID
 	for _, v := range []string{volName, sharedSavepointVolume} {
 		if _, err := d.cli.VolumeCreate(ctx, volume.CreateOptions{Name: v}); err != nil {
 			return "", fmt.Errorf("docker: create volume %s: %w", v, err)
@@ -206,7 +206,7 @@ func (d *Docker) Launch(ctx context.Context, spec LaunchSpec) (string, error) {
 		Image:        image,
 		Env:          env,
 		ExposedPorts: nat.PortSet{portSpec: struct{}{}},
-		Labels:       map[string]string{"mailer.job": spec.JobID, "mailer.name": spec.Name},
+		Labels:       map[string]string{"weibo.job": spec.JobID, "weibo.name": spec.Name},
 	}
 	host := &container.HostConfig{
 		Binds: []string{
@@ -220,7 +220,7 @@ func (d *Docker) Launch(ctx context.Context, spec LaunchSpec) (string, error) {
 	if err := applyResources(host, spec.Resources); err != nil {
 		return "", fmt.Errorf("docker: %w", err)
 	}
-	name := fmt.Sprintf("mailer-%s-%d", spec.JobID, time.Now().UnixNano())
+	name := fmt.Sprintf("weibo-%s-%d", spec.JobID, time.Now().UnixNano())
 
 	created, err := d.cli.ContainerCreate(ctx, cfg, host, nil, nil, name)
 	if err != nil {

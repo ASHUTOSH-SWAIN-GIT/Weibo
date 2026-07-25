@@ -6,10 +6,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/control"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/control/backend"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/control/lifecycle"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/control/store"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/control"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/control/backend"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/control/lifecycle"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/control/store"
 )
 
 const validWorkflow = `name: wordcount
@@ -34,7 +34,7 @@ func newController(t *testing.T, fake *backend.Fake, restart lifecycle.RestartPo
 	c := control.New(control.Options{
 		Store:       st,
 		Backend:     fake,
-		Image:       "mailer-runner:test",
+		Image:       "weibo-runner:test",
 		Restart:     restart,
 		StopTimeout: time.Second,
 	})
@@ -228,8 +228,8 @@ func TestSingleLiveRunGuard(t *testing.T) {
 
 	// The container carries the stable job id for txn-id pinning.
 	run, _ := c.LatestRun(job.ID)
-	if fake.LastEnv(run.ContainerID)["MAILER_JOB_ID"] != job.ID {
-		t.Errorf("MAILER_JOB_ID not injected: %v", fake.LastEnv(run.ContainerID))
+	if fake.LastEnv(run.ContainerID)["WEIBO_JOB_ID"] != job.ID {
+		t.Errorf("WEIBO_JOB_ID not injected: %v", fake.LastEnv(run.ContainerID))
 	}
 
 	// Restart while the run is still live must stop the old one first, so

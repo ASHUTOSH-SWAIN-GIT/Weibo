@@ -12,13 +12,13 @@ import (
 
 	"github.com/segmentio/kafka-go"
 
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/observability/metrics"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/types"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/watermark"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/observability/metrics"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/types"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/watermark"
 )
 
 // KafkaSource reads records from one or more Kafka topics using a consumer group.
-// It implements the Source interface for use in mailer pipelines,
+// It implements the Source interface for use in weibo pipelines,
 // and the CheckpointSource interface for checkpoint/recovery support.
 //
 // Configure a KafkaSource with functional options via NewKafkaSource:
@@ -32,7 +32,7 @@ import (
 //	    source.KafkaWithWatermarks(1*time.Second),
 //	)
 //
-// Kafka message fields are mapped to mailer.Record as follows:
+// Kafka message fields are mapped to weibo.Record as follows:
 //   - Key     -> Record.Key
 //   - Value   -> Record.Value
 //   - Time    -> Record.Timestamp
@@ -75,20 +75,20 @@ func NewKafkaSource(opts ...KafkaSourceOption) *KafkaSource {
 	cfg.applyDefaults()
 
 	if len(cfg.brokers) == 0 {
-		panic("mailer/source: KafkaSource requires KafkaBrokers(...)")
+		panic("weibo/source: KafkaSource requires KafkaBrokers(...)")
 	}
 	if len(cfg.topics) == 0 && cfg.topic == "" {
-		panic("mailer/source: KafkaSource requires KafkaTopic or KafkaTopics")
+		panic("weibo/source: KafkaSource requires KafkaTopic or KafkaTopics")
 	}
 
 	ks := &KafkaSource{cfg: cfg}
 
 	if cfg.parallel {
 		if cfg.groupID != "" {
-			panic("mailer/source: KafkaParallel and KafkaGroupID are mutually exclusive")
+			panic("weibo/source: KafkaParallel and KafkaGroupID are mutually exclusive")
 		}
 		if cfg.topic == "" || len(cfg.topics) > 0 {
-			panic("mailer/source: KafkaParallel requires a single KafkaTopic (KafkaTopics is not supported)")
+			panic("weibo/source: KafkaParallel requires a single KafkaTopic (KafkaTopics is not supported)")
 		}
 		ks.initParallelReaders()
 	} else {
@@ -118,13 +118,13 @@ func NewKafkaSource(opts ...KafkaSourceOption) *KafkaSource {
 func (k *KafkaSource) initParallelReaders() {
 	conn, err := kafka.Dial("tcp", k.cfg.brokers[0])
 	if err != nil {
-		panic(fmt.Sprintf("mailer/source: cannot dial broker for partitions: %v", err))
+		panic(fmt.Sprintf("weibo/source: cannot dial broker for partitions: %v", err))
 	}
 	defer conn.Close()
 
 	partitions, err := conn.ReadPartitions(k.cfg.topic)
 	if err != nil {
-		panic(fmt.Sprintf("mailer/source: cannot read partitions for %s: %v", k.cfg.topic, err))
+		panic(fmt.Sprintf("weibo/source: cannot read partitions for %s: %v", k.cfg.topic, err))
 	}
 
 	for _, p := range partitions {
@@ -177,7 +177,7 @@ func (k *KafkaSource) runOnce(ctx context.Context, out chan<- types.Record) erro
 			partInt := k.partitionIDs[i]
 			if offset, ok := k.restoredOffsets[partInt]; ok {
 				if err := r.SetOffset(offset); err != nil {
-					fmt.Printf("mailer/source: restore offset partition %d: %v\n", partInt, err)
+					fmt.Printf("weibo/source: restore offset partition %d: %v\n", partInt, err)
 				}
 			}
 		}
@@ -291,7 +291,7 @@ func (k *KafkaSource) processRecord(msg kafka.Message) *types.Record {
 				if k.cfg.deserDLQ != nil {
 					failRecord := record.WithHeader("_deser_error", []byte(err.Error()))
 					if werr := k.cfg.deserDLQ.Write(context.Background(), failRecord); werr != nil {
-						fmt.Printf("mailer/source: deser DLQ write error: %v\n", werr)
+						fmt.Printf("weibo/source: deser DLQ write error: %v\n", werr)
 					}
 				}
 			case DeserFailureFail:
@@ -363,7 +363,7 @@ func (k *KafkaSource) commitWithRetry(ctx context.Context, r *kafka.Reader, msgs
 	if k.cfg.commitFailPolicy == CommitPolicyFail {
 		return fmt.Errorf("kafka commit failed after %d retries: %w", k.cfg.commitMaxRetries, lastErr)
 	}
-	fmt.Printf("mailer/source: kafka commit failed after %d retries (skipping): %v\n", k.cfg.commitMaxRetries, lastErr)
+	fmt.Printf("weibo/source: kafka commit failed after %d retries (skipping): %v\n", k.cfg.commitMaxRetries, lastErr)
 	return nil
 }
 
@@ -448,7 +448,7 @@ func (k *KafkaSource) RestoreOffset(data []byte) error {
 	return nil
 }
 
-// KafkaToRecord converts a kafka.Message to a mailer.Record.
+// KafkaToRecord converts a kafka.Message to a weibo.Record.
 // Headers are copied into a map. Parsed is left nil here; the deserializer
 // (if configured) populates it in runOnce after this conversion.
 func KafkaToRecord(msg kafka.Message) types.Record {

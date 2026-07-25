@@ -1,6 +1,6 @@
 # Workflow Format
 
-Define a Mailer pipeline in YAML or JSON instead of Go. A workflow
+Define a Weibo pipeline in YAML or JSON instead of Go. A workflow
 document describes a pipeline's **shape and configuration**; it is
 parsed, validated, compiled into the same SDK objects the fluent API
 produces, and run by the same engine.
@@ -135,7 +135,7 @@ env, err := c.Compile(wf)                         // validate → resolve → so
 // ... then env.Execute(ctx) to run
 ```
 
-`Compile` produces a complete `*mailer.StreamExecutionEnv` **without
+`Compile` produces a complete `*weibo.StreamExecutionEnv` **without
 starting it** and without connecting (except a Postgres sink's pool).
 `CompileWorkflow` additionally returns the pipeline graph and the
 derived delivery guarantee (at-most-once / at-least-once / exactly-once).
@@ -147,8 +147,8 @@ result, err := runner.RunFile(ctx, "workflow.yaml", runner.Options{BaseDataDir: 
 ```
 
 ```sh
-go run ./cmd/mailer-workflow --file examples/workflows/order-totals.yaml
-go run ./cmd/mailer-workflow --file examples/workflows/order-totals.yaml --dry-run --describe
+go run ./cmd/weibo-workflow --file examples/workflows/order-totals.yaml
+go run ./cmd/weibo-workflow --file examples/workflows/order-totals.yaml --dry-run --describe
 ```
 
 ## `sink`

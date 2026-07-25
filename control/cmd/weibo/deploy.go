@@ -19,7 +19,7 @@ import (
 func runDeploy(args []string) int {
 	fs := flag.NewFlagSet("deploy", flag.ContinueOnError)
 	controller, token := controllerFlags(fs)
-	file := fs.String("file", "mailer.yaml", "job manifest to deploy")
+	file := fs.String("file", "weibo.yaml", "job manifest to deploy")
 	dockerfile := fs.String("dockerfile", "Dockerfile", "Dockerfile for the image build")
 	buildCtx := fs.String("context", ".", "docker build context directory")
 	noBuild := fs.Bool("no-build", false, "skip docker build (use an already-built image)")
@@ -65,7 +65,7 @@ func runDeploy(args []string) int {
 			}
 		}
 	} else if !*noBuild {
-		fmt.Fprintf(os.Stderr, "mailer: %s is not an SDK image manifest (kind: sdk with image:); submitting without build/push\n", *file)
+		fmt.Fprintf(os.Stderr, "weibo: %s is not an SDK image manifest (kind: sdk with image:); submitting without build/push\n", *file)
 	}
 
 	job, warning, err := newClient(*controller, *token).submit(context.Background(), doc, env)
@@ -76,7 +76,7 @@ func runDeploy(args []string) int {
 	if warning != "" {
 		fmt.Fprintf(os.Stderr, "warning: %s\n", warning)
 	}
-	fmt.Printf("  mailer status %s\n  mailer logs %s\n", job.ID, job.ID)
+	fmt.Printf("  weibo status %s\n  weibo logs %s\n", job.ID, job.ID)
 	return 0
 }
 

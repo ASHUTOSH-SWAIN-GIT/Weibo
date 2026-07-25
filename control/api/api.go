@@ -14,9 +14,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/control"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/control/store"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/control/ui"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/control"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/control/store"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/control/ui"
 )
 
 // Server adapts a Controller to an http.Handler.

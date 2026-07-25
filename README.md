@@ -1,8 +1,8 @@
-# Mailer
+# Weibo
 
 A stream processing engine in Go, inspired by Apache Flink.
 
-Mailer reads unbounded data streams from sources like Apache Kafka, applies real-time transformations (map, filter, reduce, window), and writes results to sinks. It supports stateful processing, windowed aggregations, durable disk-backed state, and fault tolerance via checkpointing — up to end-to-end exactly-once for Kafka-to-Kafka pipelines.
+Weibo reads unbounded data streams from sources like Apache Kafka, applies real-time transformations (map, filter, reduce, window), and writes results to sinks. It supports stateful processing, windowed aggregations, durable disk-backed state, and fault tolerance via checkpointing — up to end-to-end exactly-once for Kafka-to-Kafka pipelines.
 
 ---
 
@@ -15,7 +15,7 @@ Apache Flink is powerful but Java-heavy and complex. There's no idiomatic Go str
 - Window and aggregate events by time
 - Recover from failures without data loss
 
-Mailer fills this gap. It's a lightweight, embeddable Go library — not a cluster runtime. You import it, define your pipeline, and run it.
+Weibo fills this gap. It's a lightweight, embeddable Go library — not a cluster runtime. You import it, define your pipeline, and run it.
 
 ---
 
@@ -117,7 +117,7 @@ memory to the number of *open* windows.
 
 ### Watermark
 
-A watermark is a timestamp that says "no records with timestamp < X will arrive after this point." Watermarks are how Mailer decides when a window is complete. If a record arrives after the watermark has passed its timestamp, it's **late** — and can be dropped or handled separately.
+A watermark is a timestamp that says "no records with timestamp < X will arrive after this point." Watermarks are how Weibo decides when a window is complete. If a record arrives after the watermark has passed its timestamp, it's **late** — and can be dropped or handled separately.
 
 ```
 Records:    e1(2)  e2(5)  e3(8)  ---watermark(6)---  e4(7)  e5(10)
@@ -142,7 +142,7 @@ State is stored in a **State Backend**, chosen per pipeline via `WithStateBacken
 
 ```go
 env.WithStateBackend(state.InMemory())          // default: RAM, serialized into checkpoints
-env.WithStateBackend(state.Pebble("/var/lib/mailer/state")) // durable, disk-backed (LSM)
+env.WithStateBackend(state.Pebble("/var/lib/weibo/state")) // durable, disk-backed (LSM)
 ```
 
 Each stateful operator instance (per keyed worker) gets its own isolated backend. With Pebble, checkpoints are **native**: the operator hard-links its LSM files at the barrier instead of serializing state, so checkpoint cost scales with *changed* data, not total state, and the checkpoint file stays small.
@@ -220,7 +220,7 @@ from Kafka. Bounded memory, zero drops, no tuning required. Tune the
 buffer/latency trade-off with:
 
 ```go
-env := mailer.NewEnv().
+env := weibo.NewEnv().
     WithBufferSize(2048)          // edge capacity (default 1024)
 
 stream.Map(cpuHeavyTransform).
@@ -235,11 +235,11 @@ drain exceeds `WithShutdownTimeout` (default 30s) are blocked stages
 forcibly aborted.
 
 **Observability:** every edge and stage exports Prometheus metrics —
-`mailer_edge_queue_size` / `_capacity` (an edge pinned at capacity
+`weibo_edge_queue_size` / `_capacity` (an edge pinned at capacity
 identifies the bottleneck stage right after it),
-`mailer_stage_records_in_total` / `_out_total`,
-`mailer_stage_send_block_seconds_total` (time spent blocked on
-backpressure), `mailer_stage_workers`, and `mailer_stage_errors_total`,
+`weibo_stage_records_in_total` / `_out_total`,
+`weibo_stage_send_block_seconds_total` (time spent blocked on
+backpressure), `weibo_stage_workers`, and `weibo_stage_errors_total`,
 alongside the existing per-operator and per-worker metrics.
 
 ---
@@ -253,15 +253,15 @@ import (
     "context"
     "time"
 
-    "github.com/ASHUTOSH-SWAIN-GIT/mailer"
-    "github.com/ASHUTOSH-SWAIN-GIT/mailer/sink"
-    "github.com/ASHUTOSH-SWAIN-GIT/mailer/source"
-    "github.com/ASHUTOSH-SWAIN-GIT/mailer/types"
-    "github.com/ASHUTOSH-SWAIN-GIT/mailer/window"
+    "github.com/ASHUTOSH-SWAIN-GIT/weibo"
+    "github.com/ASHUTOSH-SWAIN-GIT/weibo/sink"
+    "github.com/ASHUTOSH-SWAIN-GIT/weibo/source"
+    "github.com/ASHUTOSH-SWAIN-GIT/weibo/types"
+    "github.com/ASHUTOSH-SWAIN-GIT/weibo/window"
 )
 
 func main() {
-    env := mailer.NewEnv()
+    env := weibo.NewEnv()
 
     kafkaSource := source.NewKafkaSource(
         source.KafkaBrokers("localhost:9092"),
@@ -335,8 +335,8 @@ windows, sources, sinks, state, checkpointing, and environment-backed
 secrets.
 
 ```sh
-go run ./cmd/mailer-workflow --file examples/workflows/order-totals.yaml
-go run ./cmd/mailer-workflow --file examples/workflows/order-totals.yaml --dry-run --describe
+go run ./cmd/weibo-workflow --file examples/workflows/order-totals.yaml
+go run ./cmd/weibo-workflow --file examples/workflows/order-totals.yaml --dry-run --describe
 ```
 
 Secrets use `${VAR}` placeholders in sensitive fields:
@@ -362,8 +362,8 @@ include resolved values in summaries, errors, or pipeline descriptions.
 ## Package Structure
 
 ```
-mailer/
-├── mailer.go              # StreamExecutionEnv, NewEnv(), Execute(), checkpointing glue
+weibo/
+├── weibo.go              # StreamExecutionEnv, NewEnv(), Execute(), checkpointing glue
 ├── stream.go              # Stream type (fluent chain builder)
 ├── metadata.go            # Pipeline description for the dashboard
 ├── types/
@@ -440,7 +440,7 @@ Up next (roughly in order): allowed-lateness + side outputs for late data, multi
 
 ### Why single-process, not distributed?
 
-Flink runs as a JobManager + TaskManager cluster. Mailer runs as a single Go process with goroutines. This makes it simple, embeddable, and easy to reason about. If you need multi-node parallelism, run multiple Mailer instances with different consumer group IDs (Kafka handles partitioning).
+Flink runs as a JobManager + TaskManager cluster. Weibo runs as a single Go process with goroutines. This makes it simple, embeddable, and easy to reason about. If you need multi-node parallelism, run multiple Weibo instances with different consumer group IDs (Kafka handles partitioning).
 
 ### Why barrier-based checkpointing?
 
@@ -464,7 +464,7 @@ Requirements for the exactly-once configuration:
 
 ### Why not just use Kafka Streams?
 
-Kafka Streams is Java-only. Mailer gives Go developers a native, embeddable stream processing library with similar semantics — without the JVM.
+Kafka Streams is Java-only. Weibo gives Go developers a native, embeddable stream processing library with similar semantics — without the JVM.
 
 ### Why segmentio/kafka-go over confluent-kafka-go?
 
@@ -474,7 +474,7 @@ Kafka Streams is Java-only. Mailer gives Go developers a native, embeddable stre
 
 ## Comparison with Flink
 
-| Feature | Apache Flink | Mailer |
+| Feature | Apache Flink | Weibo |
 |---------|-------------|--------|
 | Language | Java | Go |
 | Deployment | Cluster (JobManager + TaskManagers) | Single process, embeddable |

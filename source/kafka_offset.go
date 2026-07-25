@@ -6,7 +6,7 @@ import (
 	"github.com/segmentio/kafka-go"
 )
 
-// Offset is a mailer-agnostic Kafka offset position.
+// Offset is a weibo-agnostic Kafka offset position.
 // It replaces direct use of kafka-go's offset constants so users
 // never need to import segmentio/kafka-go.
 type Offset int64
@@ -30,7 +30,7 @@ type OffsetSpec struct {
 
 const offsetExplicit Offset = -3
 
-// toKafka maps a mailer OffsetSpec to the kafka-go StartOffset value,
+// toKafka maps a weibo OffsetSpec to the kafka-go StartOffset value,
 // or returns a concrete offset for explicit seeks.
 func (s OffsetSpec) toKafka() int64 {
 	switch s.Mode {

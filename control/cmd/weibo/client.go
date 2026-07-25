@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/control/store"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/control/store"
 )
 
 // client is a thin REST client for the controller API. Every management

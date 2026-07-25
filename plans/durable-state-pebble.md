@@ -144,7 +144,7 @@ Layout: `<stateDir>/live/<ownerID>/` per DB. Inside a DB, keys are
 
 ### D2 — Backend injection via factory, memory stays the default
 
-- `mailer.WithStateBackend(factory)` on the env, where
+- `weibo.WithStateBackend(factory)` on the env, where
   `factory: func(ownerID string) (state.StateBackend, error)`.
 - `state.Pebble(dir, opts...)` returns such a factory;
   `state.InMemory()` is the default (current behavior, zero change for
@@ -322,7 +322,7 @@ Crash windows tested (via existing parameterized EO suite):
 multiple crash points) passes with `-race`.
 
 **P6 — Metrics + docs + example.**
-`mailer_state_size_bytes{owner}`, `mailer_state_checkpoint_duration_seconds`,
+`weibo_state_size_bytes{owner}`, `weibo_state_checkpoint_duration_seconds`,
 pebble compaction gauges. README: state section rewrite (backend
 choice table, durability model D3, same-filesystem note).
 `examples/durable-state/`: kill -9 mid-run, restart, counts continue —
@@ -344,7 +344,7 @@ million-record windows possible; it only depends on P1+P2.
 | `operator/operator.go` | Add — `StateConfigurable` (P1) |
 | `operator/reduce.go` | Modify — injected backend, Clone inherits (P1); ref-based Snapshot (P4) |
 | `pipeline/planner.go`, `keyed_stage.go` | Modify — assign backends by owner ID at plan/clone time (P1) |
-| `mailer.go` | Add — `WithStateBackend`, Closer lifecycle (P1); restore-from-dir path (P4) |
+| `weibo.go` | Add — `WithStateBackend`, Closer lifecycle (P1); restore-from-dir path (P4) |
 | `checkpoint/checkpoint.go` | Add — `StateDirs`, dir layout + fsync order + GC (P4) |
 | `test/unit_tests/` | Parameterize recovery + EO suites over backend factories (P3/P5) |
 | `operator/window.go` | Rewrite buffers onto ListState (PW) |

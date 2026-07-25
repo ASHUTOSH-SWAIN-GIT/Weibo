@@ -3,8 +3,8 @@ package operators
 import (
 	"fmt"
 
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/types"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/workflow/record"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/types"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/workflow/record"
 )
 
 // FieldRename moves a field from one dotted path to another.
@@ -38,7 +38,7 @@ func (cfg RenameConfig) Validate() error {
 	return nil
 }
 
-// BuildRename returns an ordinary Mailer map function that renames
+// BuildRename returns an ordinary Weibo map function that renames
 // fields in order. A rename whose source field is absent is skipped.
 func BuildRename(cfg RenameConfig) func(types.Record) types.Record {
 	renames := append([]FieldRename(nil), cfg.Renames...)

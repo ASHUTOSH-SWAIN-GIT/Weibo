@@ -4,20 +4,20 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/source"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/types"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/window"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/workflow"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/workflow/operators"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/workflow/record"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/source"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/types"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/window"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/workflow"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/workflow/operators"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/workflow/record"
 )
 
 // applyOperators applies each declarative operator to the stream in
 // order, returning the stream after the last one. Only the built-in
 // declarative operators are compilable; ref-based map/flatMap/process
 // require a function registry and return an error.
-func applyOperators(env *mailer.StreamExecutionEnv, src source.Source, ops []workflow.Operator) (*mailer.Stream, error) {
+func applyOperators(env *weibo.StreamExecutionEnv, src source.Source, ops []workflow.Operator) (*weibo.Stream, error) {
 	stream := env.FromSource(src)
 	for i, op := range ops {
 		var err error
@@ -29,7 +29,7 @@ func applyOperators(env *mailer.StreamExecutionEnv, src source.Source, ops []wor
 	return stream, nil
 }
 
-func applyOperator(stream *mailer.Stream, op workflow.Operator) (*mailer.Stream, error) {
+func applyOperator(stream *weibo.Stream, op workflow.Operator) (*weibo.Stream, error) {
 	switch {
 	case op.Filter != nil:
 		fn := operators.BuildFilter(operators.FilterConfig{

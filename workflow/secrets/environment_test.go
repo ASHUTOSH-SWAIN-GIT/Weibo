@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/workflow/secrets"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/workflow/secrets"
 )
 
 func TestEnvironmentResolve(t *testing.T) {

@@ -46,6 +46,6 @@ kafka-dashboard
 *.db
 *.db-shm
 *.db-wal
-control/mailer-control.db
+control/weibo-control.db
 data/
 control/data/

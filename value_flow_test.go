@@ -1,15 +1,15 @@
-package mailer_test
+package weibo_test
 
 import (
 	"context"
 	"sync"
 	"testing"
 
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/source"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/types"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/workflow/operators"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/workflow/record"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/source"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/types"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/workflow/operators"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/workflow/record"
 )
 
 // captureSink records the (copied) Value of every record it receives.
@@ -40,7 +40,7 @@ func TestValueSurvivesFilterToSink(t *testing.T) {
 	cap := &captureSink{}
 	f := operators.BuildFilter(operators.FilterConfig{Field: "status", Operator: "equals", Value: "completed"})
 
-	env := mailer.NewEnv().FromSource(src).Filter(f, "completed").ToSink(cap)
+	env := weibo.NewEnv().FromSource(src).Filter(f, "completed").ToSink(cap)
 	if err := env.Execute(context.Background()); err != nil {
 		t.Fatalf("execute: %v", err)
 	}

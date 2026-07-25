@@ -11,8 +11,8 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/workflow/compiler"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/workflow/runner"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/workflow/compiler"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/workflow/runner"
 )
 
 const (
@@ -84,7 +84,7 @@ func runCLI(args []string, stdout, stderr io.Writer) int {
 
 func parseFlags(args []string, stderr io.Writer) (cliConfig, error) {
 	var cfg cliConfig
-	fs := flag.NewFlagSet("mailer-workflow", flag.ContinueOnError)
+	fs := flag.NewFlagSet("weibo-workflow", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	fs.StringVar(&cfg.file, "file", "", "workflow YAML/JSON path")
 	fs.StringVar(&cfg.dataDir, "data-dir", "", "base directory for derived state/checkpoint dirs")

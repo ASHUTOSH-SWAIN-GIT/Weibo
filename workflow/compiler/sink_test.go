@@ -4,11 +4,11 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/sink"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/types"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/workflow"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/workflow/compiler"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/workflow/operators"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/sink"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/types"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/workflow"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/workflow/compiler"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/workflow/operators"
 )
 
 func TestCompileSink_Kafka(t *testing.T) {
@@ -106,7 +106,7 @@ func TestCompileSink_Errors(t *testing.T) {
 		{"kafka dlq unsupported", workflow.SinkSpec{Type: "kafka", Kafka: &workflow.KafkaSinkSpec{Brokers: []string{"b"}, Topic: "t", OnError: "dlq"}}},
 		{"txn no txnID", workflow.SinkSpec{Type: "txnKafka", TxnKafka: &workflow.TxnKafkaSinkSpec{Brokers: []string{"b"}, Topic: "t"}}},
 		{"pg no dsn", workflow.SinkSpec{Type: "postgres", Postgres: &workflow.PostgresSinkSpec{Table: "t", Mapping: map[string]string{"a": "a"}}}},
-		{"pg unset dsn var", workflow.SinkSpec{Type: "postgres", Postgres: &workflow.PostgresSinkSpec{DSN: "${MAILER_TEST_UNSET_DSN}", Table: "t", Mapping: map[string]string{"a": "a"}}}},
+		{"pg unset dsn var", workflow.SinkSpec{Type: "postgres", Postgres: &workflow.PostgresSinkSpec{DSN: "${WEIBO_TEST_UNSET_DSN}", Table: "t", Mapping: map[string]string{"a": "a"}}}},
 		{"pg no table", workflow.SinkSpec{Type: "postgres", Postgres: &workflow.PostgresSinkSpec{DSN: "x", Mapping: map[string]string{"a": "a"}}}},
 		{"pg unsafe table", workflow.SinkSpec{Type: "postgres", Postgres: &workflow.PostgresSinkSpec{DSN: "x", Table: "t; DROP TABLE u", Mapping: map[string]string{"a": "a"}}}},
 		{"pg no mapping", workflow.SinkSpec{Type: "postgres", Postgres: &workflow.PostgresSinkSpec{DSN: "x", Table: "t"}}},

@@ -1,4 +1,4 @@
-// Package workflow defines a declarative format for Mailer pipelines.
+// Package workflow defines a declarative format for Weibo pipelines.
 //
 // A workflow document (YAML or JSON) describes a pipeline's source,
 // ordered operators, sink, and runtime settings. Supported built-in

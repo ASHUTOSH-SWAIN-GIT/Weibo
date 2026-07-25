@@ -1,6 +1,6 @@
 {
-  "title": "Mailer Pipeline",
-  "uid": "mailer",
+  "title": "Weibo Pipeline",
+  "uid": "weibo",
   "refresh": "5s",
   "panels": [
     {
@@ -8,7 +8,7 @@
       "type": "stat",
       "gridPos": {"x": 0, "y": 0, "w": 4, "h": 3},
       "targets": [
-        {"expr": "mailer_pipeline_running", "legendFormat": "running"}
+        {"expr": "weibo_pipeline_running", "legendFormat": "running"}
       ],
       "fieldConfig": {
         "defaults": {
@@ -25,9 +25,9 @@
       "type": "timeseries",
       "gridPos": {"x": 4, "y": 0, "w": 20, "h": 3},
       "targets": [
-        {"expr": "rate(mailer_records_read_total[15s])", "legendFormat": "read"},
-        {"expr": "rate(mailer_records_processed_total[15s])", "legendFormat": "{{operator}}"},
-        {"expr": "rate(mailer_records_written_total[15s])", "legendFormat": "written"}
+        {"expr": "rate(weibo_records_read_total[15s])", "legendFormat": "read"},
+        {"expr": "rate(weibo_records_processed_total[15s])", "legendFormat": "{{operator}}"},
+        {"expr": "rate(weibo_records_written_total[15s])", "legendFormat": "written"}
       ],
       "fieldConfig": {
         "defaults": {"custom": {"fillOpacity": 15, "lineWidth": 2}}
@@ -38,9 +38,9 @@
       "type": "timeseries",
       "gridPos": {"x": 0, "y": 3, "w": 12, "h": 8},
       "targets": [
-        {"expr": "histogram_quantile(0.50, rate(mailer_operator_latency_seconds_bucket[30s]))", "legendFormat": "{{operator}} p50"},
-        {"expr": "histogram_quantile(0.95, rate(mailer_operator_latency_seconds_bucket[30s]))", "legendFormat": "{{operator}} p95"},
-        {"expr": "histogram_quantile(0.99, rate(mailer_operator_latency_seconds_bucket[30s]))", "legendFormat": "{{operator}} p99"}
+        {"expr": "histogram_quantile(0.50, rate(weibo_operator_latency_seconds_bucket[30s]))", "legendFormat": "{{operator}} p50"},
+        {"expr": "histogram_quantile(0.95, rate(weibo_operator_latency_seconds_bucket[30s]))", "legendFormat": "{{operator}} p95"},
+        {"expr": "histogram_quantile(0.99, rate(weibo_operator_latency_seconds_bucket[30s]))", "legendFormat": "{{operator}} p99"}
       ],
       "fieldConfig": {
         "defaults": {"unit": "s", "custom": {"lineWidth": 2}}
@@ -51,9 +51,9 @@
       "type": "timeseries",
       "gridPos": {"x": 12, "y": 3, "w": 12, "h": 8},
       "targets": [
-        {"expr": "histogram_quantile(0.50, rate(mailer_sink_write_latency_seconds_bucket[30s]))", "legendFormat": "p50"},
-        {"expr": "histogram_quantile(0.95, rate(mailer_sink_write_latency_seconds_bucket[30s]))", "legendFormat": "p95"},
-        {"expr": "histogram_quantile(0.99, rate(mailer_sink_write_latency_seconds_bucket[30s]))", "legendFormat": "p99"}
+        {"expr": "histogram_quantile(0.50, rate(weibo_sink_write_latency_seconds_bucket[30s]))", "legendFormat": "p50"},
+        {"expr": "histogram_quantile(0.95, rate(weibo_sink_write_latency_seconds_bucket[30s]))", "legendFormat": "p95"},
+        {"expr": "histogram_quantile(0.99, rate(weibo_sink_write_latency_seconds_bucket[30s]))", "legendFormat": "p99"}
       ],
       "fieldConfig": {
         "defaults": {"unit": "s", "custom": {"lineWidth": 2}}
@@ -63,19 +63,19 @@
       "title": "Total Records",
       "type": "stat",
       "gridPos": {"x": 0, "y": 11, "w": 4, "h": 3},
-      "targets": [{"expr": "mailer_records_read_total"}]
+      "targets": [{"expr": "weibo_records_read_total"}]
     },
     {
       "title": "Total Written",
       "type": "stat",
       "gridPos": {"x": 4, "y": 11, "w": 4, "h": 3},
-      "targets": [{"expr": "mailer_records_written_total"}]
+      "targets": [{"expr": "weibo_records_written_total"}]
     },
     {
       "title": "Total Failed",
       "type": "stat",
       "gridPos": {"x": 8, "y": 11, "w": 4, "h": 3},
-      "targets": [{"expr": "mailer_records_failed_total"}],
+      "targets": [{"expr": "weibo_records_failed_total"}],
       "fieldConfig": {
         "defaults": {
           "thresholds": {"steps": [{"color": "green", "value": null}, {"color": "red", "value": 1}]}
@@ -87,8 +87,8 @@
       "type": "timeseries",
       "gridPos": {"x": 12, "y": 11, "w": 12, "h": 3},
       "targets": [
-        {"expr": "rate(mailer_source_errors_total[15s])", "legendFormat": "source errors"},
-        {"expr": "rate(mailer_sink_errors_total[15s])", "legendFormat": "sink errors"}
+        {"expr": "rate(weibo_source_errors_total[15s])", "legendFormat": "source errors"},
+        {"expr": "rate(weibo_sink_errors_total[15s])", "legendFormat": "sink errors"}
       ],
       "fieldConfig": {
         "defaults": {"custom": {"fillOpacity": 15, "lineWidth": 2}}

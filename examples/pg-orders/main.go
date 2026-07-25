@@ -10,11 +10,11 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/sink"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/source"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/types"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/window"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/sink"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/source"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/types"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/window"
 )
 
 type Order struct {
@@ -26,7 +26,7 @@ type Order struct {
 func main() {
 	dsn := os.Getenv("PG_DSN")
 	if dsn == "" {
-		dsn = "postgres://testuser:testpass@localhost:5433/mailertest?sslmode=disable"
+		dsn = "postgres://testuser:testpass@localhost:5433/weibotest?sslmode=disable"
 	}
 
 	records := make([]types.Record, 8)
@@ -50,7 +50,7 @@ func main() {
 		}
 	}
 
-	env := mailer.NewEnv()
+	env := weibo.NewEnv()
 
 	src := source.NewSliceSource(records)
 

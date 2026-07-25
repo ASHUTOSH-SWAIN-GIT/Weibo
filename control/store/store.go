@@ -11,7 +11,7 @@ package store
 import (
 	"time"
 
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/workflow/compiler"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/workflow/compiler"
 )
 
 // DesiredState is the operator's intent for a job, independent of what

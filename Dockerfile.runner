@@ -1,8 +1,8 @@
-# Generic Mailer job runner image (job-orchestration plan, phase P2).
+# Generic Weibo job runner image (job-orchestration plan, phase P2).
 # One prebuilt image runs any YAML/JSON workflow: mount the document,
 # point WORKFLOW at it, mount a volume at DATA_DIR for durable state.
 #
-#   docker build -f Dockerfile.runner -t mailer-runner:dev .
+#   docker build -f Dockerfile.runner -t weibo-runner:dev .
 
 # --- build stage: static binary, no cgo -------------------------------
 FROM golang:1.26 AS build
@@ -15,14 +15,14 @@ RUN go mod download
 COPY . .
 # CGO off → a fully static binary that runs on distroless/scratch.
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" \
-    -o /out/mailer-runner ./cmd/mailer-runner
+    -o /out/weibo-runner ./cmd/weibo-runner
 # Pre-create the mount points so the fresh named volumes inherit nonroot
 # ownership (distroless has no shell to chown at runtime).
 RUN mkdir -p /out/data /out/savepoints
 
 # --- runtime stage: distroless, non-root ------------------------------
 FROM gcr.io/distroless/static-debian12:nonroot
-COPY --from=build /out/mailer-runner /usr/local/bin/mailer-runner
+COPY --from=build /out/weibo-runner /usr/local/bin/weibo-runner
 # 65532 is the distroless "nonroot" uid/gid. Owning the volume mount
 # points lets the runner create per-job state/checkpoint dirs under them.
 COPY --from=build --chown=65532:65532 /out/data /data
@@ -36,4 +36,4 @@ VOLUME ["/data", "/savepoints"]
 EXPOSE 8080
 USER nonroot:nonroot
 
-ENTRYPOINT ["/usr/local/bin/mailer-runner"]
+ENTRYPOINT ["/usr/local/bin/weibo-runner"]

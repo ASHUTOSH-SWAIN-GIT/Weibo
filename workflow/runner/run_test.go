@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/workflow/runner"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/workflow/runner"
 )
 
 func TestCompileFileDryRunDoesNotExecute(t *testing.T) {

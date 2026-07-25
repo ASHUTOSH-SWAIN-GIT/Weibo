@@ -1,5 +1,5 @@
 // Package compiler turns a parsed, validated workflow spec into the
-// existing Mailer SDK objects (sources, operators, sinks, environment).
+// existing Weibo SDK objects (sources, operators, sinks, environment).
 //
 // Compilation constructs objects only — it never opens a network
 // connection. A Kafka consumer-group source builds a lazy reader
@@ -13,11 +13,11 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/auth"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/source"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/types"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/workflow"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/workflow/record"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/auth"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/source"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/types"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/workflow"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/workflow/record"
 )
 
 // CompileSource builds a source.Source from a source spec. It returns

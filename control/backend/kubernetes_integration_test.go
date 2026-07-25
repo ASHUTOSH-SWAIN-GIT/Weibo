@@ -6,10 +6,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/control/backend"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/control/backend"
 )
 
-const k8sTestImage = "mailer-runner:dev"
+const k8sTestImage = "weibo-runner:dev"
 
 // clusterReady skips unless a Kubernetes cluster is reachable.
 func clusterReady(t *testing.T) *backend.Kubernetes {
@@ -34,7 +34,7 @@ func clusterReady(t *testing.T) *backend.Kubernetes {
 // The P6 gate: launch a real job on a cluster, see it run, read its logs,
 // then stop and clean it up — proving the K8s backend drives the same
 // lifecycle as Docker. Requires a cluster with the runner image loaded
-// (e.g. `kind load docker-image mailer-runner:dev`).
+// (e.g. `kind load docker-image weibo-runner:dev`).
 func TestIntegration_K8sJobLifecycle(t *testing.T) {
 	kb := clusterReady(t)
 	ctx := context.Background()

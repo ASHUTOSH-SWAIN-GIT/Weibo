@@ -11,11 +11,11 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/sink"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/source"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/types"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/window"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/sink"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/source"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/types"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/window"
 )
 
 // Order is the JSON-encoded message format on the input Kafka topic.
@@ -32,7 +32,7 @@ func main() {
 	groupID := getenv("KAFKA_GROUP_ID", "order-processor")
 	windowSize := getenvDuration("KAFKA_WINDOW_SIZE", 5*time.Minute)
 
-	env := mailer.NewEnv()
+	env := weibo.NewEnv()
 
 	src := source.NewKafkaSource(
 		source.KafkaBrokers(brokers),

@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/workflow"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/workflow"
 )
 
 type mapSecretResolver map[string]string

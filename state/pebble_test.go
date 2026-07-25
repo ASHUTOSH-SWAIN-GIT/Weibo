@@ -3,7 +3,7 @@ package state_test
 import (
 	"testing"
 
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/state"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/state"
 )
 
 func TestPebbleBackend_ValueState_Basic(t *testing.T) {

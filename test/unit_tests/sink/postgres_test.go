@@ -3,7 +3,7 @@ package sink_test
 import (
 	"testing"
 
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/sink"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/sink"
 )
 
 func TestPostgresWriteQuery_Insert(t *testing.T) {

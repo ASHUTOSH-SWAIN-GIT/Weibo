@@ -1,10 +1,10 @@
-// Command mailer is the control-plane CLI. The dashboard subcommand boots
+// Command weibo is the control-plane CLI. The dashboard subcommand boots
 // the job controller and opens its web UI — the single place to submit,
 // watch, and manage jobs (Flink-style).
 //
-//	mailer dashboard              # start the controller and open the UI
-//	mailer dashboard -no-open     # start it headless (e.g. on a server)
-//	mailer dashboard -addr :9000 -image mailer-runner:dev
+//	weibo dashboard              # start the controller and open the UI
+//	weibo dashboard -no-open     # start it headless (e.g. on a server)
+//	weibo dashboard -addr :9000 -image weibo-runner:dev
 package main
 
 import (
@@ -22,10 +22,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/control"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/control/api"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/control/backend"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/control/store"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/control"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/control/api"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/control/backend"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/control/store"
 )
 
 func main() {
@@ -53,35 +53,35 @@ func main() {
 	case "-h", "--help", "help":
 		usage()
 	default:
-		fmt.Fprintf(os.Stderr, "mailer: unknown command %q\n\n", os.Args[1])
+		fmt.Fprintf(os.Stderr, "weibo: unknown command %q\n\n", os.Args[1])
 		usage()
 		os.Exit(2)
 	}
 }
 
 func usage() {
-	fmt.Fprint(os.Stderr, `mailer — stream-processing control plane
+	fmt.Fprint(os.Stderr, `weibo — stream-processing control plane
 
 Usage:
-  mailer dashboard [flags]              Start the controller and open the web UI
-  mailer deploy [flags]                 Build, push, and submit a job manifest
-  mailer jobs [flags]                   List jobs
-  mailer status <job-id> [flags]        Show one job's detail and history
-  mailer logs <job-id> [-tail N]        Print a job's container logs
-  mailer cancel <job-id>                Gracefully stop a job
-  mailer restart <job-id> [-savepoint]  Resume a job (optionally from a savepoint)
-  mailer savepoint <job-id> -label N    Stop a job with a named savepoint
+  weibo dashboard [flags]              Start the controller and open the web UI
+  weibo deploy [flags]                 Build, push, and submit a job manifest
+  weibo jobs [flags]                   List jobs
+  weibo status <job-id> [flags]        Show one job's detail and history
+  weibo logs <job-id> [-tail N]        Print a job's container logs
+  weibo cancel <job-id>                Gracefully stop a job
+  weibo restart <job-id> [-savepoint]  Resume a job (optionally from a savepoint)
+  weibo savepoint <job-id> -label N    Stop a job with a named savepoint
 
-Management commands talk to a controller over REST (env MAILER_CONTROLLER,
-default http://localhost:9000). Run "mailer <command> -h" for flags.
+Management commands talk to a controller over REST (env WEIBO_CONTROLLER,
+default http://localhost:9000). Run "weibo <command> -h" for flags.
 `)
 }
 
 func runDashboard(args []string) int {
 	fs := flag.NewFlagSet("dashboard", flag.ContinueOnError)
 	addr := fs.String("addr", ":9000", "API + UI listen address")
-	image := fs.String("image", "mailer-runner:dev", "runner image tag")
-	dbPath := fs.String("db", "./mailer-control.db", "SQLite database path")
+	image := fs.String("image", "weibo-runner:dev", "runner image tag")
+	dbPath := fs.String("db", "./weibo-control.db", "SQLite database path")
 	interval := fs.Duration("reconcile", 3*time.Second, "reconcile interval")
 	noOpen := fs.Bool("no-open", false, "do not open the browser")
 	backendKind := fs.String("backend", "docker", "container backend: docker | kubernetes")
@@ -90,7 +90,7 @@ func runDashboard(args []string) int {
 	pullSecrets := fs.String("image-pull-secrets", "", "comma-separated k8s imagePullSecret names for private registries (kubernetes backend)")
 	pvcSize := fs.String("pvc-size", "1Gi", "per-job PVC size (kubernetes backend)")
 	storageClass := fs.String("storage-class", "", "PVC storage class; empty = cluster default (kubernetes backend)")
-	authToken := fs.String("auth-token", os.Getenv("MAILER_AUTH_TOKEN"), "shared bearer token required by the API + UI; empty = open (env MAILER_AUTH_TOKEN)")
+	authToken := fs.String("auth-token", os.Getenv("WEIBO_AUTH_TOKEN"), "shared bearer token required by the API + UI; empty = open (env WEIBO_AUTH_TOKEN)")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -107,7 +107,7 @@ func runDashboard(args []string) int {
 
 	st, err := store.OpenSQLite(*dbPath)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "mailer: open store: %v\n", err)
+		fmt.Fprintf(os.Stderr, "weibo: open store: %v\n", err)
 		return 1
 	}
 	defer st.Close()
@@ -127,16 +127,16 @@ func runDashboard(args []string) int {
 	if !*noOpen {
 		go openWhenReady(ctx, url)
 	}
-	log.Printf("mailer dashboard: %s  (image=%s, db=%s)", url, *image, *dbPath)
+	log.Printf("weibo dashboard: %s  (image=%s, db=%s)", url, *image, *dbPath)
 	if *authToken != "" {
-		log.Print("mailer dashboard: API auth ENABLED — clients need -token / MAILER_TOKEN")
+		log.Print("weibo dashboard: API auth ENABLED — clients need -token / WEIBO_TOKEN")
 	}
 
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		fmt.Fprintf(os.Stderr, "mailer: serve: %v\n", err)
+		fmt.Fprintf(os.Stderr, "weibo: serve: %v\n", err)
 		return 1
 	}
-	log.Print("mailer dashboard: stopped")
+	log.Print("weibo dashboard: stopped")
 	return 0
 }
 
@@ -147,15 +147,15 @@ func makeBackend(ctx context.Context, kind, image, namespace, kubeconfig string,
 	case "docker":
 		d, err := backend.NewDocker(image)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "mailer: docker: %v\n", err)
+			fmt.Fprintf(os.Stderr, "weibo: docker: %v\n", err)
 			return nil, 1
 		}
 		if err := d.Ping(ctx); err != nil {
-			fmt.Fprintln(os.Stderr, "mailer: Docker daemon not reachable — is Docker running?")
+			fmt.Fprintln(os.Stderr, "weibo: Docker daemon not reachable — is Docker running?")
 			return nil, 1
 		}
 		if ok, err := d.HasImage(ctx, image); err == nil && !ok {
-			fmt.Fprintf(os.Stderr, "mailer: runner image %q not found. Build it first:\n"+
+			fmt.Fprintf(os.Stderr, "weibo: runner image %q not found. Build it first:\n"+
 				"  docker build -f Dockerfile.runner -t %s .\n", image, image)
 			return nil, 1
 		}
@@ -167,17 +167,17 @@ func makeBackend(ctx context.Context, kind, image, namespace, kubeconfig string,
 			PVCSize:          pvcSize, StorageClass: storageClass,
 		})
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "mailer: kubernetes: %v\n", err)
+			fmt.Fprintf(os.Stderr, "weibo: kubernetes: %v\n", err)
 			return nil, 1
 		}
 		if err := kb.Ping(ctx); err != nil {
-			fmt.Fprintf(os.Stderr, "mailer: kubernetes API not reachable: %v\n"+
+			fmt.Fprintf(os.Stderr, "weibo: kubernetes API not reachable: %v\n"+
 				"  check your kubeconfig / cluster, and that the image %q is pushed to a registry the cluster can pull.\n", err, image)
 			return nil, 1
 		}
 		return kb, 0
 	default:
-		fmt.Fprintf(os.Stderr, "mailer: unknown backend %q (want docker or kubernetes)\n", kind)
+		fmt.Fprintf(os.Stderr, "weibo: unknown backend %q (want docker or kubernetes)\n", kind)
 		return nil, 2
 	}
 }

@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/types"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/types"
 )
 
 // ProcFailurePolicy determines what happens when a Process function
@@ -109,17 +109,17 @@ func (op *ProcessOperator) handleFailure(r types.Record, err error) {
 
 	case ProcFailureDLQ:
 		if op.DLQ == nil {
-			fmt.Printf("mailer/operator: DLQ is nil for Process %q, dropping record\n", op.Label)
+			fmt.Printf("weibo/operator: DLQ is nil for Process %q, dropping record\n", op.Label)
 			return
 		}
 		ctx := context.Background()
 		// Attach error info to headers for the DLQ consumer.
 		r = r.WithHeader("_error", []byte(err.Error()))
 		if werr := op.DLQ.Write(ctx, r); werr != nil {
-			fmt.Printf("mailer/operator: DLQ write failed for Process %q: %v\n", op.Label, werr)
+			fmt.Printf("weibo/operator: DLQ write failed for Process %q: %v\n", op.Label, werr)
 		}
 
 	case ProcFailureFail:
-		panic(fmt.Sprintf("mailer/operator: Process %q failed: %v (record key=%q)", op.Label, err, string(r.Key)))
+		panic(fmt.Sprintf("weibo/operator: Process %q failed: %v (record key=%q)", op.Label, err, string(r.Key)))
 	}
 }

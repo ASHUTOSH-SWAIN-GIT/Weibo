@@ -8,7 +8,7 @@ import (
 	"github.com/twmb/franz-go/pkg/sasl/scram"
 )
 
-// BuildKgoSASL maps a mailer SASLConfig to a franz-go SASL mechanism
+// BuildKgoSASL maps a weibo SASLConfig to a franz-go SASL mechanism
 // (used by the transactional Kafka sink, which is built on franz-go).
 // Returns an error if the mechanism is unsupported.
 func BuildKgoSASL(cfg SASLConfig) (sasl.Mechanism, error) {

@@ -1,4 +1,4 @@
-package mailer_test
+package weibo_test
 
 import (
 	"context"
@@ -12,10 +12,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/checkpoint"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/state"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/types"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/checkpoint"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/state"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/types"
 )
 
 func stateBackends(t *testing.T) []struct {
@@ -256,7 +256,7 @@ func TestRecovery_CrashResumeFromMultiPartitionOffsets(t *testing.T) {
 				return seen >= 30 && checkpointOffsets(storage) != nil
 			}
 
-			env1 := mailer.NewEnv().WithBufferSize(16).
+			env1 := weibo.NewEnv().WithBufferSize(16).
 				WithCheckpointing(5*time.Millisecond, storage).
 				WithStateBackend(bk.Factory)
 			env1.FromSource(src1).
@@ -277,7 +277,7 @@ func TestRecovery_CrashResumeFromMultiPartitionOffsets(t *testing.T) {
 
 			src2 := newReplaySource(mkParts())
 			sink2 := newCaptureSink()
-			env2 := mailer.NewEnv().WithBufferSize(16).
+			env2 := weibo.NewEnv().WithBufferSize(16).
 				WithCheckpointing(5*time.Millisecond, storage).
 				WithStateBackend(bk.Factory)
 			env2.FromSource(src2).
@@ -343,7 +343,7 @@ func TestRecovery_KeyedStateRestoredExactly(t *testing.T) {
 			}
 
 			sink1 := newCaptureSink()
-			env1 := mailer.NewEnv().
+			env1 := weibo.NewEnv().
 				WithCheckpointing(5*time.Millisecond, storage).
 				WithStateBackend(bk.Factory)
 			env1.FromSource(src1).
@@ -362,7 +362,7 @@ func TestRecovery_KeyedStateRestoredExactly(t *testing.T) {
 
 			src2 := newReplaySource(mkParts())
 			sink2 := newCaptureSink()
-			env2 := mailer.NewEnv().
+			env2 := weibo.NewEnv().
 				WithCheckpointing(5*time.Millisecond, storage).
 				WithStateBackend(bk.Factory)
 			env2.FromSource(src2).
@@ -426,7 +426,7 @@ func TestRecovery_NonKeyedStateRestored(t *testing.T) {
 				return offs != nil && offs["0"] == 25
 			}
 			sink1 := newCaptureSink()
-			env1 := mailer.NewEnv().
+			env1 := weibo.NewEnv().
 				WithCheckpointing(5*time.Millisecond, storage).
 				WithStateBackend(bk.Factory)
 			env1.FromSource(src1).Reduce(countReduceFn).ToSink(sink1) // no KeyBy
@@ -439,7 +439,7 @@ func TestRecovery_NonKeyedStateRestored(t *testing.T) {
 
 			src2 := newReplaySource(mkParts())
 			sink2 := newCaptureSink()
-			env2 := mailer.NewEnv().
+			env2 := weibo.NewEnv().
 				WithCheckpointing(5*time.Millisecond, storage).
 				WithStateBackend(bk.Factory)
 			env2.FromSource(src2).Reduce(countReduceFn).ToSink(sink2) // no KeyBy
@@ -494,7 +494,7 @@ func TestShutdown_CancelWhileEdgesFull(t *testing.T) {
 	}
 	src := newReplaySource(parts)
 
-	env := mailer.NewEnv().WithBufferSize(4).WithShutdownTimeout(500 * time.Millisecond)
+	env := weibo.NewEnv().WithBufferSize(4).WithShutdownTimeout(500 * time.Millisecond)
 	env.FromSource(src).
 		Map(func(r types.Record) types.Record { return r }, "m1").WithParallelism(3).
 		KeyBy(func(r types.Record) []byte { return r.Key }).WithPartitions(4).

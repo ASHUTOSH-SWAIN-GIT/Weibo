@@ -1,4 +1,4 @@
-package mailer_test
+package weibo_test
 
 import (
 	"context"
@@ -9,10 +9,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/checkpoint"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/state"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/types"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/checkpoint"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/state"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/types"
 )
 
 // ---------------------------------------------------------------------------
@@ -168,7 +168,7 @@ func runEO(t *testing.T, sk *fakeTxnSink, storage checkpoint.Storage, haltStep c
 	src := newReplaySource(eoParts3())
 	src.emitDelay = 500 * time.Microsecond
 
-	env := mailer.NewEnv().
+	env := weibo.NewEnv().
 		WithBufferSize(16).
 		WithShutdownTimeout(300*time.Millisecond).
 		WithCheckpointing(5*time.Millisecond, storage).
@@ -373,7 +373,7 @@ func TestExactlyOnce_KeyedStateMultiPartition(t *testing.T) {
 			run := func(halt checkpoint.Step, occ int) error {
 				src := newReplaySource(eoParts3())
 				src.emitDelay = 500 * time.Microsecond
-				env := mailer.NewEnv().
+				env := weibo.NewEnv().
 					WithBufferSize(16).WithShutdownTimeout(300*time.Millisecond).
 					WithCheckpointing(5*time.Millisecond, storage).
 					WithStateBackend(bk.Factory)
@@ -436,7 +436,7 @@ func TestExactlyOnce_KeyedStateMultiPartition(t *testing.T) {
 // — exactly-once cannot be silently half-configured.
 func TestExactlyOnce_RequiresCheckpointing(t *testing.T) {
 	sk := newFakeTxnSink()
-	env := mailer.NewEnv()
+	env := weibo.NewEnv()
 	env.FromSource(newReplaySource(eoParts3())).
 		Map(func(r types.Record) types.Record { return r }, "pass").
 		ToSink(sk)

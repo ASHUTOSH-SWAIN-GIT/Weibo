@@ -7,7 +7,7 @@ import (
 	"os"
 )
 
-// BuildTLSConfig converts a mailer TLSConfig into a *tls.Config suitable
+// BuildTLSConfig converts a weibo TLSConfig into a *tls.Config suitable
 // for use with kafka-go's Dialer (source) or Transport (sink).
 // Returns nil if no TLS fields are set (plain connection).
 func BuildTLSConfig(cfg TLSConfig) (*tls.Config, error) {

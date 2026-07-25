@@ -3,8 +3,8 @@ package operators
 import (
 	"fmt"
 
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/types"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/workflow/record"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/types"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/workflow/record"
 )
 
 // FieldSet assigns a constant value to a dotted field path.
@@ -39,7 +39,7 @@ func (cfg SetConfig) Validate() error {
 	return nil
 }
 
-// BuildSet returns an ordinary Mailer map function that assigns each
+// BuildSet returns an ordinary Weibo map function that assigns each
 // configured field.
 func BuildSet(cfg SetConfig) func(types.Record) types.Record {
 	sets := append([]FieldSet(nil), cfg.Sets...)

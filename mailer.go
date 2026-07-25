@@ -1,4 +1,4 @@
-package mailer
+package weibo
 
 import (
 	"context"
@@ -12,14 +12,14 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/checkpoint"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/observability/metrics"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/operator"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/pipeline"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/sink"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/source"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/state"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/types"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/checkpoint"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/observability/metrics"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/operator"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/pipeline"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/sink"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/source"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/state"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/types"
 )
 
 // DefaultEdgeCapacity is the default buffer size of the bounded edges
@@ -30,7 +30,7 @@ const DefaultEdgeCapacity = 1024
 // Create one with NewEnv(), define your pipeline using FromSource/ToSink,
 // then call Execute() to run it.
 //
-//	env := mailer.NewEnv()
+//	env := weibo.NewEnv()
 //	env.FromSource(src).Map(fn).Filter(fn).ToSink(stdout)
 //	env.Execute(ctx)
 type StreamExecutionEnv struct {
@@ -123,7 +123,7 @@ func (env *StreamExecutionEnv) WithBufferSize(n int) *StreamExecutionEnv {
 //
 // Example:
 //
-//	env := mailer.NewEnv()
+//	env := weibo.NewEnv()
 //	env.WithCheckpointing(30*time.Second, checkpoint.NewFileStorage("/tmp/checkpoints"))
 func (env *StreamExecutionEnv) WithCheckpointing(interval time.Duration, storage checkpoint.Storage) *StreamExecutionEnv {
 	env.checkpointInterval = interval
@@ -197,10 +197,10 @@ func (env *StreamExecutionEnv) FromSource(src source.Source) *Stream {
 // Prometheus metrics are collected automatically during execution.
 func (env *StreamExecutionEnv) Execute(ctx context.Context) error {
 	if env.source == nil {
-		return fmt.Errorf("mailer: no source configured, use FromSource()")
+		return fmt.Errorf("weibo: no source configured, use FromSource()")
 	}
 	if env.sink == nil {
-		return fmt.Errorf("mailer: no sink configured, use ToSink()")
+		return fmt.Errorf("weibo: no sink configured, use ToSink()")
 	}
 
 	metrics.PipelineRunning.Set(1)
@@ -212,10 +212,10 @@ func (env *StreamExecutionEnv) Execute(ctx context.Context) error {
 	coordinatedSink, coordinated := env.sink.(sink.CheckpointedSink)
 	if coordinated {
 		if env.checkpointStorage == nil || env.checkpointInterval <= 0 {
-			return fmt.Errorf("mailer: a CheckpointedSink requires WithCheckpointing(interval, storage)")
+			return fmt.Errorf("weibo: a CheckpointedSink requires WithCheckpointing(interval, storage)")
 		}
 		if _, ok := env.source.(source.CheckpointSource); !ok {
-			return fmt.Errorf("mailer: exactly-once requires a source that supports offset checkpointing (source.CheckpointSource)")
+			return fmt.Errorf("weibo: exactly-once requires a source that supports offset checkpointing (source.CheckpointSource)")
 		}
 	}
 
@@ -227,7 +227,7 @@ func (env *StreamExecutionEnv) Execute(ctx context.Context) error {
 			data, err := env.resolveCoordinatedRecovery(ctx, coordinatedSink)
 			if err != nil {
 				// Guessing here risks duplicates or loss — refuse to start.
-				return fmt.Errorf("mailer: recovery: %w", err)
+				return fmt.Errorf("weibo: recovery: %w", err)
 			}
 			if data != nil {
 				env.restoreSourceOffset(data)
@@ -236,7 +236,7 @@ func (env *StreamExecutionEnv) Execute(ctx context.Context) error {
 		} else {
 			data, err := env.checkpointStorage.Load()
 			if err != nil {
-				fmt.Printf("mailer: checkpoint load failed (starting fresh): %v\n", err)
+				fmt.Printf("weibo: checkpoint load failed (starting fresh): %v\n", err)
 			} else if data != nil {
 				env.restoreSourceOffset(data)
 				savedCheckpoint = data
@@ -263,7 +263,7 @@ func (env *StreamExecutionEnv) Execute(ctx context.Context) error {
 	defer func() {
 		for _, c := range env.stateClosers {
 			if cerr := c.Close(); cerr != nil {
-				fmt.Printf("mailer: closing state backend: %v\n", cerr)
+				fmt.Printf("weibo: closing state backend: %v\n", cerr)
 			}
 		}
 	}()
@@ -630,7 +630,7 @@ func (env *StreamExecutionEnv) nativeStateDir() func(checkpointID, ownerID strin
 	return func(checkpointID, ownerID string) string {
 		root := env.checkpointStorage.StateDir(checkpointID)
 		if err := os.MkdirAll(root, 0o755); err != nil {
-			fmt.Printf("mailer: create state dir %s: %v\n", root, err)
+			fmt.Printf("weibo: create state dir %s: %v\n", root, err)
 		}
 		return filepath.Join(root, ownerID)
 	}
@@ -726,7 +726,7 @@ func (env *StreamExecutionEnv) snapshotOrCheckpoint(stateRoot, ownerID string, o
 		if cp, ok := rop.Backend().(state.Checkpointable); ok {
 			ownerDir := filepath.Join(stateRoot, ownerID)
 			if err := cp.CheckpointTo(ownerDir); err != nil {
-				fmt.Printf("mailer: checkpoint native snapshot %s failed: %v\n", ownerID, err)
+				fmt.Printf("weibo: checkpoint native snapshot %s failed: %v\n", ownerID, err)
 				return nil
 			}
 			ref, _ := json.Marshal(map[string]string{"state_ref": ownerID})
@@ -737,7 +737,7 @@ func (env *StreamExecutionEnv) snapshotOrCheckpoint(stateRoot, ownerID string, o
 	if snap, ok := op.(operator.Snapshotable); ok {
 		snapshot, err := snap.Snapshot()
 		if err != nil {
-			fmt.Printf("mailer: checkpoint snapshot failed for %s: %v\n", ownerID, err)
+			fmt.Printf("weibo: checkpoint snapshot failed for %s: %v\n", ownerID, err)
 			return nil
 		}
 		return snapshot
@@ -776,7 +776,7 @@ func (env *StreamExecutionEnv) resolveCoordinatedRecovery(ctx context.Context, c
 		if err := env.checkpointStorage.UpdateStatus(latest.ID, checkpoint.StatusCompleted); err != nil {
 			return nil, fmt.Errorf("promote checkpoint %s: %w", latest.ID, err)
 		}
-		fmt.Printf("mailer: recovery: checkpoint %s transaction had committed — promoted to completed\n", latest.ID)
+		fmt.Printf("weibo: recovery: checkpoint %s transaction had committed — promoted to completed\n", latest.ID)
 		latest.Status = checkpoint.StatusCompleted
 		return latest, nil
 	}
@@ -784,9 +784,9 @@ func (env *StreamExecutionEnv) resolveCoordinatedRecovery(ctx context.Context, c
 	// Never committed: its output was never visible. Abort (best
 	// effort — producer fencing handles it too) and fall back.
 	if err := cs.Abort(ctx, latest.ID); err != nil {
-		fmt.Printf("mailer: recovery: abort dangling transaction %s: %v\n", latest.ID, err)
+		fmt.Printf("weibo: recovery: abort dangling transaction %s: %v\n", latest.ID, err)
 	}
-	fmt.Printf("mailer: recovery: discarding uncommitted checkpoint %s\n", latest.ID)
+	fmt.Printf("weibo: recovery: discarding uncommitted checkpoint %s\n", latest.ID)
 	return env.checkpointStorage.LoadLatestCompleted()
 }
 
@@ -812,7 +812,7 @@ func (env *StreamExecutionEnv) saveCheckpoint(id string) {
 		} else if cps, ok := env.source.(source.CheckpointSource); ok {
 			offset, err := cps.CheckpointOffset()
 			if err != nil {
-				fmt.Printf("mailer: checkpoint source offset failed: %v\n", err)
+				fmt.Printf("weibo: checkpoint source offset failed: %v\n", err)
 			} else {
 				data.Source["offset"] = offset
 			}
@@ -820,7 +820,7 @@ func (env *StreamExecutionEnv) saveCheckpoint(id string) {
 	}
 
 	if err := env.checkpointStorage.Save(data); err != nil {
-		fmt.Printf("mailer: checkpoint save failed: %v\n", err)
+		fmt.Printf("weibo: checkpoint save failed: %v\n", err)
 		return
 	}
 	env.notifyCheckpoint(id)
@@ -835,11 +835,11 @@ func (env *StreamExecutionEnv) restoreSourceOffset(data *checkpoint.CheckpointDa
 	if cps, ok := env.source.(source.CheckpointSource); ok {
 		if offsetData, exists := data.Source["offset"]; exists {
 			if err := cps.RestoreOffset(offsetData); err != nil {
-				fmt.Printf("mailer: restore source offset failed: %v\n", err)
+				fmt.Printf("weibo: restore source offset failed: %v\n", err)
 			}
 		}
 	}
-	fmt.Printf("mailer: restored from checkpoint %s\n", data.ID)
+	fmt.Printf("weibo: restored from checkpoint %s\n", data.ID)
 }
 
 // restoreWorkersFromCheckpoint restores per-worker operator state for
@@ -884,7 +884,7 @@ func (env *StreamExecutionEnv) restoreOperatorState(data *checkpoint.CheckpointD
 			if cp, ok := b.Backend().(state.Checkpointable); ok {
 				absPath := filepath.Join(env.checkpointStorage.StateDir(data.ID), stateDir)
 				if err := cp.RestoreFrom(absPath); err != nil {
-					fmt.Printf("mailer: restore %s from native state failed: %v\n", key, err)
+					fmt.Printf("weibo: restore %s from native state failed: %v\n", key, err)
 				}
 				return
 			}
@@ -895,7 +895,7 @@ func (env *StreamExecutionEnv) restoreOperatorState(data *checkpoint.CheckpointD
 	if snap, ok := op.(operator.Snapshotable); ok {
 		if stateData, exists := data.Operators[key]; exists && len(stateData) > 0 {
 			if err := snap.Restore(stateData); err != nil {
-				fmt.Printf("mailer: restore %s failed: %v\n", key, err)
+				fmt.Printf("weibo: restore %s failed: %v\n", key, err)
 			}
 		}
 	}

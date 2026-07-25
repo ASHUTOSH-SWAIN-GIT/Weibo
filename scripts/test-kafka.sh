@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# End-to-end test for the mailer Kafka pipeline.
+# End-to-end test for the weibo Kafka pipeline.
 #
 # What this does:
 #   1. Builds the kafka-orders example
@@ -23,8 +23,8 @@
 # Environment overrides:
 #   KAFKA_BROKERS       broker list          (default: localhost:9092)
 #   KAFKA_BIN           dir with kafka CLIs  (default: auto-detect)
-#   KAFKA_INPUT_TOPIC   input topic          (default: mailer-orders-test)
-#   KAFKA_OUTPUT_TOPIC  output topic         (default: mailer-order-summary-test)
+#   KAFKA_INPUT_TOPIC   input topic          (default: weibo-orders-test)
+#   KAFKA_OUTPUT_TOPIC  output topic         (default: weibo-order-summary-test)
 #   KAFKA_WINDOW_SIZE   window size          (default: 5s)
 #   PIPELINE_TIMEOUT    max wait for results (default: 30s)
 
@@ -33,8 +33,8 @@ set -euo pipefail
 # --- config --------------------------------------------------------------------
 
 BROKERS="${KAFKA_BROKERS:-localhost:9092}"
-INPUT_TOPIC="${KAFKA_INPUT_TOPIC:-mailer-orders-test}"
-OUTPUT_TOPIC="${KAFKA_OUTPUT_TOPIC:-mailer-order-summary-test}"
+INPUT_TOPIC="${KAFKA_INPUT_TOPIC:-weibo-orders-test}"
+OUTPUT_TOPIC="${KAFKA_OUTPUT_TOPIC:-weibo-order-summary-test}"
 WINDOW_SIZE="${KAFKA_WINDOW_SIZE:-5s}"
 TIMEOUT="${PIPELINE_TIMEOUT:-30}"
 PROJECT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -75,7 +75,7 @@ warn() { printf '\033[1;33m[%s]\033[0m %s\n' "$(date +%H:%M:%S)" "$*" >&2; }
 # --- cleanup machinery --------------------------------------------------------
 
 PIPELINE_PID=""
-PIPELINE_LOG=$(mktemp -t mailer-pipeline.XXXXXX.log)
+PIPELINE_LOG=$(mktemp -t weibo-pipeline.XXXXXX.log)
 
 cleanup_and_exit() {
     local code=$1
@@ -93,7 +93,7 @@ cleanup_and_exit() {
         "$KAFKA_TOPICS" --bootstrap-server "$BROKERS" --delete --topic "$INPUT_TOPIC"  2>/dev/null || true
         "$KAFKA_TOPICS" --bootstrap-server "$BROKERS" --delete --topic "$OUTPUT_TOPIC" 2>/dev/null || true
     fi
-    rm -f /tmp/mailer-kafka-orders "$PIPELINE_LOG"
+    rm -f /tmp/weibo-kafka-orders "$PIPELINE_LOG"
     exit "$code"
 }
 trap 'cleanup_and_exit $?' EXIT INT TERM
@@ -117,8 +117,8 @@ command -v python3 >/dev/null || { echo "error: python3 not in PATH (needed for 
 # --- build --------------------------------------------------------------------
 
 log "building kafka-orders example"
-(cd "$PROJECT_ROOT" && go build -o /tmp/mailer-kafka-orders ./examples/kafka-orders/)
-[[ -x /tmp/mailer-kafka-orders ]] || fail "build failed"
+(cd "$PROJECT_ROOT" && go build -o /tmp/weibo-kafka-orders ./examples/kafka-orders/)
+[[ -x /tmp/weibo-kafka-orders ]] || fail "build failed"
 
 # --- topics -------------------------------------------------------------------
 
@@ -144,9 +144,9 @@ not-a-json-payload'
 KAFKA_BROKERS="$BROKERS" \
 KAFKA_INPUT_TOPIC="$INPUT_TOPIC" \
 KAFKA_OUTPUT_TOPIC="$OUTPUT_TOPIC" \
-KAFKA_GROUP_ID="mailer-test-$(date +%s)" \
+KAFKA_GROUP_ID="weibo-test-$(date +%s)" \
 KAFKA_WINDOW_SIZE="$WINDOW_SIZE" \
-    /tmp/mailer-kafka-orders > "$PIPELINE_LOG" 2>&1 &
+    /tmp/weibo-kafka-orders > "$PIPELINE_LOG" 2>&1 &
 PIPELINE_PID=$!
 log "pipeline started (pid $PIPELINE_PID)"
 
@@ -163,7 +163,7 @@ printf '%s\n' "$ORDERS" | "$KAFKA_CONSOLE_PRODUCER" \
 # --- collect results ----------------------------------------------------------
 
 log "collecting results from $OUTPUT_TOPIC (timeout ${TIMEOUT}s)..."
-RESULTS_FILE=$(mktemp -t mailer-results.XXXXXX.jsonl)
+RESULTS_FILE=$(mktemp -t weibo-results.XXXXXX.jsonl)
 
 # Expected: Reduce emits per record (running aggregate). For 8 valid orders:
 #   alice  = 4 results (100, 250, 300, 500)

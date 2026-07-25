@@ -5,7 +5,7 @@
     "type": "generator",
     "records": [
       { "key": "sentence", "value": "hello world" },
-      { "key": "sentence", "value": "hello mailer" }
+      { "key": "sentence", "value": "hello weibo" }
     ]
   },
   "pipeline": [

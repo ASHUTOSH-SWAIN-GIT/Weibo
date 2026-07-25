@@ -10,8 +10,8 @@ import (
 	"github.com/twmb/franz-go/pkg/kadm"
 	"github.com/twmb/franz-go/pkg/kgo"
 
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/auth"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/types"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/auth"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/types"
 )
 
 // markerProbePollTimeout bounds each PollFetches while draining the marker
@@ -125,13 +125,13 @@ func NewTxnKafkaSink(opts ...TxnKafkaOption) *TxnKafkaSink {
 		opt(&cfg)
 	}
 	if len(cfg.brokers) == 0 {
-		panic("mailer/sink: TxnKafkaSink requires TxnKafkaBrokers(...)")
+		panic("weibo/sink: TxnKafkaSink requires TxnKafkaBrokers(...)")
 	}
 	if cfg.topic == "" {
-		panic("mailer/sink: TxnKafkaSink requires TxnKafkaTopic(...)")
+		panic("weibo/sink: TxnKafkaSink requires TxnKafkaTopic(...)")
 	}
 	if cfg.txnID == "" {
-		panic("mailer/sink: TxnKafkaSink requires TxnKafkaTransactionalID(...)")
+		panic("weibo/sink: TxnKafkaSink requires TxnKafkaTransactionalID(...)")
 	}
 	if cfg.markerTopic == "" {
 		cfg.markerTopic = cfg.topic + ".checkpoints"
@@ -140,12 +140,12 @@ func NewTxnKafkaSink(opts ...TxnKafkaOption) *TxnKafkaSink {
 	// Kafka connectors, which panic in their transport builders).
 	if cfg.sasl != nil {
 		if _, err := auth.BuildKgoSASL(*cfg.sasl); err != nil {
-			panic(fmt.Sprintf("mailer/sink: TxnKafkaSink SASL: %v", err))
+			panic(fmt.Sprintf("weibo/sink: TxnKafkaSink SASL: %v", err))
 		}
 	}
 	if cfg.tls != nil {
 		if _, err := auth.BuildTLSConfig(*cfg.tls); err != nil {
-			panic(fmt.Sprintf("mailer/sink: TxnKafkaSink TLS: %v", err))
+			panic(fmt.Sprintf("weibo/sink: TxnKafkaSink TLS: %v", err))
 		}
 	}
 	return &TxnKafkaSink{

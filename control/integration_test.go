@@ -14,13 +14,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/control"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/control/api"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/control/backend"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/control/store"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/control"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/control/api"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/control/backend"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/control/store"
 )
 
-const runnerImage = "mailer-runner:dev"
+const runnerImage = "weibo-runner:dev"
 
 // bigWorkflow builds a generator→stdout job with enough records to stay
 // running for a few seconds, so we can observe it live and cancel it.

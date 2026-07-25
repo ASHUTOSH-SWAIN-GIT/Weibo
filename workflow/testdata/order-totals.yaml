@@ -9,10 +9,10 @@ env:
   shutdownTimeout: 30s
   checkpointing:
     interval: 30s
-    dir: /var/lib/mailer/checkpoints
+    dir: /var/lib/weibo/checkpoints
   state:
     backend: pebble
-    dir: /var/lib/mailer/state
+    dir: /var/lib/weibo/state
 
 source:
   type: kafka

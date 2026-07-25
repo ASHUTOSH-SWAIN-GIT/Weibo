@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>mailer</title>
+<title>weibo</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='8' cy='8' r='4' fill='%232563eb'/%3E%3C/svg%3E">
 <style>
   :root{
@@ -100,7 +100,7 @@
 </head>
 <body>
 <header>
-  <div class="brand">mailer<span>.</span></div>
+  <div class="brand">weibo<span>.</span></div>
   <span class="count" id="count"></span>
   <nav id="nav">
     <a href="#/jobs" data-v="jobs">Jobs</a>
@@ -116,7 +116,7 @@ const g=(o,...k)=>{for(const x of k){if(o&&o[x]!=null)return o[x]}return undefin
 /* auth: a single shared bearer token kept in localStorage. When the API is
    open (no token configured server-side), the first /jobs returns 200 and no
    prompt ever appears — UX identical to the no-auth build. */
-const TOKEN_KEY='mailer_token';
+const TOKEN_KEY='weibo_token';
 const getToken=()=>localStorage.getItem(TOKEN_KEY)||'';
 const setToken=(t)=>{t?localStorage.setItem(TOKEN_KEY,t):localStorage.removeItem(TOKEN_KEY)};
 
@@ -329,34 +329,34 @@ function viewMetrics(id){
       return;
     }
     const M=parseProm(txt);
-    const read=mv(M,'mailer_records_read_total'), written=mv(M,'mailer_records_written_total');
+    const read=mv(M,'weibo_records_read_total'), written=mv(M,'weibo_records_written_total');
     const r=rates(id,read,written);
-    const running=mv(M,'mailer_pipeline_running')===1;
+    const running=mv(M,'weibo_pipeline_running')===1;
     const tiles=[
       statTile('Records read',fmtN(read)),
       statTile('Records written',fmtN(written)),
       statTile('Read rate',fmtN(r.read),'/s'),
       statTile('Write rate',fmtN(r.written),'/s'),
-      statTile('Processed',fmtN((M['mailer_records_processed_total']||[]).reduce((s,x)=>s+x.value,0))),
-      statTile('Failed',fmtN(mv(M,'mailer_records_failed_total'))),
-      statTile('Source errors',fmtN(mv(M,'mailer_source_errors_total'))),
-      statTile('Sink errors',fmtN(mv(M,'mailer_sink_errors_total'))),
+      statTile('Processed',fmtN((M['weibo_records_processed_total']||[]).reduce((s,x)=>s+x.value,0))),
+      statTile('Failed',fmtN(mv(M,'weibo_records_failed_total'))),
+      statTile('Source errors',fmtN(mv(M,'weibo_source_errors_total'))),
+      statTile('Sink errors',fmtN(mv(M,'weibo_sink_errors_total'))),
     ].join('');
     // per-stage records in/out
-    const so=M['mailer_stage_records_out_total']||[], si=M['mailer_stage_records_in_total']||[];
+    const so=M['weibo_stage_records_out_total']||[], si=M['weibo_stage_records_in_total']||[];
     const stageNames=[...new Set([...si,...so].map(x=>x.labels.stage))];
     const stageRows=stageNames.map(s=>{
       const type=(so.find(x=>x.labels.stage===s)||si.find(x=>x.labels.stage===s)||{labels:{}}).labels.type||'';
-      const inV=mv(M,'mailer_stage_records_in_total',x=>x.labels.stage===s);
-      const outV=mv(M,'mailer_stage_records_out_total',x=>x.labels.stage===s);
+      const inV=mv(M,'weibo_stage_records_in_total',x=>x.labels.stage===s);
+      const outV=mv(M,'weibo_stage_records_out_total',x=>x.labels.stage===s);
       return `<tr><td class="name">${esc(s)}</td><td class="dim">${esc(type)}</td><td class="num">${fmtN(inV)}</td><td class="num">${fmtN(outV)}</td></tr>`;
     }).join('')||`<tr><td colspan="4" class="dim">No stage metrics.</td></tr>`;
     // per-edge backpressure (queue vs capacity)
-    const eq=M['mailer_edge_queue_size']||[], ec=M['mailer_edge_queue_capacity']||[];
+    const eq=M['weibo_edge_queue_size']||[], ec=M['weibo_edge_queue_capacity']||[];
     const edgeNames=[...new Set([...eq,...ec].map(x=>x.labels.edge))].sort();
     const edgeRows=edgeNames.map(e=>{
-      const q=mv(M,'mailer_edge_queue_size',x=>x.labels.edge===e);
-      const cap=mv(M,'mailer_edge_queue_capacity',x=>x.labels.edge===e)||1;
+      const q=mv(M,'weibo_edge_queue_size',x=>x.labels.edge===e);
+      const cap=mv(M,'weibo_edge_queue_capacity',x=>x.labels.edge===e)||1;
       const pct=Math.min(100,Math.round(q/cap*100));
       return `<tr><td class="name">${esc(e)}</td><td class="num">${fmtN(q)} / ${fmtN(cap)}</td>
         <td style="width:40%"><div class="bar ${pct>=90?'hot':''}"><i style="width:${pct}%"></i></div></td>

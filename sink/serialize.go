@@ -3,7 +3,7 @@ package sink
 import (
 	"encoding/json"
 
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/types"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/types"
 )
 
 // Serializer converts a Record into bytes for writing to an external system.

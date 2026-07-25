@@ -1,8 +1,8 @@
-// Package sdk is the harness for SDK (Go) jobs run through the mailer
+// Package sdk is the harness for SDK (Go) jobs run through the weibo
 // control plane. A user writes a pipeline builder and calls Run:
 //
 //	func main() { sdk.Run(Build) }
-//	func Build(env *mailer.StreamExecutionEnv) {
+//	func Build(env *weibo.StreamExecutionEnv) {
 //	    env.FromSource(src).KeyBy(key).Reduce(sum).ToSink(out)
 //	}
 //
@@ -33,10 +33,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/checkpoint"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/jobagent"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/state"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/checkpoint"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/jobagent"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/state"
 )
 
 const (
@@ -46,7 +46,7 @@ const (
 )
 
 // Builder wires a pipeline onto env: env.FromSource(...)....ToSink(...).
-type Builder func(env *mailer.StreamExecutionEnv)
+type Builder func(env *weibo.StreamExecutionEnv)
 
 // Run is the SDK job entrypoint. It configures the environment from env
 // vars, invokes build to wire the pipeline, and supervises it to
@@ -65,7 +65,7 @@ func runBuild(ctx context.Context, build Builder, getenv func(string) string, st
 		return 1
 	}
 
-	env := mailer.NewEnv()
+	env := weibo.NewEnv()
 	checkpointDir := ""
 	// Opt-in durable checkpointing: the harness owns the storage layout so
 	// savepoints/recovery work identically to YAML jobs.
@@ -117,7 +117,7 @@ type ServeOptions struct {
 // promotes a savepoint on a stop-with-savepoint request. It returns a
 // process exit code. This is the shared lifecycle behind both the YAML
 // runner and SDK jobs, so they behave identically.
-func Serve(ctx context.Context, env *mailer.StreamExecutionEnv, opts ServeOptions) int {
+func Serve(ctx context.Context, env *weibo.StreamExecutionEnv, opts ServeOptions) int {
 	stdout := orWriter(opts.Stdout, os.Stdout)
 	stderr := orWriter(opts.Stderr, os.Stderr)
 	port := orDefault(opts.Port, defaultPort)

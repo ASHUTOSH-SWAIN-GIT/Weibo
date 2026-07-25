@@ -2,11 +2,11 @@
 
 Status: PROPOSAL.
 
-Goal: turn Mailer from "a library you embed" into "a platform you submit jobs
+Goal: turn Weibo from "a library you embed" into "a platform you submit jobs
 to." A user hands us a pipeline (a YAML workflow or Go SDK code + config); we
 package it, run it in a container, track its lifecycle (submit / run / cancel /
 restart / savepoint), and show everything in a web UI — the Apache Flink
-experience, adapted to Mailer's single-process engine.
+experience, adapted to Weibo's single-process engine.
 
 ---
 
@@ -14,13 +14,13 @@ experience, adapted to Mailer's single-process engine.
 
 Flink is a distributed runtime: a **JobManager** coordinates many **TaskManager**
 nodes, splits an operator graph into parallel subtasks, and shuffles data across
-the network. Mailer is deliberately **single-process** — parallelism is
+the network. Weibo is deliberately **single-process** — parallelism is
 goroutines and per-worker state inside one process, not operators spread across
 nodes (see `internals/architecture`).
 
 So we do **not** rebuild Flink's distributed scheduler. We borrow its *control
 plane and lifecycle*, and run each job the way Flink's **Application Mode** does:
-**one job = one self-contained container** that runs exactly one Mailer pipeline.
+**one job = one self-contained container** that runs exactly one Weibo pipeline.
 The platform is an **orchestrator of job containers**, not a distributed data
 plane.
 
@@ -29,15 +29,15 @@ complexity (slot management, TaskManager registration, network stack, operator
 placement) while keeping the parts users actually want: submit a job, watch it,
 recover it, upgrade it.
 
-### Flink → Mailer terminology map
+### Flink → Weibo terminology map
 
-| Flink | Mailer equivalent | Notes |
+| Flink | Weibo equivalent | Notes |
 |---|---|---|
 | JobManager / Dispatcher | **Controller** (new service) | REST API + lifecycle state machine + scheduler |
 | TaskManager | **Job container** | Runs one pipeline; no distributed slots |
 | Slot / parallelism across nodes | goroutine parallelism in one process | `WithParallelism` / `WithPartitions`; scale-out = more containers over Kafka partitions |
 | JobGraph | `compiler.PipelineGraph` | Already exists (source, operators, sink) |
-| ExecutionGraph | live stage/edge metrics | Already emitted (`mailer_stage_*`, `mailer_edge_*`) |
+| ExecutionGraph | live stage/edge metrics | Already emitted (`weibo_stage_*`, `weibo_edge_*`) |
 | Checkpoint Coordinator | per-job coordinator | Already implemented (`checkpoint/coordinator.go`) |
 | Savepoint | **named checkpoint** | Promote a completed checkpoint dir to a named location |
 | Web Dashboard (served by JobManager) | **Controller web UI** + per-job agent | New SPA + extend `observability/dashboard` |
@@ -60,7 +60,7 @@ recover it, upgrade it.
                                     │                      ▼
                     ┌───────────────┴───────────┐  ┌───────────────────────────┐
                     │   JOB CONTAINER (run A)    │  │   JOB CONTAINER (run B)    │
-                    │  mailer engine (Execute)   │  │  mailer engine (Execute)   │
+                    │  weibo engine (Execute)   │  │  weibo engine (Execute)   │
                     │  + control agent (HTTP):   │  │  + control agent (HTTP)    │
                     │    /healthz /describe       │  └───────────────────────────┘
                     │    /metrics  /state         │
@@ -103,7 +103,7 @@ job needs **no build** — the definition is data the harness reads:
 submit ──▶ Controller reads the YAML:
              workflow.Load → Validate → Compile (dry-run)
              ⇒ derive PipelineGraph + delivery guarantee, store the doc.
-       ──▶ Launch the prebuilt `mailer-runner` image with the doc mounted
+       ──▶ Launch the prebuilt `weibo-runner` image with the doc mounted
              + secrets as env + a checkpoint volume.
        ──▶ Inside the container, the harness reads the doc at startup:
              runner.CompileFile → Execute.  ← the engine reads the YAML
@@ -132,7 +132,7 @@ contract, e.g.:
 // user's job.go — compiled into the runner image
 package job
 
-func Build(env *mailer.StreamExecutionEnv) *mailer.Stream {
+func Build(env *weibo.StreamExecutionEnv) *weibo.Stream {
     return env.FromSource(mySource).
         KeyBy(byCustomer).WithPartitions(4).
         Reduce(sumAmounts).
@@ -146,7 +146,7 @@ shutdown. This mirrors the YAML runner (generic harness + supplied definition)
 and Flink's application model (user declares the graph, the framework runs it).
 
 ```
-submit (repo / build context with a mailer.yaml manifest naming the Build fn)
+submit (repo / build context with a weibo.yaml manifest naming the Build fn)
        ──▶ Controller reads the code by BUILDING it:
              render harness main.go → `go build` the user pkg + harness + module
              → produce a job image → push to the registry.
@@ -176,7 +176,7 @@ YAML** vs **compile the Go**.
   checkpoint dirs by name (`compiler.CompileRuntime`); a container is just that
   isolation made physical. Scale-out for one logical job = run N containers,
   each a Kafka consumer-group member over a partition subset (documented as the
-  scaling story, since Mailer can't split one operator across nodes).
+  scaling story, since Weibo can't split one operator across nodes).
 
 - **D2 — Two job kinds, YAML first.** See §2.5 for exactly how each becomes a
   job. In short: a YAML job is **read at runtime** by a generic prebuilt image
@@ -194,7 +194,7 @@ YAML** vs **compile the Go**.
 
 - **D4 — Checkpoints must outlive the container.** A container is ephemeral; its
   `/data` dir is not. Two storage tiers:
-  - dev/Docker: a mounted host volume per job (`<host>/mailer-data/<job>`).
+  - dev/Docker: a mounted host volume per job (`<host>/weibo-data/<job>`).
   - prod/K8s: a durable `checkpoint.Storage` backed by S3/GCS (new
     implementation of the existing interface) or a PersistentVolumeClaim.
   On restart the same location is remounted/reused, and the engine's existing
@@ -255,7 +255,7 @@ Extend `observability/dashboard.Server` into a `jobagent` that wraps a
 The agent owns the `Execute` goroutine and translates its outcome into a
 terminal state the controller can read.
 
-### 4.2 Controller service (`cmd/mailer-controller`)
+### 4.2 Controller service (`cmd/weibo-controller`)
 - REST API: `POST /jobs` (submit), `GET /jobs`, `GET /jobs/{id}`,
   `POST /jobs/{id}/cancel`, `POST /jobs/{id}/savepoint`,
   `POST /jobs/{id}/restart?fromSavepoint=…`, `GET /jobs/{id}/logs` (stream),
@@ -264,8 +264,8 @@ terminal state the controller can read.
 - `ContainerBackend` + `CheckpointStorage`/`SavepointStore` wiring.
 - Serves the web UI.
 
-### 4.3 Generic runner image (`mailer-runner`)
-A minimal image: the `mailer-runner` binary (the control agent + engine),
+### 4.3 Generic runner image (`weibo-runner`)
+A minimal image: the `weibo-runner` binary (the control agent + engine),
 `ENTRYPOINT` reads a `WORKFLOW` (path/inline) + `DATA_DIR` + secret env, compiles
 via `workflow/runner.CompileFile`, starts the agent, runs `Execute`, exits with a
 status the backend reports. Health/metrics/control on a fixed port.
@@ -274,16 +274,16 @@ status the backend reports. Health/metrics/control on a fixed port.
 - **Jobs list**: name, state (color-coded), delivery guarantee, uptime,
   records/s, restart count. Submit button.
 - **Job detail**: the pipeline graph (source → operators → sink, from
-  `PipelineGraph`), live throughput + backpressure from `mailer_edge_*` /
-  `mailer_stage_send_block_seconds_total` (an edge at capacity flags the
-  bottleneck — Mailer already exposes this), checkpoint history + sizes,
+  `PipelineGraph`), live throughput + backpressure from `weibo_edge_*` /
+  `weibo_stage_send_block_seconds_total` (an edge at capacity flags the
+  bottleneck — Weibo already exposes this), checkpoint history + sizes,
   logs tail, and Cancel / Savepoint / Restart actions.
 - **Submit**: paste/upload a workflow, set name + restart policy + secrets
   (names only; values via the controller's secret backend), dry-run
   (compile-only) preview showing the graph + guarantee before launch.
 
 Take visual cues from Flink's dashboard (job graph, checkpoint timeline,
-backpressure heat) but keep it Mailer-shaped.
+backpressure heat) but keep it Weibo-shaped.
 
 ---
 
@@ -305,13 +305,13 @@ top-to-bottom; P4/P5 can proceed in parallel once P3 lands; P6/P7 are additive.
 ### Module boundary (D9 — locked)
 
 Keep the core engine dependency-light. Anyone doing `go get
-github.com/ASHUTOSH-SWAIN-GIT/mailer` must **not** pull Docker/K8s/SQLite
+github.com/ASHUTOSH-SWAIN-GIT/weibo` must **not** pull Docker/K8s/SQLite
 clients. Therefore:
 
 - **Core module** (existing `go.mod`): engine + `jobagent` (only `net/http` +
-  engine) + `cmd/mailer-runner`. The runner needs the engine, nothing heavier.
+  engine) + `cmd/weibo-runner`. The runner needs the engine, nothing heavier.
 - **Separate module** `control/` (own `go.mod`, in-repo): controller, container
-  backends, job store, web UI, `cmd/mailer-controller`. This is where the heavy
+  backends, job store, web UI, `cmd/weibo-controller`. This is where the heavy
   Docker/K8s/SQLite deps live, quarantined from library users.
 
 ---
@@ -322,7 +322,7 @@ clients. Therefore:
 over HTTP. This is the contract every runner (YAML or SDK) embeds.
 
 **Deliverables** (core module, new pkg `jobagent/`):
-- `agent.go` — `Agent` wraps a built `*mailer.StreamExecutionEnv`; `Run(ctx)`
+- `agent.go` — `Agent` wraps a built `*weibo.StreamExecutionEnv`; `Run(ctx)`
   launches `Execute` in a goroutine and tracks lifecycle transitions.
 - `state.go` — `State{Phase, StartedAt, RecordsIn, RecordsOut, CurrentCheckpointID,
   LastCheckpointAt, LastError, Uptime}`; `Phase` enum
@@ -346,7 +346,7 @@ container involved.
 supervised job — the "engine reads the YAML" path from §2.5.
 
 **Deliverables** (core module):
-- `cmd/mailer-runner/main.go` — reads env (`WORKFLOW` path, `DATA_DIR`, `PORT`,
+- `cmd/weibo-runner/main.go` — reads env (`WORKFLOW` path, `DATA_DIR`, `PORT`,
   secrets via env), `runner.CompileFile` → `jobagent.Agent.Run`, `SIGTERM` →
   graceful cancel. State/checkpoint dirs derived under `DATA_DIR` (mounted vol).
 - `Dockerfile.runner` — multi-stage: static build → distroless. Non-root.
@@ -379,7 +379,7 @@ continue, not replay-from-zero).
   container starts.
 - `reconcile.go` — loop reconciling store desired-state vs backend actual-state
   (adopt/restart/mark-failed).
-- `cmd/mailer-controller/main.go`.
+- `cmd/weibo-controller/main.go`.
 
 **Gate.** Full `submit → run → cancel → restart` of a YAML job through the API,
 against local Docker; state survives a controller restart (store is source of
@@ -411,8 +411,8 @@ adapter is a drop-in `Blobstore` implementation later.
   `Savepoint` + `RestartFromSavepoint`; API `POST /jobs/{id}/savepoint` and
   restart body `{"savepoint":"<label>"}`.
 - Fencing: **single-live-run guard** in the controller (never two live
-  transactional producers for one job); `MAILER_JOB_ID` injected so authors pin
-  `transactionalID: ${MAILER_JOB_ID}`; the stored spec's id is reused verbatim
+  transactional producers for one job); `WEIBO_JOB_ID` injected so authors pin
+  `transactionalID: ${WEIBO_JOB_ID}`; the stored spec's id is reused verbatim
   on restart.
 - `compiler.CheckpointDir` exposed on `CompiledWorkflow` so the runner seeds the
   right storage; engine checkpoint-listener already added in P1.
@@ -430,7 +430,7 @@ by `test/unit_tests/exactly_once_test.go` + `recovery_test.go`.
 ### P5 — Web UI  *(operate from the browser)* — DONE
 
 **Goal.** Everything the API does, visually — an industrial control-room
-dashboard in the mailer "field-manual" identity.
+dashboard in the weibo "field-manual" identity.
 
 **Scope decision.** Live updates use **polling** (list every 2s, detail every
 1.6s) rather than SSE — simpler, self-contained, no server push code, and the
@@ -464,14 +464,14 @@ controller, reconciler, API, and UI unchanged.
 **Delivered** (`control/backend/kubernetes.go`, on client-go, in the control
 module only — core engine stays dep-light):
 - Each job is a **`batch/v1` Job** (not a Deployment) with `backoffLimit: 0`, so
-  a completed pod is not auto-restarted — mailer's reconciler owns restarts.
+  a completed pod is not auto-restarted — weibo's reconciler owns restarts.
   Per job: PVC (state + checkpoints, reused across restarts), ConfigMap
   (workflow), optional Secret (env, via `envFrom`), ClusterIP Service.
 - `/healthz` wired to liveness + readiness probes; `fsGroup: 65532` so the
   non-root runner can write the volume (the same ownership issue Docker hit).
 - Savepoints under the per-job PVC (`/data/savepoints`) → same-job restart
   works; cross-host/cross-job needs an S3 `Blobstore` adapter (deferred).
-- CLI: `mailer dashboard -backend kubernetes -namespace … -image …`.
+- CLI: `weibo dashboard -backend kubernetes -namespace … -image …`.
 
 **Scope notes.** The live-state/metrics **proxy** reaches jobs via the ClusterIP
 Service DNS, so it works when the controller runs **in-cluster**; run it on the
@@ -497,7 +497,7 @@ managed identically to a YAML job.
 **Scope decision (v1).** **You build the image** (the plan's sanctioned v1),
 not the controller-compiles-source model: a user writes `func Build(env)` and a
 provided harness/Dockerfile compiles it into an image; they submit a small
-`mailer.yaml` manifest (`kind: sdk, image: …`). The controller **auto-detects**
+`weibo.yaml` manifest (`kind: sdk, image: …`). The controller **auto-detects**
 kind on one submit path — no separate SDK endpoint. Controller-compiles-source
 (point at a repo, it builds) is the heavier follow-up.
 
@@ -511,16 +511,16 @@ kind on one submit path — no separate SDK endpoint. Controller-compiles-source
   auto-detects `kind: sdk` on submit and routes it (no workflow compile). The
   dashboard shows SDK jobs with an **SDK** badge and renders their live graph
   from the agent's `/describe`.
-- Example: `mailer-test/sdk-job/` (a first-letter word count — custom Go the
-  declarative operators can't express) + Dockerfile + `mailer.yaml`.
+- Example: `weibo-test/sdk-job/` (a first-letter word count — custom Go the
+  declarative operators can't express) + Dockerfile + `weibo.yaml`.
 
-**Gate.** ✅ Verified end-to-end on Docker: submitted `sdk-job/mailer.yaml`,
+**Gate.** ✅ Verified end-to-end on Docker: submitted `sdk-job/weibo.yaml`,
 the controller auto-detected `kind: sdk`, ran the prebuilt image, and the job
 appeared in the dashboard and produced its custom output
 (`{"letter":"A","count":3}`, …). Unit tests cover the harness, the
 detect/route, and the no-doc-injection launch. (The example imports the new
-`sdk` package, so it needs a mailer release that includes it; the machinery was
-verified against local mailer.)
+`sdk` package, so it needs a weibo release that includes it; the machinery was
+verified against local weibo.)
 
 ---
 

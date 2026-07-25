@@ -8,11 +8,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/jobagent"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/sink"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/source"
-	"github.com/ASHUTOSH-SWAIN-GIT/mailer/types"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/jobagent"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/sink"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/source"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/types"
 )
 
 // blockingSource emits a few records, signals that it is live, then
@@ -35,7 +35,7 @@ func (s *blockingSource) Run(ctx context.Context, out chan<- types.Record) error
 
 // A bounded job runs to completion on its own; terminal phase is Finished.
 func TestAgent_RunToCompletion(t *testing.T) {
-	env := mailer.NewEnv().
+	env := weibo.NewEnv().
 		FromSource(source.FromSlices([]string{"a", "b"}, []string{"1", "2"})).
 		ToSink(sink.NewBlackholeSink())
 
@@ -52,7 +52,7 @@ func TestAgent_RunToCompletion(t *testing.T) {
 // confirm the job drains to a clean terminal phase.
 func TestAgent_StateAndCancel(t *testing.T) {
 	src := &blockingSource{live: make(chan struct{})}
-	env := mailer.NewEnv().FromSource(src).ToSink(sink.NewBlackholeSink())
+	env := weibo.NewEnv().FromSource(src).ToSink(sink.NewBlackholeSink())
 	a := jobagent.New(env)
 
 	srv := httptest.NewServer(a.Handler())
@@ -99,7 +99,7 @@ func TestAgent_StateAndCancel(t *testing.T) {
 // and the label is recorded for the runner to promote.
 func TestAgent_SavepointRequest(t *testing.T) {
 	src := &blockingSource{live: make(chan struct{})}
-	env := mailer.NewEnv().FromSource(src).ToSink(sink.NewBlackholeSink())
+	env := weibo.NewEnv().FromSource(src).ToSink(sink.NewBlackholeSink())
 	a := jobagent.New(env)
 
 	srv := httptest.NewServer(a.Handler())
@@ -137,7 +137,7 @@ func TestAgent_SavepointRequest(t *testing.T) {
 
 // A misconfigured env (no sink) fails fast; the agent records it.
 func TestAgent_Failed(t *testing.T) {
-	env := mailer.NewEnv() // no source and no sink configured
+	env := weibo.NewEnv() // no source and no sink configured
 
 	a := jobagent.New(env)
 	if err := a.Run(context.Background()); err == nil {
@@ -153,7 +153,7 @@ func TestAgent_Failed(t *testing.T) {
 }
 
 func TestAgent_HTTPSurface(t *testing.T) {
-	env := mailer.NewEnv().
+	env := weibo.NewEnv().
 		FromSource(source.FromSlices([]string{"a"}, []string{"1"})).
 		ToSink(sink.NewBlackholeSink())
 	srv := httptest.NewServer(jobagent.New(env).Handler())
