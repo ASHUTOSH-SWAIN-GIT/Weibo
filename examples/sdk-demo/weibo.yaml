@@ -1,0 +1,11 @@
+# SDK job manifest. `weibo deploy` builds the Dockerfile, tags+pushes the
+# image, then submits this to the controller. With -registry set, the bare
+# image below is prefixed automatically, e.g.
+#   -registry 492351590994.dkr.ecr.ap-south-1.amazonaws.com
+#   -> 492351590994.dkr.ecr.ap-south-1.amazonaws.com/weibo-sdk-demo:1.0
+kind: sdk
+name: sdk-demo
+image: weibo-sdk-demo:1.0
+resources:
+  cpu: "250m"
+  memory: "256Mi"

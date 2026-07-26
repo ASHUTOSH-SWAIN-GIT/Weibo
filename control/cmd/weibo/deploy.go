@@ -1,12 +1,14 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"flag"
 	"fmt"
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -68,18 +70,15 @@ func runDeploy(args []string) int {
 			fmt.Fprintf(os.Stderr, "weibo: using image %s\n", image)
 		}
 		if !*noBuild {
-			step("building image %s", image)
-			if err := runDocker("build", "-f", *dockerfile, "-t", image, *buildCtx); err != nil {
-				return fail(fmt.Errorf("build failed for %s: %w", image, err))
+			if err := dockerStep("building image "+image, "built "+image,
+				"build", "-f", *dockerfile, "-t", image, *buildCtx); err != nil {
+				return fail(fmt.Errorf("build failed for %s (see output above): %w", image, err))
 			}
-			ok("built %s", image)
 		}
 		if !*noPush {
-			step("pushing %s", image)
-			if err := runDocker("push", image); err != nil {
-				return fail(fmt.Errorf("push failed for %s: %w (is `docker login` done for this registry?)", image, err))
+			if err := dockerStep("pushing "+image, "pushed "+image, "push", image); err != nil {
+				return fail(fmt.Errorf("push failed for %s (is `docker login` done for this registry?): %w", image, err))
 			}
-			ok("pushed %s", image)
 		}
 	} else if !*noBuild {
 		fmt.Fprintf(os.Stderr, "weibo: %s is not an SDK image manifest (kind: sdk with image:); submitting without build/push\n", *file)
@@ -152,14 +151,72 @@ func rewriteManifestImage(doc []byte, newImage string) ([]byte, error) {
 	return nil, fmt.Errorf("no top-level image field to rewrite")
 }
 
-// runDocker runs a docker CLI command, streaming its output to the terminal
-// so the user sees build/push progress live.
-func runDocker(args ...string) error {
-	fmt.Fprintf(os.Stderr, "+ docker %s\n", strings.Join(args, " "))
+// dockerStep runs a docker CLI command with its output captured (hidden), so
+// deploy stays an abstraction: a spinner shows `startMsg` while it runs, and
+// on success it logs "✓ okMsg". On failure the captured docker output is
+// printed (indented) so the error is still debuggable, and the error returned.
+func dockerStep(startMsg, okMsg string, args ...string) error {
 	cmd := exec.Command("docker", args...)
-	cmd.Stdout = os.Stderr // keep stdout clean for the final job line
-	cmd.Stderr = os.Stderr
-	return cmd.Run()
+	var out bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &out, &out
+	stop := startSpinner(startMsg)
+	err := cmd.Run()
+	stop()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "weibo: ✗ %s\n", startMsg)
+		fmt.Fprint(os.Stderr, indent(out.String()))
+		return err
+	}
+	ok("%s", okMsg)
+	return nil
+}
+
+// startSpinner animates `label` on a single stderr line and returns a stop
+// func that clears it. On a non-terminal (piped/CI) it just prints the label
+// once and animates nothing, keeping logs clean.
+func startSpinner(label string) func() {
+	if !isTerminal(os.Stderr) {
+		fmt.Fprintf(os.Stderr, "weibo: → %s\n", label)
+		return func() {}
+	}
+	done := make(chan struct{})
+	go func() {
+		frames := []rune{'⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'}
+		ticker := time.NewTicker(90 * time.Millisecond)
+		defer ticker.Stop()
+		for i := 0; ; i++ {
+			select {
+			case <-done:
+				fmt.Fprint(os.Stderr, "\r\033[K") // clear the spinner line
+				return
+			case <-ticker.C:
+				fmt.Fprintf(os.Stderr, "\rweibo: %c %s", frames[i%len(frames)], label)
+			}
+		}
+	}()
+	return func() { close(done) }
+}
+
+// isTerminal reports whether f is a character device (an interactive TTY).
+func isTerminal(f *os.File) bool {
+	fi, err := f.Stat()
+	if err != nil {
+		return false
+	}
+	return fi.Mode()&os.ModeCharDevice != 0
+}
+
+// indent prefixes each non-empty line of s with two spaces, so surfaced
+// docker error output is visually nested under the failed step.
+func indent(s string) string {
+	if s == "" {
+		return ""
+	}
+	lines := strings.Split(strings.TrimRight(s, "\n"), "\n")
+	for i, ln := range lines {
+		lines[i] = "  " + ln
+	}
+	return strings.Join(lines, "\n") + "\n"
 }
 
 // parseEnv turns KEY=VAL pairs into a map, rejecting malformed entries.
