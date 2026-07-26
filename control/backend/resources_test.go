@@ -11,7 +11,7 @@ func TestCPUToNanoCPUs(t *testing.T) {
 		in   string
 		want int64
 	}{
-		{"500m", 500_000_000},   // half a CPU
+		{"500m", 500_000_000},    // half a CPU
 		{"1000m", 1_000_000_000}, // one CPU via millicores
 		{"2", 2_000_000_000},     // two whole CPUs
 		{"1.5", 1_500_000_000},   // fractional

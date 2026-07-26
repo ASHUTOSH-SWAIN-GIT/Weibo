@@ -11,10 +11,10 @@ func TestFullImageRef(t *testing.T) {
 	cases := []struct {
 		registry, image, want string
 	}{
-		{"", "orders:1.0", "orders:1.0"},                                     // no registry -> unchanged
-		{"docker.io/ashu", "orders:1.0", "docker.io/ashu/orders:1.0"},        // bare -> prefixed
-		{"docker.io/ashu/", "orders:1.0", "docker.io/ashu/orders:1.0"},       // trailing slash trimmed
-		{"docker.io/ashu", "myrepo/orders:1.0", "myrepo/orders:1.0"},         // already qualified -> verbatim
+		{"", "orders:1.0", "orders:1.0"},                               // no registry -> unchanged
+		{"docker.io/ashu", "orders:1.0", "docker.io/ashu/orders:1.0"},  // bare -> prefixed
+		{"docker.io/ashu/", "orders:1.0", "docker.io/ashu/orders:1.0"}, // trailing slash trimmed
+		{"docker.io/ashu", "myrepo/orders:1.0", "myrepo/orders:1.0"},   // already qualified -> verbatim
 		{"123.dkr.ecr.ap-south-1.amazonaws.com", "job:v2", "123.dkr.ecr.ap-south-1.amazonaws.com/job:v2"},
 	}
 	for _, c := range cases {
