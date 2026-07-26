@@ -51,6 +51,34 @@ weibo restart <id> [-savepoint L]
 weibo savepoint <id> -label L    # stop-with-savepoint
 ```
 
+### `weibo deploy`
+
+For an **SDK job** (`kind: sdk` manifest), `deploy` is one command from source to
+a running job: it **builds** the image, **pushes** it to a registry, and
+**submits** the manifest — all as a clean abstraction (the raw `docker
+build`/`push` output is hidden behind progress lines; the underlying output is
+surfaced only on failure). A plain YAML workflow has no image, so `deploy` just
+submits it.
+
+```sh
+# -registry (env WEIBO_REGISTRY) prefixes a bare manifest image and pushes there:
+#   manifest `image: orders:1.0`  +  -registry docker.io/you
+#   -> builds & pushes docker.io/you/orders:1.0, and the submitted manifest
+#      is rewritten to that same ref so the controller runs exactly what shipped.
+weibo deploy -registry docker.io/you -file weibo.yaml
+```
+
+Flags: `-file` (manifest, default `weibo.yaml`), `-registry` (env
+`WEIBO_REGISTRY`), `-dockerfile` (default `Dockerfile`), `-context` (default
+`.`), `-env KEY=VAL` (repeatable), `-no-build`, `-no-push`. An image that is
+already fully qualified (contains a `/`) is pushed verbatim; a bare name is
+prefixed with `-registry`.
+
+> **Build arch:** `deploy` builds for the host's architecture. Building on an
+> arm64 machine (e.g. Apple Silicon) produces an arm64 image that won't run on
+> an amd64 controller host — deploy against a matching-arch controller, or build
+> on the target arch.
+
 For a production single-VM deployment (registry auth, bearer-token auth, TLS,
 resource limits, systemd), see **[docs/self-hosting.md](../docs/self-hosting.md)**.
 

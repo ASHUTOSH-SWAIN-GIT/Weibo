@@ -115,13 +115,14 @@ weibo jobs
 weibo logs <job-id>
 ```
 
-**An SDK job** — `weibo deploy` builds the image from the manifest's `image:`,
-pushes it, then submits. A minimal `weibo.yaml`:
+**An SDK job** — `weibo deploy` builds the image, pushes it to a registry, then
+submits (progress is shown as clean steps; docker's output is hidden unless a
+step fails). A minimal `weibo.yaml` with a **bare** image name:
 
 ```yaml
 kind: sdk
 name: orders
-image: <registry>/orders-sdk:1.0
+image: orders-sdk:1.0    # bare — -registry prefixes it
 env:
   LOG_LEVEL: info
 resources:
@@ -130,7 +131,9 @@ resources:
 ```
 
 ```sh
-weibo deploy -file weibo.yaml -dockerfile Dockerfile -context .
+# -registry (env WEIBO_REGISTRY) prefixes the bare image and pushes there;
+# the submitted manifest is rewritten to the pushed ref automatically.
+weibo deploy -registry <registry> -file weibo.yaml
 # build → push → submit; then:
 weibo jobs
 weibo status <job-id>
