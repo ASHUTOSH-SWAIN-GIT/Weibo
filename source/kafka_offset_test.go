@@ -19,10 +19,10 @@ func TestCheckpointOffset_AllPartitions(t *testing.T) {
 	)
 
 	// A single consumer-group reader consumes interleaved partitions.
-	k.trackOffset(kafka.Message{Partition: 0, Offset: 10})
-	k.trackOffset(kafka.Message{Partition: 1, Offset: 20})
-	k.trackOffset(kafka.Message{Partition: 2, Offset: 5})
-	k.trackOffset(kafka.Message{Partition: 0, Offset: 11}) // later offset wins
+	k.offsets.track(kafka.Message{Partition: 0, Offset: 10})
+	k.offsets.track(kafka.Message{Partition: 1, Offset: 20})
+	k.offsets.track(kafka.Message{Partition: 2, Offset: 5})
+	k.offsets.track(kafka.Message{Partition: 0, Offset: 11}) // later offset wins
 
 	data, err := k.CheckpointOffset()
 	if err != nil {
@@ -48,7 +48,7 @@ func TestCheckpointOffset_AllPartitions(t *testing.T) {
 // format is exactly what RestoreOffset consumes.
 func TestCheckpointOffset_RoundTripsThroughRestore(t *testing.T) {
 	k := NewKafkaSource(KafkaBrokers("localhost:9092"), KafkaTopic("t"), KafkaGroupID("g"))
-	k.trackOffset(kafka.Message{Partition: 3, Offset: 99})
+	k.offsets.track(kafka.Message{Partition: 3, Offset: 99})
 
 	data, err := k.CheckpointOffset()
 	if err != nil {
@@ -58,14 +58,14 @@ func TestCheckpointOffset_RoundTripsThroughRestore(t *testing.T) {
 	if err := k2.RestoreOffset(data); err != nil {
 		t.Fatalf("RestoreOffset: %v", err)
 	}
-	if k2.restoredOffsets[3] != 100 {
-		t.Errorf("restored offset partition 3: got %d, want 100", k2.restoredOffsets[3])
+	if off, ok := k2.offsets.restoredOffset(3); !ok || off != 100 {
+		t.Errorf("restored offset partition 3: got %d (ok=%v), want 100", off, ok)
 	}
 
 	// A partition that receives no new message this run must still appear in
 	// the next checkpoint at its restored position (only partition 5 gets a
 	// new message; partition 3 stays quiet but must be retained).
-	k2.trackOffset(kafka.Message{Partition: 5, Offset: 7})
+	k2.offsets.track(kafka.Message{Partition: 5, Offset: 7})
 	data2, err := k2.CheckpointOffset()
 	if err != nil {
 		t.Fatalf("CheckpointOffset: %v", err)

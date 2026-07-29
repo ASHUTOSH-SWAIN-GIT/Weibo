@@ -5,21 +5,28 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/segmentio/kafka-go"
 
-	"github.com/ASHUTOSH-SWAIN-GIT/weibo/observability/metrics"
 	"github.com/ASHUTOSH-SWAIN-GIT/weibo/types"
-	"github.com/ASHUTOSH-SWAIN-GIT/weibo/watermark"
 )
 
 // KafkaSource reads records from one or more Kafka topics using a consumer group.
 // It implements the Source interface for use in weibo pipelines,
 // and the CheckpointSource interface for checkpoint/recovery support.
+//
+// KafkaSource is the top-level orchestrator. The work is split across small
+// internal components:
+//
+//	KafkaSource
+//	    ├── partitionDiscovery  (enumerate partitions in parallel mode)
+//	    ├── readerSupervisor    (own readers, fan-out, cancellation, shutdown)
+//	    ├── offsetTracker       (per-partition progress + checkpoint offsets)
+//	    ├── deliveryCoordinator (convert, deserialize, emit)
+//	    ├── watermarkTracker    (bounded-out-of-orderness watermarks)
+//	    └── sourceMetrics       (metric updates)
 //
 // Configure a KafkaSource with functional options via NewKafkaSource:
 //
@@ -41,27 +48,16 @@ import (
 //
 // If a Deserializer is configured (KafkaDeserialize), Record.Parsed is also set.
 type KafkaSource struct {
-	cfg          kafkaSourceConfig
-	readers      []*kafka.Reader
-	partitionIDs []int
+	cfg kafkaSourceConfig
+
+	readers  *readerSupervisor
+	offsets  *offsetTracker
+	delivery *deliveryCoordinator
+	wm       watermarkTracker
 
 	// pending holds messages whose offsets have not yet been committed
 	// when batch committing is enabled (single-reader mode only).
 	pending []kafka.Message
-
-	// restoredOffsets holds per-partition offsets to seek to on startup,
-	// populated by RestoreOffset from a checkpoint.
-	restoredOffsets map[int]int64
-
-	// offsetMu guards consumedOffsets.
-	offsetMu sync.Mutex
-	// consumedOffsets tracks the next offset to read for every partition,
-	// updated as each message is consumed. It is the source of truth for
-	// CheckpointOffset: reader.Stats() surfaces only a single partition in
-	// consumer-group mode, so a Stats-based checkpoint silently dropped
-	// every other partition's progress — reprocessing (or, with a broker
-	// commit racing ahead, losing) their records on restart.
-	consumedOffsets map[int]int64
 }
 
 // NewKafkaSource creates a Source that reads from Kafka.
@@ -81,7 +77,19 @@ func NewKafkaSource(opts ...KafkaSourceOption) *KafkaSource {
 		panic("weibo/source: KafkaSource requires KafkaTopic or KafkaTopics")
 	}
 
-	ks := &KafkaSource{cfg: cfg}
+	ks := &KafkaSource{
+		cfg:     cfg,
+		offsets: newOffsetTracker(),
+		delivery: &deliveryCoordinator{
+			deserializer:    cfg.deserializer,
+			deserFailPolicy: cfg.deserFailPolicy,
+			deserDLQ:        cfg.deserDLQ,
+		},
+		wm: watermarkTracker{
+			outOfOrderness: cfg.watermarkOutOfOrderness,
+			interval:       cfg.watermarkInterval,
+		},
+	}
 
 	if cfg.parallel {
 		if cfg.groupID != "" {
@@ -90,61 +98,16 @@ func NewKafkaSource(opts ...KafkaSourceOption) *KafkaSource {
 		if cfg.topic == "" || len(cfg.topics) > 0 {
 			panic("weibo/source: KafkaParallel requires a single KafkaTopic (KafkaTopics is not supported)")
 		}
-		ks.initParallelReaders()
+		ids, err := partitionDiscovery{brokers: cfg.brokers, topic: cfg.topic}.discover()
+		if err != nil {
+			panic(fmt.Sprintf("weibo/source: %v", err))
+		}
+		ks.readers = newParallelReaderSupervisor(cfg, ids)
 	} else {
-		rc := kafka.ReaderConfig{
-			Brokers:     cfg.brokers,
-			GroupID:     cfg.groupID,
-			MinBytes:    cfg.minBytes,
-			MaxBytes:    cfg.maxBytes,
-			StartOffset: cfg.offsetSpec.toKafka(),
-			Topic:       cfg.topic,
-			GroupTopics: cfg.topics,
-		}
-		if cfg.exactlyOnce {
-			rc.IsolationLevel = kafka.ReadCommitted
-		}
-		if cfg.sasl != nil || cfg.tls != nil {
-			rc.Dialer = buildDialer(cfg.sasl, cfg.tls)
-		}
-		ks.readers = []*kafka.Reader{kafka.NewReader(rc)}
-		ks.partitionIDs = []int{-1}
+		ks.readers = newSerialReaderSupervisor(cfg)
 	}
 
 	return ks
-}
-
-// initParallelReaders discovers partitions and creates one reader per partition.
-func (k *KafkaSource) initParallelReaders() {
-	conn, err := kafka.Dial("tcp", k.cfg.brokers[0])
-	if err != nil {
-		panic(fmt.Sprintf("weibo/source: cannot dial broker for partitions: %v", err))
-	}
-	defer conn.Close()
-
-	partitions, err := conn.ReadPartitions(k.cfg.topic)
-	if err != nil {
-		panic(fmt.Sprintf("weibo/source: cannot read partitions for %s: %v", k.cfg.topic, err))
-	}
-
-	for _, p := range partitions {
-		rc := kafka.ReaderConfig{
-			Brokers:     k.cfg.brokers,
-			Topic:       k.cfg.topic,
-			Partition:   p.ID,
-			MinBytes:    k.cfg.minBytes,
-			MaxBytes:    k.cfg.maxBytes,
-			StartOffset: k.cfg.offsetSpec.toKafka(),
-		}
-		if k.cfg.exactlyOnce {
-			rc.IsolationLevel = kafka.ReadCommitted
-		}
-		if k.cfg.sasl != nil || k.cfg.tls != nil {
-			rc.Dialer = buildDialer(k.cfg.sasl, k.cfg.tls)
-		}
-		k.readers = append(k.readers, kafka.NewReader(rc))
-		k.partitionIDs = append(k.partitionIDs, p.ID)
-	}
 }
 
 // Run fetches messages from Kafka and writes them to the output channel
@@ -156,13 +119,8 @@ func (k *KafkaSource) initParallelReaders() {
 func (k *KafkaSource) Run(ctx context.Context, out chan<- types.Record) error {
 	// If watermarking is enabled, delegate to a WatermarkSource that wraps
 	// the raw fetch loop (via kafkaSourceRunner) to avoid recursion.
-	if k.cfg.watermarkOutOfOrderness > 0 {
-		ws := &WatermarkSource{
-			Source:    &kafkaSourceRunner{k},
-			Generator: watermark.NewBoundedOutOfOrderness(k.cfg.watermarkOutOfOrderness),
-			Interval:  k.cfg.watermarkInterval,
-		}
-		return ws.Run(ctx, out)
+	if k.wm.enabled() {
+		return k.wm.wrap(&kafkaSourceRunner{k}).Run(ctx, out)
 	}
 	return k.runOnce(ctx, out)
 }
@@ -170,12 +128,12 @@ func (k *KafkaSource) Run(ctx context.Context, out chan<- types.Record) error {
 // runOnce is the core fetch loop without watermark injection.
 // In parallel mode, each partition gets its own goroutine.
 func (k *KafkaSource) runOnce(ctx context.Context, out chan<- types.Record) error {
-	defer k.closeAllReaders()
+	defer k.readers.closeAll()
 
-	if len(k.restoredOffsets) > 0 {
-		for i, r := range k.readers {
-			partInt := k.partitionIDs[i]
-			if offset, ok := k.restoredOffsets[partInt]; ok {
+	if k.offsets.hasRestored() {
+		for i, r := range k.readers.readers {
+			partInt := k.readers.partitionIDs[i]
+			if offset, ok := k.offsets.restoredOffset(partInt); ok {
 				if err := r.SetOffset(offset); err != nil {
 					fmt.Printf("weibo/source: restore offset partition %d: %v\n", partInt, err)
 				}
@@ -183,29 +141,27 @@ func (k *KafkaSource) runOnce(ctx context.Context, out chan<- types.Record) erro
 		}
 	}
 
-	if k.cfg.parallel && len(k.readers) > 1 {
-		return k.runParallel(ctx, out)
+	if k.cfg.parallel && k.readers.parallelMode() {
+		return k.readers.runParallel(ctx, k.readerLoop(out))
 	}
 	return k.runSerial(ctx, out)
 }
 
 // runSerial is the single-reader path.
 func (k *KafkaSource) runSerial(ctx context.Context, out chan<- types.Record) error {
-	r := k.readers[0]
+	r := k.readers.primary()
 	for {
 		msg, err := k.fetchWithRetry(ctx, r)
 		if err != nil {
 			return err
 		}
-		k.trackOffset(msg)
-		record := k.processRecord(msg)
+		k.offsets.track(msg)
+		record := k.delivery.toRecord(msg)
 		if record == nil {
 			continue
 		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case out <- *record:
+		if err := k.delivery.emit(ctx, out, *record); err != nil {
+			return err
 		}
 		if k.cfg.exactlyOnce {
 			// No eager commits: the checkpoint coordinator commits
@@ -230,80 +186,30 @@ func (k *KafkaSource) runSerial(ctx context.Context, out chan<- types.Record) er
 	}
 }
 
-// runParallel starts one goroutine per partition reader and merges
-// their output into a single channel.
-func (k *KafkaSource) runParallel(ctx context.Context, out chan<- types.Record) error {
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
-	var wg sync.WaitGroup
-	perr := make(chan error, len(k.readers))
-
-	for i, r := range k.readers {
-		wg.Add(1)
-		go func(idx int, reader *kafka.Reader) {
-			defer wg.Done()
-			for {
-				msg, err := k.fetchWithRetry(ctx, reader)
-				if err != nil {
-					if ctx.Err() == nil {
-						perr <- err
-					}
-					return
-				}
-				k.trackOffset(msg)
-				record := k.processRecord(msg)
-				if record == nil {
-					continue
-				}
-				select {
-				case <-ctx.Done():
-					return
-				case out <- *record:
-				}
-				// No CommitMessages here: parallel readers have no consumer
-				// group (GroupID and KafkaParallel are mutually exclusive), so
-				// broker-side commits are unavailable. Offset durability comes
-				// from CheckpointOffset/RestoreOffset via SetOffset instead.
+// readerLoop is the per-partition loop body run by the reader supervisor in
+// parallel mode. It fetches, tracks offsets and emits records for one reader.
+//
+// No CommitMessages here: parallel readers have no consumer group (GroupID and
+// KafkaParallel are mutually exclusive), so broker-side commits are
+// unavailable. Offset durability comes from CheckpointOffset/RestoreOffset via
+// SetOffset instead.
+func (k *KafkaSource) readerLoop(out chan<- types.Record) readerLoop {
+	return func(ctx context.Context, _ int, reader *kafka.Reader) error {
+		for {
+			msg, err := k.fetchWithRetry(ctx, reader)
+			if err != nil {
+				return err
 			}
-		}(i, r)
-	}
-
-	wg.Wait()
-	select {
-	case err := <-perr:
-		return err
-	default:
-		return nil
-	}
-}
-
-// processRecord runs deserialization and applies the deser failure policy.
-// Returns nil if the record should be dropped.
-func (k *KafkaSource) processRecord(msg kafka.Message) *types.Record {
-	record := KafkaToRecord(msg)
-	if k.cfg.deserializer != nil {
-		parsed, err := k.cfg.deserializer.Deserialize(record.Value, record.Headers)
-		if err != nil {
-			metrics.RecordsFailedTotal.Inc()
-			switch k.cfg.deserFailPolicy {
-			case DeserFailureDLQ:
-				if k.cfg.deserDLQ != nil {
-					failRecord := record.WithHeader("_deser_error", []byte(err.Error()))
-					if werr := k.cfg.deserDLQ.Write(context.Background(), failRecord); werr != nil {
-						fmt.Printf("weibo/source: deser DLQ write error: %v\n", werr)
-					}
-				}
-			case DeserFailureFail:
-				return nil // handled by caller via error
-			default:
-				// DeserFailureDrop
+			k.offsets.track(msg)
+			record := k.delivery.toRecord(msg)
+			if record == nil {
+				continue
 			}
-			return nil
+			if err := k.delivery.emit(ctx, out, *record); err != nil {
+				return err
+			}
 		}
-		record.Parsed = parsed
 	}
-	return &record
 }
 
 // fetchWithRetry retries FetchMessage up to fetchMaxRetries times
@@ -377,25 +283,6 @@ func (k *KafkaSource) commitBatchWithRetry(ctx context.Context, r *kafka.Reader)
 	return k.commitWithRetry(ctx, r, msgs...)
 }
 
-// closeAllReaders closes all partition readers.
-func (k *KafkaSource) closeAllReaders() {
-	for _, r := range k.readers {
-		r.Close()
-	}
-}
-
-// trackOffset records progress past a consumed message so CheckpointOffset
-// reports the next offset to read for every partition — not just the single
-// partition reader.Stats() happens to surface in consumer-group mode.
-func (k *KafkaSource) trackOffset(msg kafka.Message) {
-	k.offsetMu.Lock()
-	if k.consumedOffsets == nil {
-		k.consumedOffsets = make(map[int]int64)
-	}
-	k.consumedOffsets[msg.Partition] = msg.Offset + 1
-	k.offsetMu.Unlock()
-}
-
 // CheckpointOffset returns the source's current position as JSON bytes:
 // {"<partition>": <nextOffsetToRead>} for every partition consumed so far.
 //
@@ -412,45 +299,18 @@ func (k *KafkaSource) trackOffset(msg kafka.Message) {
 // topics with overlapping partition ids is not distinguished (documented
 // limitation shared by the whole offset path).
 func (k *KafkaSource) CheckpointOffset() ([]byte, error) {
-	k.offsetMu.Lock()
-	offsets := make(map[string]int64, len(k.consumedOffsets))
-	for part, next := range k.consumedOffsets {
-		offsets[strconv.Itoa(part)] = next
-	}
-	k.offsetMu.Unlock()
-	return json.Marshal(offsets)
+	return k.offsets.snapshot()
 }
 
 // RestoreOffset restores per-partition offsets from a checkpoint.
 func (k *KafkaSource) RestoreOffset(data []byte) error {
-	var offsets map[string]int64
-	if err := json.Unmarshal(data, &offsets); err != nil {
-		return fmt.Errorf("restore offset: unmarshal: %w", err)
-	}
-	if k.restoredOffsets == nil {
-		k.restoredOffsets = make(map[int]int64)
-	}
-	k.offsetMu.Lock()
-	if k.consumedOffsets == nil {
-		k.consumedOffsets = make(map[int]int64)
-	}
-	for partStr, off := range offsets {
-		var partInt int
-		fmt.Sscanf(partStr, "%d", &partInt)
-		k.restoredOffsets[partInt] = off
-		// Seed consumedOffsets so a partition that receives no new message
-		// this run still carries its restored position into the next
-		// checkpoint — otherwise a quiet partition would be dropped and a
-		// later restart would not resume it.
-		k.consumedOffsets[partInt] = off
-	}
-	k.offsetMu.Unlock()
-	return nil
+	return k.offsets.restore(data)
 }
 
 // KafkaToRecord converts a kafka.Message to a weibo.Record.
 // Headers are copied into a map. Parsed is left nil here; the deserializer
-// (if configured) populates it in runOnce after this conversion.
+// (if configured) populates it in the delivery coordinator after this
+// conversion.
 func KafkaToRecord(msg kafka.Message) types.Record {
 	// kafka-go reuses a message's Value/Key/Header byte buffers for
 	// subsequent messages, so the record must own copies — otherwise a
@@ -498,7 +358,7 @@ func (k *KafkaSource) Drain(ctx context.Context) error {
 	if len(k.pending) == 0 {
 		return nil
 	}
-	return k.commitWithRetry(ctx, k.readers[0], k.pending...)
+	return k.commitWithRetry(ctx, k.readers.primary(), k.pending...)
 }
 
 // CommitOffsets implements source.OffsetCommitter: commits the given
@@ -532,7 +392,7 @@ func (k *KafkaSource) CommitOffsets(ctx context.Context, data []byte) error {
 	if len(msgs) == 0 {
 		return nil
 	}
-	return k.commitWithRetry(ctx, k.readers[0], msgs...)
+	return k.commitWithRetry(ctx, k.readers.primary(), msgs...)
 }
 
 // Describe returns metadata about this Kafka source for the dashboard.
