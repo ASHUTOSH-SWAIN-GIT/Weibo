@@ -35,6 +35,11 @@ type kafkaSourceConfig struct {
 
 	parallel bool
 
+	// watchPartitions is the interval at which parallel mode re-discovers the
+	// topic's partitions and reconciles readers. 0 (default) reconciles once
+	// at startup — behaviour-identical to a fixed reader set.
+	watchPartitions time.Duration
+
 	// exactlyOnce disables eager broker offset commits: offsets are
 	// committed only by the checkpoint coordinator after a checkpoint
 	// completes (source.OffsetCommitter). Also enables read_committed
@@ -184,6 +189,17 @@ func KafkaCommitPolicy(p CommitPolicy) KafkaSourceOption {
 // Offsets are managed per partition.
 func KafkaParallel() KafkaSourceOption {
 	return func(c *kafkaSourceConfig) { c.parallel = true }
+}
+
+// KafkaWatchPartitions enables runtime partition discovery in parallel mode.
+// Every interval the source re-reads the topic's partitions and starts a
+// reader for any partition that has appeared (Kafka only adds partitions).
+// New partitions begin at the configured KafkaStartFrom offset.
+//
+// Only meaningful with KafkaParallel. When unset (default), the partition set
+// is fixed at startup, matching the previous behaviour.
+func KafkaWatchPartitions(interval time.Duration) KafkaSourceOption {
+	return func(c *kafkaSourceConfig) { c.watchPartitions = interval }
 }
 
 // applyDefaults fills in zero-value config fields with sensible defaults.

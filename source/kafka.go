@@ -50,10 +50,18 @@ import (
 type KafkaSource struct {
 	cfg kafkaSourceConfig
 
+	// readers holds the single reader in consumer-group/serial mode; nil in
+	// parallel mode, where partitions owns the dynamic reader set instead.
 	readers  *readerSupervisor
 	offsets  *offsetTracker
 	delivery *deliveryCoordinator
 	wm       watermarkTracker
+
+	// partitions reconciles the running per-partition readers with the
+	// desired partition set (parallel mode only). initialPartitions is the
+	// set discovered at construction, used as the startup reconcile seed.
+	partitions        *partitionManager
+	initialPartitions []int
 
 	// pending holds messages whose offsets have not yet been committed
 	// when batch committing is enabled (single-reader mode only).
@@ -98,11 +106,14 @@ func NewKafkaSource(opts ...KafkaSourceOption) *KafkaSource {
 		if cfg.topic == "" || len(cfg.topics) > 0 {
 			panic("weibo/source: KafkaParallel requires a single KafkaTopic (KafkaTopics is not supported)")
 		}
-		ids, err := partitionDiscovery{brokers: cfg.brokers, topic: cfg.topic}.discover()
+		disc := partitionDiscovery{brokers: cfg.brokers, topic: cfg.topic}
+		ids, err := disc.discover()
 		if err != nil {
 			panic(fmt.Sprintf("weibo/source: %v", err))
 		}
-		ks.readers = newParallelReaderSupervisor(cfg, ids)
+		ks.initialPartitions = ids
+		desired := func(context.Context) ([]int, error) { return disc.discover() }
+		ks.partitions = newPartitionManager(cfg, ks.offsets, desired, cfg.watchPartitions)
 	} else {
 		ks.readers = newSerialReaderSupervisor(cfg)
 	}
@@ -126,24 +137,16 @@ func (k *KafkaSource) Run(ctx context.Context, out chan<- types.Record) error {
 }
 
 // runOnce is the core fetch loop without watermark injection.
-// In parallel mode, each partition gets its own goroutine.
+//
+// In parallel mode the partitionManager owns the per-partition readers,
+// reconciling them with the live partition set and supervising failures.
+// Restore-seeking happens inside the manager as each reader is created (a
+// no-op for serial mode, whose single reader is not partition-pinned).
 func (k *KafkaSource) runOnce(ctx context.Context, out chan<- types.Record) error {
+	if k.cfg.parallel {
+		return k.partitions.run(ctx, k.initialPartitions, k.readerHandle(out))
+	}
 	defer k.readers.closeAll()
-
-	if k.offsets.hasRestored() {
-		for i, r := range k.readers.readers {
-			partInt := k.readers.partitionIDs[i]
-			if offset, ok := k.offsets.restoredOffset(partInt); ok {
-				if err := r.SetOffset(offset); err != nil {
-					fmt.Printf("weibo/source: restore offset partition %d: %v\n", partInt, err)
-				}
-			}
-		}
-	}
-
-	if k.cfg.parallel && k.readers.parallelMode() {
-		return k.readers.runParallel(ctx, k.readerLoop(out))
-	}
 	return k.runSerial(ctx, out)
 }
 
@@ -186,15 +189,16 @@ func (k *KafkaSource) runSerial(ctx context.Context, out chan<- types.Record) er
 	}
 }
 
-// readerLoop is the per-partition loop body run by the reader supervisor in
-// parallel mode. It fetches, tracks offsets and emits records for one reader.
+// readerHandle returns the per-partition loop body run by the partitionManager
+// in parallel mode. It fetches, tracks offsets and emits records for one
+// reader until its context is cancelled or a fatal fetch error occurs.
 //
 // No CommitMessages here: parallel readers have no consumer group (GroupID and
 // KafkaParallel are mutually exclusive), so broker-side commits are
 // unavailable. Offset durability comes from CheckpointOffset/RestoreOffset via
 // SetOffset instead.
-func (k *KafkaSource) readerLoop(out chan<- types.Record) readerLoop {
-	return func(ctx context.Context, _ int, reader *kafka.Reader) error {
+func (k *KafkaSource) readerHandle(out chan<- types.Record) partitionLoop {
+	return func(ctx context.Context, reader *kafka.Reader) error {
 		for {
 			msg, err := k.fetchWithRetry(ctx, reader)
 			if err != nil {
