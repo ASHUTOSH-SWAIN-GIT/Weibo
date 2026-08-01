@@ -2,12 +2,19 @@ package operator
 
 import (
 	"fmt"
-	"hash/fnv"
 
 	"github.com/ASHUTOSH-SWAIN-GIT/weibo/types"
 )
 
 const defaultPartitions = 16
+
+// FNV-1a 32-bit constants (hash/fnv). Inlined so RouteKey hashes a key
+// without allocating a hasher on every record — the value is identical to
+// fnv.New32a().Sum32().
+const (
+	fnvOffset32 = 2166136261
+	fnvPrime32  = 16777619
+)
 
 // KeyByOperator marks the start of a keyed stage.  Records flow
 // through a router that hash-dispatches each record to one of N
@@ -79,7 +86,10 @@ func (op *KeyByOperator) RouteKey(key []byte) int {
 	if len(key) == 0 || op.Partitions <= 1 {
 		return 0
 	}
-	h := fnv.New32a()
-	h.Write(key)
-	return int(h.Sum32()) % op.Partitions
+	h := uint32(fnvOffset32)
+	for _, b := range key {
+		h ^= uint32(b)
+		h *= fnvPrime32
+	}
+	return int(h) % op.Partitions
 }

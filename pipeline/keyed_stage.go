@@ -153,10 +153,10 @@ func (s *KeyedStage) Run(runCtx, hardCtx context.Context, in <-chan types.Record
 
 			chain := s.workers[workerID]
 			if len(chain) > 0 {
-				opName := chain[0].Name()
-				prev = workerCountedRead(prev, func() {
-					metrics.OperatorWorkerRecordsIn.WithLabelValues(opName, wLabel).Inc()
-				})
+				// Resolve the label→counter lookup once per worker, not per
+				// record; incr is then a bound method value on the counter.
+				inCounter := metrics.OperatorWorkerRecordsIn.WithLabelValues(chain[0].Name(), wLabel)
+				prev = workerCountedRead(prev, inCounter.Inc)
 			}
 
 			for _, clone := range chain {
@@ -164,10 +164,9 @@ func (s *KeyedStage) Run(runCtx, hardCtx context.Context, in <-chan types.Record
 				next := make(chan types.Record, internalBuf)
 				go clone.Process(prev, next)
 
+				outCounter := metrics.OperatorWorkerRecordsOut.WithLabelValues(opName, wLabel)
 				prev = workerTimedRead(
-					workerCountedRead(next, func() {
-						metrics.OperatorWorkerRecordsOut.WithLabelValues(opName, wLabel).Inc()
-					}),
+					workerCountedRead(next, outCounter.Inc),
 					opName, wLabel,
 				)
 			}

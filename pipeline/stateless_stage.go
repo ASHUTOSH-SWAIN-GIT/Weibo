@@ -55,12 +55,19 @@ func (s *StatelessStage) runWorker(hardCtx context.Context, in <-chan types.Reco
 		}
 	}()
 
+	// Resolve per-op handles once, not per record: the SingleProcessor type
+	// assertion, the latency batcher, and the label→counter lookup (kept as a
+	// bound Add method value) are all hot-loop-invariant.
+	sps := make([]operator.SingleProcessor, len(s.Ops))
 	timers := make([]*latencyBatcher, len(s.Ops))
-	for i, label := range s.Labels {
-		l := label
+	procAdd := make([]func(float64), len(s.Ops))
+	for i := range s.Ops {
+		sps[i] = s.Ops[i].(operator.SingleProcessor)
+		l := s.Labels[i]
 		timers[i] = newLatencyBatcher(func(avg float64) {
 			metrics.OperatorLatencySeconds.WithLabelValues(l).Observe(avg)
 		})
+		procAdd[i] = metrics.RecordsProcessedTotal.WithLabelValues(l).Add
 	}
 	defer func() {
 		for _, t := range timers {
@@ -72,6 +79,10 @@ func (s *StatelessStage) runWorker(hardCtx context.Context, in <-chan types.Reco
 	if sm != nil {
 		send = sm.send
 	}
+
+	// bufA/bufB are reused across records as a double buffer so chaining
+	// operators no longer allocates a fresh output slice per record per op.
+	var bufA, bufB []types.Record
 
 	for {
 		r, ok, rerr := recvRecord(hardCtx, in)
@@ -90,25 +101,27 @@ func (s *StatelessStage) runWorker(hardCtx context.Context, in <-chan types.Reco
 			}
 			continue
 		}
-		outs := []types.Record{r}
-		for i, op := range s.Ops {
-			sp := op.(operator.SingleProcessor)
-			var next []types.Record
-			for _, rec := range outs {
-				next = append(next, sp.ProcessOne(rec)...)
+		cur := append(bufA[:0], r)
+		alt := bufB
+		for i, sp := range sps {
+			alt = alt[:0]
+			for _, rec := range cur {
+				alt = append(alt, sp.ProcessOne(rec)...)
 			}
 			timers[i].tick()
-			metrics.RecordsProcessedTotal.WithLabelValues(s.Labels[i]).Add(float64(len(next)))
-			outs = next
-			if len(outs) == 0 {
+			procAdd[i](float64(len(alt)))
+			cur, alt = alt, cur
+			if len(cur) == 0 {
 				break // dropped by Filter (or errored in Process) — emit nothing
 			}
 		}
-		for _, rec := range outs {
+		for _, rec := range cur {
 			if serr := send(hardCtx, out, rec); serr != nil {
 				return serr
 			}
 		}
+		// Persist both buffers (with their grown capacity) for the next record.
+		bufA, bufB = cur, alt
 	}
 }
 
