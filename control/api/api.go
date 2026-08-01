@@ -52,6 +52,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /jobs/{id}/state", s.proxy("/state"))
 	mux.HandleFunc("GET /jobs/{id}/metrics", s.proxy("/metrics"))
 	mux.HandleFunc("GET /jobs/{id}/describe", s.proxy("/describe"))
+	mux.HandleFunc("GET /jobs/{id}/plan", s.proxy("/plan"))
 	return s.auth(mux)
 }
 

@@ -85,6 +85,12 @@ type StreamExecutionEnv struct {
 	// stateClosers are factory-created backends that need closing
 	// when the run finishes (e.g. on-disk backends).
 	stateClosers []io.Closer
+
+	// planGraph is the executed stage topology, captured once BuildPlan
+	// runs in Execute. Exposed via PlanJSON for the dashboard DAG; nil
+	// until the job starts running.
+	planGraph *pipeline.PlanGraph
+	planMu    sync.Mutex
 }
 
 // NewEnv creates a new StreamExecutionEnv.
@@ -289,6 +295,14 @@ func (env *StreamExecutionEnv) Execute(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+
+	// Capture the executed stage topology for the dashboard DAG. Names
+	// line up with the weibo_stage_*/weibo_edge_queue metric labels so
+	// the UI can overlay live throughput and backpressure per node/edge.
+	pg := pipeline.DescribePlan(plan)
+	env.planMu.Lock()
+	env.planGraph = &pg
+	env.planMu.Unlock()
 
 	// Phase B: restore per-worker operator state. Keyed stages clone
 	// their operators at plan time, so every clone exists before any

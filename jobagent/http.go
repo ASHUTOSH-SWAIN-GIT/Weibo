@@ -16,6 +16,7 @@ import (
 //	GET  /healthz    liveness + current phase
 //	GET  /state      lifecycle snapshot (JSON State)
 //	GET  /describe   pipeline topology (env.DescribeJSON)
+//	GET  /plan       executed stage graph (env.PlanJSON)
 //	GET  /metrics    Prometheus exposition
 //	POST /cancel     request graceful shutdown
 //	POST /savepoint  stop-with-savepoint (?label=<name>)
@@ -37,6 +38,12 @@ func (a *Agent) Handler() http.Handler {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(a.DescribeJSON()))
+	})
+
+	mux.HandleFunc("GET /plan", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(a.PlanJSON()))
 	})
 
 	mux.Handle("GET /metrics", promhttp.HandlerFor(metrics.Registry, promhttp.HandlerOpts{}))

@@ -81,12 +81,23 @@
   .btn:disabled{opacity:.4;cursor:not-allowed}
   .btns{display:flex;gap:8px;flex-wrap:wrap}
 
-  /* ---- pipeline flow ---- */
-  .flow{display:flex;align-items:center;flex-wrap:wrap;gap:8px;padding:18px 15px}
-  .node{border:1px solid var(--line2);border-radius:var(--r2);padding:8px 12px;background:var(--card2);min-width:74px}
-  .node .t{font-size:10.5px;color:var(--faint);text-transform:uppercase;letter-spacing:.03em}
-  .node .n{font-weight:500;font-size:12.5px;margin-top:2px}
-  .arrow{color:var(--faint)}
+  /* ---- pipeline DAG (self-contained SVG) ---- */
+  .dag{overflow-x:auto;padding:16px 15px}
+  .dag svg{display:block}
+  .dnode-bg{fill:var(--card2);stroke:var(--line2)}
+  .dnode-t{fill:var(--faint);font:600 9.5px var(--sans);letter-spacing:.05em}
+  .dnode-n{fill:var(--fg);font:500 12.5px var(--sans)}
+  .dedge{stroke:#3a4048;stroke-width:1.6;fill:none}
+  .darw{fill:#3a4048}
+  .dpar{fill:var(--accent-bg)}
+  .dpar-t{fill:var(--accent);font:600 10px var(--mono)}
+  .k-blue{fill:var(--blue)}.k-green{fill:var(--green)}.k-accent{fill:var(--accent)}
+  .k-amber{fill:var(--amber)}.k-gray{fill:var(--gray)}
+  /* live stage-DAG overlays */
+  .dnode-sub{fill:var(--muted);font:500 10.5px var(--mono)}
+  .dedge-ok{stroke:#3a4048} .dedge-warn{stroke:var(--amber);stroke-width:2.2} .dedge-hot{stroke:var(--red);stroke-width:2.4}
+  .dedge-lbl{fill:var(--faint);font:600 9px var(--sans)}
+  .dedge-lbl.hot{fill:var(--red)}
 
   /* ---- key/value ---- */
   .kv{display:grid;grid-template-columns:minmax(120px,auto) 1fr;gap:10px 20px;padding:15px}
@@ -175,6 +186,7 @@ const api={
   job:(id)=>authFetch('/jobs/'+id).then(r=>r.json()),
   state:(id)=>authFetch('/jobs/'+id+'/state').then(r=>r.ok?r.json():null).catch(()=>null),
   describe:(id)=>authFetch('/jobs/'+id+'/describe').then(r=>r.ok?r.json():null).catch(()=>null),
+  plan:(id)=>authFetch('/jobs/'+id+'/plan').then(r=>r.ok?r.json():null).catch(()=>null),
   logs:(id)=>authFetch('/jobs/'+id+'/logs?tail=300').then(r=>r.text()).catch(()=>''),
   metrics:(id)=>authFetch('/jobs/'+id+'/metrics').then(r=>r.ok?r.text():null).catch(()=>null),
   validate:(b)=>authFetch('/validate',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(b)}),
@@ -233,22 +245,98 @@ function badge(j){
 }
 function code(v){return v?`<span class="id">${esc(v)}</span>`:'<span class="faint">—</span>'}
 
-function flow(src,ops,snk){
-  const node=(t,n)=>`<div class="node"><div class="t">${esc(t)}</div><div class="n">${esc(n)}</div></div>`;
-  const arr='<span class="arrow">→</span>';
-  const parts=[node('source',src)];
-  ops.forEach(o=>parts.push(arr,node(o[0],o[1])));
-  parts.push(arr,node('sink',snk));
-  return `<div class="flow">${parts.join('')}</div>`;
+/* ---- DAG: normalize topology → nodes, then render as SVG (no deps).
+   Source is either the static job.graph {source,operators[{id,type}],sink}
+   or the richer live /describe {source{type},operators[{type,label,config}],sink}. */
+function toneClass(kind,type){
+  if(kind==='source')return 'k-blue';
+  if(kind==='sink')return 'k-green';
+  const t=String(type||'').toLowerCase();
+  if(t==='keyby'||t==='reduce')return 'k-accent';
+  if(t==='window')return 'k-amber';
+  return 'k-gray';
 }
-function graphEl(gr){
-  if(!gr)return '<div class="empty">No pipeline graph.</div>';
-  const src=g(gr,'Source','source'),snk=g(gr,'Sink','sink'),ops=g(gr,'Operators','operators')||[];
-  return flow(src||'?',ops.map(o=>[g(o,'Type','type'),g(o,'ID','id')]),snk||'?');
+const trunc=(s,n)=>{s=String(s==null?'':s);return s.length>n?s.slice(0,n-1)+'…':s};
+function pipelineNodes(job,pi){
+  if(pi){
+    const ops=(pi.operators||[]).map(o=>({kind:'op',type:o.type||'op',label:o.label||o.type||'op',par:o.config&&o.config.partitions}));
+    const st=(pi.source&&pi.source.type)||'source', sk=(pi.sink&&pi.sink.type)||'sink';
+    return [{kind:'source',type:st,label:st},...ops,{kind:'sink',type:sk,label:sk}];
+  }
+  const gr=job&&job.graph;
+  if(!gr)return null;
+  const src=g(gr,'Source','source')||'?', snk=g(gr,'Sink','sink')||'?';
+  const ops=(g(gr,'Operators','operators')||[]).map(o=>({kind:'op',type:g(o,'Type','type')||'op',label:g(o,'ID','id')||g(o,'Type','type')||'op'}));
+  return [{kind:'source',type:src,label:src},...ops,{kind:'sink',type:snk,label:snk}];
 }
+function dagSVG(nodes){
+  if(!nodes||!nodes.length)return '<div class="empty">No pipeline graph.</div>';
+  const W=158,H=62,GAP=48,PAD=8,cy=PAD+H/2;
+  const width=nodes.length*W+(nodes.length-1)*GAP+PAD*2, height=H+PAD*2;
+  let els='';
+  nodes.forEach((nd,i)=>{
+    const x=PAD+i*(W+GAP);
+    if(i<nodes.length-1){
+      const x1=x+W,x2=x+W+GAP;
+      els+=`<path class="dedge" d="M${x1},${cy} C${x1+GAP/2},${cy} ${x2-GAP/2},${cy} ${x2},${cy}" marker-end="url(#arw)"/>`;
+    }
+    els+=`<g>
+      <rect class="dnode-bg" x="${x}" y="${PAD}" width="${W}" height="${H}" rx="9"/>
+      <circle class="${toneClass(nd.kind,nd.type)}" cx="${x+16}" cy="${PAD+21}" r="3.6"/>
+      <text class="dnode-t" x="${x+27}" y="${PAD+25}">${esc(String(nd.type).toUpperCase())}</text>
+      <text class="dnode-n" x="${x+16}" y="${PAD+45}">${esc(trunc(nd.label,18))}</text>
+      ${nd.par?`<rect class="dpar" x="${x+W-44}" y="${PAD+11}" width="36" height="17" rx="8"/><text class="dpar-t" x="${x+W-26}" y="${PAD+23}" text-anchor="middle">×${esc(nd.par)}</text>`:''}
+    </g>`;
+  });
+  return `<div class="dag"><svg width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" role="img" aria-label="pipeline graph">
+    <defs><marker id="arw" markerWidth="9" markerHeight="9" refX="7" refY="4" orient="auto"><path class="darw" d="M0,0 L7,4 L0,8 Z"/></marker></defs>
+    ${els}</svg></div>`;
+}
+function graphEl(gr){return dagSVG(pipelineNodes({graph:gr},null))}
 function describeGraphEl(pi){
   if(!pi)return '<div class="empty">Pipeline topology appears once the job is running.</div>';
-  return flow((pi.source&&pi.source.type)||'?',(pi.operators||[]).map(o=>[o.type||'op',o.label||o.type||'op']),(pi.sink&&pi.sink.type)||'?');
+  return dagSVG(pipelineNodes(null,pi));
+}
+
+/* ---- live stage DAG: executed plan (/plan) + metric overlays (Level 2).
+   Node names match weibo_stage_* labels; edge names match weibo_edge_queue. */
+function stageTone(type){type=String(type||'').toLowerCase();
+  if(type==='source')return 'k-blue';if(type==='sink')return 'k-green';
+  if(type==='keyed')return 'k-accent';if(type==='channel')return 'k-amber';return 'k-gray'}
+const edgeTone=pct=>pct>=90?'hot':pct>=50?'warn':'ok';
+function stageDagSVG(plan,M){
+  const nodes=(plan&&plan.stages)||[];
+  if(!nodes.length)return '';
+  const edges=(plan&&plan.edges)||[];
+  const W=172,H=76,GAP=56,PAD=10,cy=PAD+H/2;
+  const width=nodes.length*W+(nodes.length-1)*GAP+PAD*2,height=H+PAD*2;
+  let els='';
+  // edges first (behind nodes), colored by live queue fill
+  edges.forEach((e,i)=>{
+    const x1=PAD+i*(W+GAP)+W,x2=x1+GAP;
+    const q=mv(M,'weibo_edge_queue_size',x=>x.labels.edge===e.name);
+    const cap=mv(M,'weibo_edge_queue_capacity',x=>x.labels.edge===e.name)||1;
+    const pct=Math.min(100,Math.round(q/cap*100)),tone=edgeTone(pct);
+    els+=`<path class="dedge dedge-${tone}" d="M${x1},${cy} C${x1+GAP/2},${cy} ${x2-GAP/2},${cy} ${x2},${cy}" marker-end="url(#arw)"/>`;
+    if(pct>=1)els+=`<text class="dedge-lbl${tone==='hot'?' hot':''}" x="${(x1+x2)/2}" y="${cy-9}" text-anchor="middle">${pct}%</text>`;
+  });
+  nodes.forEach((nd,i)=>{
+    const x=PAD+i*(W+GAP);
+    const inV=mv(M,'weibo_stage_records_in_total',v=>v.labels.stage===nd.name);
+    const outV=mv(M,'weibo_stage_records_out_total',v=>v.labels.stage===nd.name);
+    const workers=mv(M,'weibo_stage_workers',v=>v.labels.stage===nd.name)||nd.parallelism||1;
+    els+=`<g>
+      <rect class="dnode-bg" x="${x}" y="${PAD}" width="${W}" height="${H}" rx="9"/>
+      <circle class="${stageTone(nd.type)}" cx="${x+16}" cy="${PAD+20}" r="3.6"/>
+      <text class="dnode-t" x="${x+27}" y="${PAD+24}">${esc(String(nd.type).toUpperCase())}</text>
+      <text class="dnode-n" x="${x+16}" y="${PAD+44}">${esc(trunc(nd.name,20))}</text>
+      <text class="dnode-sub" x="${x+16}" y="${PAD+63}">${fmtN(inV)} → ${fmtN(outV)}</text>
+      ${workers>1?`<rect class="dpar" x="${x+W-44}" y="${PAD+11}" width="36" height="17" rx="8"/><text class="dpar-t" x="${x+W-26}" y="${PAD+23}" text-anchor="middle">×${esc(workers)}</text>`:''}
+    </g>`;
+  });
+  return `<div class="dag"><svg width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" role="img" aria-label="live stage graph">
+    <defs><marker id="arw" markerWidth="9" markerHeight="9" refX="7" refY="4" orient="auto"><path class="darw" d="M0,0 L7,4 L0,8 Z"/></marker></defs>
+    ${els}</svg></div>`;
 }
 
 /* ============================== jobs list view =========================== */
@@ -431,7 +519,7 @@ function viewMetrics(id){
     let job=null;try{const d=await api.job(id);job=d&&d.job}catch(e){}
     setConn(true);
     const name=(job&&job.name)||id;
-    const txt=await api.metrics(id);
+    const [txt,plan]=await Promise.all([api.metrics(id),api.plan(id)]);
     const head=`<a class="back" href="#/jobs/${esc(id)}">← ${esc(name)}</a>
       <div class="row-head" style="margin:12px 0 20px">
         <div><h1>Metrics</h1><div class="id" style="margin-top:4px">${esc(id)}</div></div>
@@ -473,8 +561,12 @@ function viewMetrics(id){
         <td style="width:40%"><div class="bar ${pct>=90?'hot':''}"><i style="width:${pct}%"></i></div></td>
         <td class="num">${pct}%</td></tr>`;
     }).join('')||`<tr><td colspan="4" class="dim">No edge metrics.</td></tr>`;
+    const dagCard=(plan&&plan.stages&&plan.stages.length)
+      ?`<div style="margin-bottom:14px">${card('Pipeline · live',stageDagSVG(plan,M),'<span class="dim">records in → out · edge = queue fill</span>')}</div>`
+      :'';
     app.innerHTML=head+`
       <div class="sub" style="margin:-8px 0 16px">${running?'<span class="phase p-running"><span class="dot"></span>live</span>':'<span class="dim">pipeline not running</span>'} · auto-refreshes every 2s</div>
+      ${dagCard}
       <div class="stats" style="margin-bottom:14px">${tiles}</div>
       <div class="grid2">
         ${card('Stages · records in / out',`<table><thead><tr><th>Stage</th><th>Type</th><th class="num">In</th><th class="num">Out</th></tr></thead><tbody>${stageRows}</tbody></table>`)}

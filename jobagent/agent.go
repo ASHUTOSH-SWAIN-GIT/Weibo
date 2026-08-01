@@ -131,6 +131,12 @@ func (a *Agent) DescribeJSON() string {
 	return a.env.DescribeJSON()
 }
 
+// PlanJSON returns the executed stage topology (DAG nodes + edges) as
+// indented JSON, for the dashboard's live pipeline graph.
+func (a *Agent) PlanJSON() string {
+	return a.env.PlanJSON()
+}
+
 // onCheckpoint records the latest completed checkpoint. Called from the
 // engine (coordinator finalize goroutine or the uncoordinated save path);
 // must be cheap and non-blocking.

@@ -77,3 +77,18 @@ func (env *StreamExecutionEnv) DescribeJSON() string {
 	data, _ := json.MarshalIndent(info, "", "  ")
 	return string(data)
 }
+
+// PlanJSON returns the executed stage topology (nodes + edges) as JSON,
+// captured when Execute builds the plan. Returns "{}" before the job
+// starts running. Node/edge names match the metric labels so the
+// dashboard can overlay live throughput and backpressure onto the DAG.
+func (env *StreamExecutionEnv) PlanJSON() string {
+	env.planMu.Lock()
+	pg := env.planGraph
+	env.planMu.Unlock()
+	if pg == nil {
+		return "{}"
+	}
+	data, _ := json.MarshalIndent(pg, "", "  ")
+	return string(data)
+}
