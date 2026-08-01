@@ -4,126 +4,162 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>weibo</title>
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='8' cy='8' r='4' fill='%232563eb'/%3E%3C/svg%3E">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='8' cy='8' r='4' fill='%235b8cff'/%3E%3C/svg%3E">
 <style>
+  /* ---- design tokens: dark, minimal. Restyle here, not inline. ---- */
   :root{
-    --bg:#fbfbfa; --card:#fff; --fg:#1a1a1a; --muted:#8a8a8a; --line:#ececec;
-    --accent:#2563eb; --green:#16a34a; --amber:#d97706; --red:#dc2626; --gray:#b0b0b0;
+    --bg:#0b0c0e; --bg2:#0e1013; --card:#131518; --card2:#171a1f; --raise:#1c2026;
+    --fg:#e7e9ec; --muted:#8b929b; --faint:#606771; --line:#23262c; --line2:#2c3037;
+    --accent:#5b8cff; --accent-bg:#18213a;
+    --green:#3fb950; --amber:#d29922; --red:#f85149; --blue:#58a6ff; --gray:#6e7681;
     --sans:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;
     --mono:ui-monospace,'SF Mono',Menlo,Consolas,monospace;
-    --radius:8px;
+    --r:10px; --r2:7px;
   }
   *{box-sizing:border-box}
   html,body{margin:0;height:100%}
-  body{background:var(--bg);color:var(--fg);font-family:var(--sans);font-size:14px;line-height:1.5;-webkit-font-smoothing:antialiased}
+  body{background:var(--bg);color:var(--fg);font-family:var(--sans);font-size:13.5px;line-height:1.5;-webkit-font-smoothing:antialiased}
   a{color:inherit;text-decoration:none}
-  /* header */
-  header{display:flex;align-items:center;gap:20px;padding:16px 28px;border-bottom:1px solid var(--line)}
-  .brand{font-weight:600;font-size:15px;letter-spacing:-.01em}
-  .brand span{color:var(--accent)}
-  nav{display:flex;gap:4px;margin-left:auto}
-  nav a{padding:6px 12px;border-radius:6px;color:var(--muted);font-weight:500}
-  nav a:hover{background:#f2f2f0;color:var(--fg)}
-  nav a.on{color:var(--fg);background:#eef2ff}
-  .count{color:var(--muted);font-size:13px}
-  main{max-width:900px;margin:0 auto;padding:28px 28px 80px}
-  h1{font-size:20px;font-weight:600;letter-spacing:-.02em;margin:0}
-  .sub{color:var(--muted);font-size:13px;margin-top:2px}
-  .muted{color:var(--muted)}
-  /* card */
-  .card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius)}
-  .card .hd{padding:12px 16px;font-size:12px;font-weight:600;color:var(--muted);border-bottom:1px solid var(--line)}
-  /* table */
+  ::selection{background:var(--accent-bg)}
+  /* scrollbars */
+  *::-webkit-scrollbar{width:10px;height:10px}
+  *::-webkit-scrollbar-thumb{background:#2a2e35;border-radius:6px;border:2px solid var(--bg)}
+  *::-webkit-scrollbar-track{background:transparent}
+
+  /* ---- header ---- */
+  header{display:flex;align-items:center;gap:18px;padding:0 24px;height:52px;border-bottom:1px solid var(--line);background:var(--bg2);position:sticky;top:0;z-index:10}
+  .brand{font-weight:600;font-size:15px;letter-spacing:-.01em;display:flex;align-items:center;gap:8px}
+  .brand .mk{width:9px;height:9px;border-radius:50%;background:var(--accent);box-shadow:0 0 10px var(--accent)}
+  .count{color:var(--faint);font-size:12.5px;font-variant-numeric:tabular-nums}
+  nav{display:flex;gap:2px;margin-left:auto}
+  nav a{padding:6px 12px;border-radius:var(--r2);color:var(--muted);font-weight:500;transition:.12s}
+  nav a:hover{background:var(--card2);color:var(--fg)}
+  nav a.on{color:var(--fg);background:var(--accent-bg)}
+  .conn{display:flex;align-items:center;gap:6px;color:var(--faint);font-size:12px}
+  .conn .dot{width:6px;height:6px;border-radius:50%;background:var(--gray)}
+  .conn.ok .dot{background:var(--green)} .conn.down .dot{background:var(--red)}
+
+  main{max-width:1080px;margin:0 auto;padding:26px 24px 96px}
+  h1{font-size:19px;font-weight:600;letter-spacing:-.02em;margin:0}
+  .sub{color:var(--muted);font-size:12.5px;margin-top:3px}
+  .muted{color:var(--muted)} .dim{color:var(--muted);font-size:12.5px} .faint{color:var(--faint)}
+  .id{font-family:var(--mono);font-size:11.5px;color:var(--faint);word-break:break-all}
+
+  /* ---- card ---- */
+  .card{background:var(--card);border:1px solid var(--line);border-radius:var(--r)}
+  .card .hd{padding:11px 15px;font-size:11px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--faint);border-bottom:1px solid var(--line);display:flex;align-items:center;gap:8px}
+  .card .hd .r{margin-left:auto;font-weight:500;letter-spacing:0;text-transform:none}
+
+  /* ---- table ---- */
   table{width:100%;border-collapse:collapse}
-  th{text-align:left;font-size:12px;font-weight:500;color:var(--muted);padding:10px 16px}
-  td{padding:13px 16px;border-top:1px solid var(--line)}
-  tr.row{cursor:pointer}
-  tr.row:hover td{background:#faf9f8}
+  th{text-align:left;font-size:11px;font-weight:500;letter-spacing:.03em;text-transform:uppercase;color:var(--faint);padding:10px 15px}
+  td{padding:12px 15px;border-top:1px solid var(--line)}
+  tr.row{cursor:pointer;transition:.1s}
+  tr.row:hover td{background:var(--card2)}
   .name{font-weight:500}
-  .dim{color:var(--muted);font-size:13px}
-  /* phase dot */
-  .phase{display:inline-flex;align-items:center;gap:7px;font-size:13px}
-  .dot{width:7px;height:7px;border-radius:50%;background:var(--gray)}
-  .p-running .dot{background:var(--green)} .p-starting .dot,.p-cancelling .dot{background:var(--amber)}
-  .p-failed .dot{background:var(--red)} .p-finished .dot{background:var(--accent)}
-  .p-cancelled .dot,.p-none .dot,.p-submitted .dot{background:var(--gray)}
-  /* pill */
-  .pill{display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;background:#f2f2f0;color:var(--muted)}
-  .pill-sdk{background:#eef2ff;color:var(--accent)}
-  /* buttons */
-  .btn{font-family:inherit;font-size:13px;cursor:pointer;padding:7px 13px;border:1px solid var(--line);background:#fff;color:var(--fg);border-radius:6px;font-weight:500}
-  .btn:hover{background:#f7f7f6}
+  td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
+
+  /* ---- phase ---- */
+  .phase{display:inline-flex;align-items:center;gap:7px;font-size:12.5px;text-transform:capitalize}
+  .dot{width:7px;height:7px;border-radius:50%;background:var(--gray);flex:none}
+  .p-running .dot{background:var(--green);box-shadow:0 0 7px var(--green)}
+  .p-starting .dot,.p-cancelling .dot{background:var(--amber)}
+  .p-failed .dot{background:var(--red);box-shadow:0 0 7px var(--red)}
+  .p-finished .dot{background:var(--blue)}
+  .p-cancelled .dot,.p-none .dot,.p-submitted .dot,.p-stopped .dot{background:var(--gray)}
+
+  /* ---- pill / badge ---- */
+  .pill{display:inline-block;padding:2px 8px;border-radius:6px;font-size:11.5px;background:var(--card2);color:var(--muted);border:1px solid var(--line2);white-space:nowrap}
+  .pill-sdk{background:var(--accent-bg);color:var(--accent);border-color:transparent}
+
+  /* ---- buttons ---- */
+  .btn{font-family:inherit;font-size:12.5px;cursor:pointer;padding:7px 13px;border:1px solid var(--line2);background:var(--card2);color:var(--fg);border-radius:var(--r2);font-weight:500;transition:.12s}
+  .btn:hover{background:var(--raise);border-color:#3a3f47}
   .btn.pri{background:var(--accent);color:#fff;border-color:var(--accent)}
-  .btn.pri:hover{background:#1d4fd7}
-  .btn.danger:hover{color:var(--red);border-color:#f0c9c9}
-  .btn:disabled{opacity:.45;cursor:not-allowed}
+  .btn.pri:hover{background:#4a7bf0}
+  .btn.danger:hover{color:var(--red);border-color:#5a2b2b;background:#241416}
+  .btn:disabled{opacity:.4;cursor:not-allowed}
   .btns{display:flex;gap:8px;flex-wrap:wrap}
-  /* pipeline */
-  .flow{display:flex;align-items:center;flex-wrap:wrap;gap:8px;padding:18px 16px}
-  .node{border:1px solid var(--line);border-radius:6px;padding:8px 12px;background:#fff;min-width:70px}
-  .node .t{font-size:11px;color:var(--muted)}
-  .node .n{font-weight:500;font-size:13px;margin-top:1px}
-  .arrow{color:var(--gray)}
-  /* kv */
-  .kv{display:grid;grid-template-columns:auto 1fr;gap:9px 20px;padding:16px}
-  .kv dt{color:var(--muted);font-size:13px}
-  .kv dd{margin:0;font-weight:500}
-  .big{font-size:19px;font-weight:600}
-  /* logs + lifecycle */
-  pre.log{margin:0;padding:14px 16px;max-height:300px;overflow:auto;font-size:12px;font-family:var(--mono);color:#444;white-space:pre-wrap;word-break:break-all;background:#fafafa;border-radius:0 0 var(--radius) var(--radius)}
-  .tl{padding:12px 16px;font-size:13px}
-  .tl .r{display:flex;gap:10px;padding:4px 0;color:var(--muted)}
-  .tl .r b{color:var(--fg);font-weight:500;min-width:80px}
-  .tl .r .at{margin-left:auto;font-size:12px}
-  /* forms */
-  textarea{width:100%;background:#fff;color:var(--fg);border:1px solid var(--line);border-radius:6px;font-family:var(--mono);font-size:13px;padding:12px;resize:vertical;line-height:1.55}
-  textarea:focus{outline:none;border-color:var(--accent)}
-  .err{color:var(--red);background:#fef2f2;border:1px solid #f5d0d0;border-radius:6px;padding:10px 13px;font-size:13px;white-space:pre-wrap}
-  .empty{padding:44px 16px;text-align:center;color:var(--muted)}
-  .back{color:var(--muted);font-size:13px}
-  .back:hover{color:var(--fg)}
-  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
-  .id{font-family:var(--mono);font-size:12px;color:var(--muted)}
-  @media (max-width:640px){.grid2{grid-template-columns:1fr}}
-  /* metrics */
-  .stats{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:16px}
-  .stat{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:14px 16px}
-  .stat .l{font-size:12px;color:var(--muted)}
-  .stat .v{font-size:22px;font-weight:600;margin-top:4px;letter-spacing:-.01em}
-  .stat .v .u{font-size:12px;color:var(--muted);font-weight:400;margin-left:2px}
-  .bar{height:6px;background:#efefef;border-radius:3px;overflow:hidden;min-width:80px}
+
+  /* ---- pipeline flow ---- */
+  .flow{display:flex;align-items:center;flex-wrap:wrap;gap:8px;padding:18px 15px}
+  .node{border:1px solid var(--line2);border-radius:var(--r2);padding:8px 12px;background:var(--card2);min-width:74px}
+  .node .t{font-size:10.5px;color:var(--faint);text-transform:uppercase;letter-spacing:.03em}
+  .node .n{font-weight:500;font-size:12.5px;margin-top:2px}
+  .arrow{color:var(--faint)}
+
+  /* ---- key/value ---- */
+  .kv{display:grid;grid-template-columns:minmax(120px,auto) 1fr;gap:10px 20px;padding:15px}
+  .kv dt{color:var(--muted);font-size:12.5px}
+  .kv dd{margin:0;font-weight:500;word-break:break-word}
+  .big{font-size:18px;font-weight:600;letter-spacing:-.01em}
+
+  /* ---- logs + timeline ---- */
+  pre.log{margin:0;padding:14px 15px;max-height:340px;overflow:auto;font-size:11.5px;font-family:var(--mono);color:#aab1ba;white-space:pre-wrap;word-break:break-all;background:#0d0f12;border-radius:0 0 var(--r) var(--r)}
+  pre.spec{margin:0;padding:14px 15px;max-height:320px;overflow:auto;font-size:11.5px;font-family:var(--mono);color:#aab1ba;white-space:pre;background:#0d0f12;border-radius:0 0 var(--r) var(--r)}
+  .tl{padding:6px 15px 12px;font-size:12.5px}
+  .tl .r{display:flex;gap:12px;padding:6px 0;color:var(--muted);align-items:baseline}
+  .tl .r b{color:var(--fg);font-weight:500;min-width:88px;text-transform:capitalize}
+  .tl .r .at{margin-left:auto;font-size:11.5px;color:var(--faint);white-space:nowrap}
+
+  /* ---- forms ---- */
+  textarea,input.txt{width:100%;background:#0d0f12;color:var(--fg);border:1px solid var(--line2);border-radius:var(--r2);font-family:var(--mono);font-size:12.5px;padding:12px;resize:vertical;line-height:1.55}
+  textarea:focus,input.txt:focus{outline:none;border-color:var(--accent)}
+  .err{color:#ffb4ae;background:#241416;border:1px solid #5a2b2b;border-radius:var(--r2);padding:10px 13px;font-size:12.5px;white-space:pre-wrap}
+  .empty{padding:46px 16px;text-align:center;color:var(--muted)}
+  .back{color:var(--muted);font-size:12.5px}.back:hover{color:var(--fg)}
+
+  /* ---- stat tiles (summary + live) ---- */
+  .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px}
+  .stat{background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:14px 15px}
+  .stat .l{font-size:11px;color:var(--faint);text-transform:uppercase;letter-spacing:.04em}
+  .stat .v{font-size:22px;font-weight:600;margin-top:5px;letter-spacing:-.02em;display:flex;align-items:baseline;gap:5px}
+  .stat .v .u{font-size:12px;color:var(--muted);font-weight:400}
+  .stat.t-green .v{color:var(--green)} .stat.t-red .v{color:var(--red)}
+  .stat.t-blue .v{color:var(--blue)} .stat.t-amber .v{color:var(--amber)}
+
+  /* ---- bars ---- */
+  .bar{height:6px;background:#22262c;border-radius:3px;overflow:hidden;min-width:80px}
   .bar>i{display:block;height:100%;background:var(--accent);border-radius:3px}
   .bar.hot>i{background:var(--red)}
-  td.num{text-align:right;font-variant-numeric:tabular-nums}
-  @media (max-width:640px){.stats{grid-template-columns:1fr 1fr}}
+
+  /* ---- layout ---- */
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  .stack{display:grid;gap:14px}
+  .row-head{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+  @media (max-width:720px){.grid2{grid-template-columns:1fr}}
 </style>
 </head>
 <body>
 <header>
-  <div class="brand">weibo<span>.</span></div>
+  <div class="brand"><span class="mk"></span>weibo</div>
   <span class="count" id="count"></span>
   <nav id="nav">
     <a href="#/jobs" data-v="jobs">Jobs</a>
     <a href="#/submit" data-v="submit">Submit</a>
   </nav>
+  <div class="conn" id="conn"><span class="dot"></span><span id="connt">—</span></div>
 </header>
 <main id="app"></main>
 
 <script>
+/* =========================================================================
+   weibo control dashboard — single self-contained page (no build step).
+   Structure:  helpers → api → auth → render helpers → views → router.
+   To add a view: write a view*() fn and register it in route().
+   ========================================================================= */
+
 const esc=(s)=>String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const g=(o,...k)=>{for(const x of k){if(o&&o[x]!=null)return o[x]}return undefined};
+const fmtN=v=>(v==null||isNaN(v))?'0':Math.round(v).toLocaleString();
+function fmtTime(s){if(!s)return '—';const d=new Date(s);return isNaN(d)?s:d.toLocaleString([],{month:'short',day:'2-digit',hour:'2-digit',minute:'2-digit'})}
+function fmtFull(s){if(!s)return '—';const d=new Date(s);return isNaN(d)?s:d.toLocaleString()}
+const isTerm=p=>['finished','failed','cancelled'].includes(String(p||'').toLowerCase());
 
-/* auth: a single shared bearer token kept in localStorage. When the API is
-   open (no token configured server-side), the first /jobs returns 200 and no
-   prompt ever appears — UX identical to the no-auth build. */
+/* ---- auth: one shared bearer token in localStorage. Open API => no prompt. ---- */
 const TOKEN_KEY='weibo_token';
 const getToken=()=>localStorage.getItem(TOKEN_KEY)||'';
 const setToken=(t)=>{t?localStorage.setItem(TOKEN_KEY,t):localStorage.removeItem(TOKEN_KEY)};
-
-// authFetch injects the bearer header and reacts to a 401 by clearing the
-// stored token and rendering the token gate. On 401 it returns a promise
-// that never resolves, so callers do not overwrite the gate with their own
-// error UI (polling is already stopped by promptToken).
 function authFetch(url,opts){
   opts=opts||{};
   const t=getToken();
@@ -134,32 +170,31 @@ function authFetch(url,opts){
     return r;
   });
 }
-
 const api={
   jobs:()=>authFetch('/jobs').then(r=>r.json()),
   job:(id)=>authFetch('/jobs/'+id).then(r=>r.json()),
   state:(id)=>authFetch('/jobs/'+id+'/state').then(r=>r.ok?r.json():null).catch(()=>null),
   describe:(id)=>authFetch('/jobs/'+id+'/describe').then(r=>r.ok?r.json():null).catch(()=>null),
-  logs:(id)=>authFetch('/jobs/'+id+'/logs?tail=200').then(r=>r.text()).catch(()=>''),
+  logs:(id)=>authFetch('/jobs/'+id+'/logs?tail=300').then(r=>r.text()).catch(()=>''),
   metrics:(id)=>authFetch('/jobs/'+id+'/metrics').then(r=>r.ok?r.text():null).catch(()=>null),
   validate:(b)=>authFetch('/validate',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(b)}),
   submit:(b)=>authFetch('/jobs',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(b)}),
   act:(id,a,b)=>authFetch('/jobs/'+id+'/'+a,{method:'POST',headers:b?{'content-type':'application/json'}:{},body:b?JSON.stringify(b):null}),
 };
 
-// promptToken renders an inline token-entry gate into #app. saveToken
-// verifies against POST /auth before storing, then replays the current view.
 function promptToken(){
   stopPoll();
+  setConn(null);
   document.getElementById('count').textContent='';
-  app.innerHTML=`<div class="card" style="max-width:400px;margin:48px auto">
+  app.innerHTML=`<div class="card" style="max-width:420px;margin:56px auto">
     <div class="hd">Access token required</div>
-    <div class="sub" style="margin:8px 0 14px">This controller is protected. Enter its access token to continue.</div>
-    <input id="tok" type="password" placeholder="Bearer token" autocomplete="off"
-      style="width:100%;box-sizing:border-box;padding:10px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--fg);font:inherit"
-      onkeydown="if(event.key==='Enter')saveToken()"/>
-    <div class="btns" style="margin-top:12px"><button class="btn pri" onclick="saveToken()">Save &amp; continue</button></div>
-    <div id="tokerr" class="err" style="display:none;margin-top:10px"></div>
+    <div style="padding:15px">
+      <div class="sub" style="margin:0 0 14px">This controller is protected. Enter its access token to continue.</div>
+      <input id="tok" class="txt" type="password" placeholder="Bearer token" autocomplete="off"
+        onkeydown="if(event.key==='Enter')saveToken()"/>
+      <div class="btns" style="margin-top:12px"><button class="btn pri" onclick="saveToken()">Save &amp; continue</button></div>
+      <div id="tokerr" class="err" style="display:none;margin-top:10px"></div>
+    </div>
   </div>`;
   const i=document.getElementById('tok');if(i)i.focus();
 }
@@ -173,98 +208,179 @@ async function saveToken(){
   route();
 }
 
+/* ---- app shell / polling ---- */
 const app=document.getElementById('app');
 let timer=null;
 function stopPoll(){if(timer){clearInterval(timer);timer=null}}
 function poll(fn,ms){stopPoll();fn();timer=setInterval(fn,ms)}
+function setConn(ok){
+  const el=document.getElementById('conn');
+  el.className='conn'+(ok===true?' ok':ok===false?' down':'');
+  document.getElementById('connt').textContent=ok===true?'online':ok===false?'offline':'—';
+}
 
-function phaseEl(p){p=(p||'—').toLowerCase();const cls=({'—':'none'}[p])||p;
-  return `<span class="phase p-${esc(cls)}"><span class="dot"></span>${esc(p)}</span>`}
-
+/* =============================== render helpers ===========================
+   Small composable builders so new cards/tiles are one-liners.            */
+function card(title,body,right){return `<div class="card"><div class="hd">${esc(title)}${right?`<span class="r">${right}</span>`:''}</div>${body}</div>`}
+function kv(pairs){return `<dl class="kv">${pairs.filter(Boolean).map(p=>`<dt>${esc(p[0])}</dt><dd>${p[1]}</dd>`).join('')}</dl>`}
+function tile(l,v,unit,tone){return `<div class="stat${tone?' t-'+tone:''}"><div class="l">${esc(l)}</div><div class="v">${v}${unit?`<span class="u">${esc(unit)}</span>`:''}</div></div>`}
+function phaseEl(p){p=String(p||'—').toLowerCase();const cls=p==='—'?'none':p;return `<span class="phase p-${esc(cls)}"><span class="dot"></span>${esc(p==='—'?'unknown':p)}</span>`}
 function badge(j){
-  if(j.kind==='sdk') return `<span class="pill pill-sdk">sdk</span>`;
-  return j.delivery?`<span class="pill">${esc(j.delivery)}</span>`:'';
+  const b=[];
+  if(j.kind==='sdk')b.push(`<span class="pill pill-sdk">sdk</span>`);
+  if(j.delivery)b.push(`<span class="pill">${esc(j.delivery)}</span>`);
+  return b.join(' ');
 }
+function code(v){return v?`<span class="id">${esc(v)}</span>`:'<span class="faint">—</span>'}
 
-function graphEl(gr){
-  if(!gr)return '';
-  const src=g(gr,'Source','source'), snk=g(gr,'Sink','sink'), ops=g(gr,'Operators','operators')||[];
-  return flow(src, ops.map(o=>[g(o,'Type','type'),g(o,'ID','id')]), snk);
-}
-function describeGraphEl(pi){
-  if(!pi) return '<div class="empty">Pipeline appears once the job is running.</div>';
-  return flow((pi.source&&pi.source.type)||'?', (pi.operators||[]).map(o=>[o.type||'op',o.label||o.type||'op']), (pi.sink&&pi.sink.type)||'?');
-}
-function flow(src, ops, snk){
+function flow(src,ops,snk){
   const node=(t,n)=>`<div class="node"><div class="t">${esc(t)}</div><div class="n">${esc(n)}</div></div>`;
   const arr='<span class="arrow">→</span>';
-  let parts=[node('source',src)];
+  const parts=[node('source',src)];
   ops.forEach(o=>parts.push(arr,node(o[0],o[1])));
   parts.push(arr,node('sink',snk));
   return `<div class="flow">${parts.join('')}</div>`;
 }
+function graphEl(gr){
+  if(!gr)return '<div class="empty">No pipeline graph.</div>';
+  const src=g(gr,'Source','source'),snk=g(gr,'Sink','sink'),ops=g(gr,'Operators','operators')||[];
+  return flow(src||'?',ops.map(o=>[g(o,'Type','type'),g(o,'ID','id')]),snk||'?');
+}
+function describeGraphEl(pi){
+  if(!pi)return '<div class="empty">Pipeline topology appears once the job is running.</div>';
+  return flow((pi.source&&pi.source.type)||'?',(pi.operators||[]).map(o=>[o.type||'op',o.label||o.type||'op']),(pi.sink&&pi.sink.type)||'?');
+}
 
-/* jobs list */
+/* ============================== jobs list view =========================== */
 function viewJobs(){
   setNav('jobs');
   poll(async()=>{
-    let d;try{d=await api.jobs()}catch(e){app.innerHTML=`<div class="err">Controller unreachable.</div>`;return}
+    let d;
+    try{d=await api.jobs()}catch(e){setConn(false);app.innerHTML=`<div class="card"><div class="empty">Controller unreachable.</div></div>`;return}
+    setConn(true);
     const jobs=d.jobs||[];
     document.getElementById('count').textContent=jobs.length?jobs.length+(jobs.length===1?' job':' jobs'):'';
-    if(!jobs.length){app.innerHTML=`<div class="card"><div class="empty">No jobs yet. <a class="back" href="#/submit" style="color:var(--accent)">Submit one →</a></div></div>`;return}
+
+    // summary: counts by phase group ("no. of jobs running")
+    const ph=j=>String(j.phase||'').toLowerCase();
+    const n={total:jobs.length,running:0,pending:0,failed:0,finished:0};
+    jobs.forEach(j=>{const p=ph(j);
+      if(p==='running')n.running++;
+      else if(p==='failed')n.failed++;
+      else if(p==='finished')n.finished++;
+      else if(['starting','cancelling','submitted'].includes(p))n.pending++;
+    });
+    const summary=`<div class="stats" style="margin-bottom:18px">
+      ${tile('Jobs',fmtN(n.total))}
+      ${tile('Running',fmtN(n.running),null,n.running?'green':null)}
+      ${tile('Pending',fmtN(n.pending),null,n.pending?'amber':null)}
+      ${tile('Failed',fmtN(n.failed),null,n.failed?'red':null)}
+      ${tile('Finished',fmtN(n.finished),null,'blue')}
+    </div>`;
+
+    if(!jobs.length){
+      app.innerHTML=summary+`<div class="card"><div class="empty">No jobs yet. <a href="#/submit" style="color:var(--accent)">Submit one →</a></div></div>`;
+      return;
+    }
     const rows=jobs.map(j=>`<tr class="row" onclick="location.hash='#/jobs/${esc(j.id)}'">
-      <td class="name">${esc(j.name)}</td>
+      <td class="name">${esc(j.name)}<div class="id" style="margin-top:2px">${esc(j.id)}</div></td>
       <td>${phaseEl(j.phase)}</td>
-      <td>${badge(j)}</td>
+      <td>${badge(j)||'<span class="faint">—</span>'}</td>
       <td class="dim">${j.kind==='sdk'?'Go pipeline':esc((g(j.graph,'Operators','operators')||[]).length)+' operators'}</td>
       <td class="dim">${esc(fmtTime(j.createdAt))}</td>
     </tr>`).join('');
-    app.innerHTML=`<div class="card"><table>
+    app.innerHTML=summary+card('Jobs',`<table>
       <thead><tr><th>Name</th><th>Phase</th><th>Type</th><th>Pipeline</th><th>Created</th></tr></thead>
-      <tbody>${rows}</tbody></table></div>`;
+      <tbody>${rows}</tbody></table>`);
   },2500);
 }
 
-/* job detail */
+/* ============================== job detail view ==========================
+   Shows every field: job meta, latest run, live state, pipeline, lifecycle,
+   spec and logs.                                                          */
 function viewDetail(id){
   setNav(null);
   poll(async()=>{
-    let d;try{d=await api.job(id)}catch(e){app.innerHTML=`<div class="err">Job not found.</div>`;stopPoll();return}
+    let d;
+    try{d=await api.job(id)}catch(e){setConn(false);app.innerHTML=`<div class="card"><div class="empty">Job not found.</div></div>`;stopPoll();return}
     if(d.error){app.innerHTML=`<div class="err">${esc(d.error)}</div>`;stopPoll();return}
-    const job=d.job, run=d.latestRun, logs=await api.logs(id);
+    setConn(true);
+    const job=d.job,run=d.latestRun;
     const phase=(run&&run.phase)||'—';
-    const isTerm=['finished','failed','cancelled'].includes((phase||'').toLowerCase());
-    const st=isTerm?null:await api.state(id);
-    const pi=(job.kind==='sdk'&&!isTerm)?await api.describe(id):null;
+    const term=isTerm(phase);
+    const st=term?null:await api.state(id);
+    const pi=(job.kind==='sdk'&&!term)?await api.describe(id):null;
+    const logs=await api.logs(id);
     document.getElementById('count').textContent='';
-    const live=st?[
+
+    // live stat tiles
+    const tiles=st?`<div class="stats" style="margin-bottom:16px">
+      ${tile('Records in',fmtN(st.recordsIn||0))}
+      ${tile('Records out',fmtN(st.recordsOut||0))}
+      ${tile('Uptime',esc(st.uptime||'—'))}
+      ${tile('Checkpoint',st.currentCheckpointId?`<span class="id" style="font-size:15px">${esc(st.currentCheckpointId)}</span>`:'<span class="faint">—</span>')}
+    </div>`:'';
+
+    // job metadata — every field
+    const jobCard=card('Job',kv([
+      ['Name',esc(job.name)],
+      ['ID',code(job.id)],
+      ['Kind',esc(job.kind||'yaml')],
+      ['Delivery',job.delivery?esc(job.delivery):'<span class="faint">—</span>'],
+      ['Desired',phaseEl(job.desiredState)],
+      job.image&&['Image',code(job.image)],
+      ['Created',esc(fmtFull(job.createdAt))],
+      ['Updated',esc(fmtFull(job.updatedAt))],
+    ]));
+
+    // latest run — every field
+    const runCard=card('Latest run',run?kv([
+      ['Phase',phaseEl(run.phase)],
+      ['Attempt',esc(run.attempt!=null?run.attempt:'—')],
+      ['Run ID',code(run.id)],
+      ['Container',code(run.containerId)],
+      run.hostPort&&['Control port',esc(run.hostPort)],
+      ['Started',esc(fmtFull(run.startedAt))],
+      run.stoppedAt&&['Stopped',esc(fmtFull(run.stoppedAt))],
+      run.error&&['Error',`<span style="color:var(--red)">${esc(run.error)}</span>`],
+    ]):'<div class="empty">Never launched.</div>');
+
+    // live engine state (running only)
+    const stateCard=st?card('Live state',kv([
       ['Phase',phaseEl(st.phase)],
-      ['Records in',`<span class="big">${esc(st.recordsIn||0)}</span>`],
-      ['Records out',`<span class="big">${esc(st.recordsOut||0)}</span>`],
       ['Uptime',esc(st.uptime||'—')],
-      ['Checkpoint',`<span class="id">${esc(st.currentCheckpointId||'—')}</span>`],
-    ]:[['Phase',phaseEl(phase)],['Status','<span class="dim">Not running</span>']];
-    const trs=(d.transitions||[]).slice(-12).reverse().map(t=>
+      ['Records in',`<span class="big">${fmtN(st.recordsIn||0)}</span>`],
+      ['Records out',`<span class="big">${fmtN(st.recordsOut||0)}</span>`],
+      ['Checkpoint',code(st.currentCheckpointId)||'—'],
+      st.lastCheckpointAt&&['Last checkpoint',esc(fmtFull(st.lastCheckpointAt))],
+      st.lastError&&['Last error',`<span style="color:var(--red)">${esc(st.lastError)}</span>`],
+    ])):card('Live state','<div class="empty">Not running — start or restart to see live metrics.</div>');
+
+    // lifecycle timeline
+    const trs=(d.transitions||[]).slice(-14).reverse().map(t=>
       `<div class="r"><b>${esc(t.to)}</b><span>${esc(t.reason||'')}</span><span class="at">${esc(fmtTime(t.at))}</span></div>`).join('')
-      ||'<div class="dim">No transitions.</div>';
+      ||'<div class="dim" style="padding:6px 0">No transitions.</div>';
+
     app.innerHTML=`
       <a class="back" href="#/jobs">← Jobs</a>
-      <div style="display:flex;align-items:center;gap:12px;margin:12px 0 22px">
-        <div><h1>${esc(job.name)}</h1><div class="id" style="margin-top:3px">${esc(job.id)}</div></div>
-        ${badge(job)}
+      <div class="row-head" style="margin:12px 0 20px">
+        <div><h1>${esc(job.name)}</h1><div class="id" style="margin-top:4px">${esc(job.id)}</div></div>
+        ${phaseEl(phase)} ${badge(job)}
         <div class="btns" style="margin-left:auto">
           <a class="btn pri" href="#/jobs/${esc(id)}/metrics">Metrics</a>
-          <button class="btn" ${isTerm?'disabled':''} onclick="doSavepoint('${esc(id)}')">Savepoint</button>
+          <button class="btn" ${term?'disabled':''} onclick="doSavepoint('${esc(id)}')">Savepoint</button>
           <button class="btn" onclick="doRestart('${esc(id)}')">Restart</button>
-          <button class="btn danger" ${isTerm?'disabled':''} onclick="doCancel('${esc(id)}')">Cancel</button>
+          <button class="btn danger" ${term?'disabled':''} onclick="doCancel('${esc(id)}')">Cancel</button>
         </div>
       </div>
-      <div class="card" style="margin-bottom:16px"><div class="hd">Pipeline</div>${job.kind==='sdk'?describeGraphEl(pi):graphEl(job.graph)}</div>
-      <div class="grid2" style="margin-bottom:16px">
-        <div class="card"><div class="hd">Live</div><dl class="kv">${live.map(r=>`<dt>${r[0]}</dt><dd>${r[1]}</dd>`).join('')}</dl></div>
-        <div class="card"><div class="hd">Lifecycle</div><div class="tl">${trs}</div></div>
-      </div>
-      <div class="card"><div class="hd">Logs</div><pre class="log" id="log">${esc(logs||'No output yet.')}</pre></div>`;
+      ${tiles}
+      <div class="stack" style="margin-bottom:14px">
+        ${card('Pipeline',job.kind==='sdk'?describeGraphEl(pi):graphEl(job.graph))}
+        <div class="grid2">${jobCard}${runCard}</div>
+        <div class="grid2">${stateCard}${card('Lifecycle',`<div class="tl">${trs}</div>`)}</div>
+        <div class="card"><div class="hd">Logs <span class="r faint">tail 300</span></div><pre class="log" id="log">${esc(logs||'No output yet.')}</pre></div>
+        <details class="card"><summary class="hd" style="cursor:pointer;list-style:none">Spec <span class="r faint">${esc(job.kind||'yaml')}</span></summary><pre class="spec">${esc(job.spec||'—')}</pre></details>
+      </div>`;
     const lg=document.getElementById('log');if(lg)lg.scrollTop=lg.scrollHeight;
   },2000);
 }
@@ -282,8 +398,7 @@ async function doSavepoint(id){
   if(!r.ok){const j=await r.json().catch(()=>({}));alert('Savepoint failed: '+(j.error||r.status))}
 }
 
-/* metrics */
-// parseProm turns Prometheus text exposition into {name:[{labels,value}]}.
+/* ================================ metrics view =========================== */
 function parseProm(txt){
   const out={};
   txt.split('\n').forEach(line=>{
@@ -301,8 +416,6 @@ function parseProm(txt){
   return out;
 }
 const mv=(M,n,pred)=>{const a=M[n]||[];const f=pred?a.find(pred):a[0];return f?f.value:0};
-const fmtN=v=>(v==null||isNaN(v))?'0':Math.round(v).toLocaleString();
-// rate tracker: derive per-second throughput from successive total samples.
 let rateS={id:null,t:0,read:0,written:0,rRead:0,rWritten:0};
 function rates(id,read,written){
   const now=Date.now();
@@ -312,38 +425,37 @@ function rates(id,read,written){
   Object.assign(rateS,{id,t:now,read,written});
   return {read:rateS.rRead,written:rateS.rWritten};
 }
-function statTile(l,v,u){return `<div class="stat"><div class="l">${esc(l)}</div><div class="v">${v}${u?`<span class="u">${esc(u)}</span>`:''}</div></div>`}
 function viewMetrics(id){
   setNav(null);
   poll(async()=>{
     let job=null;try{const d=await api.job(id);job=d&&d.job}catch(e){}
+    setConn(true);
     const name=(job&&job.name)||id;
     const txt=await api.metrics(id);
     const head=`<a class="back" href="#/jobs/${esc(id)}">← ${esc(name)}</a>
-      <div style="display:flex;align-items:center;gap:12px;margin:12px 0 22px">
-        <div><h1>Metrics</h1><div class="id" style="margin-top:3px">${esc(id)}</div></div>
-        <div class="btns" style="margin-left:auto"><a class="btn" href="#/jobs/${esc(id)}/metrics/raw" onclick="event.preventDefault();window.open('/jobs/${esc(id)}/metrics','_blank')">Raw ↗</a></div>
+      <div class="row-head" style="margin:12px 0 20px">
+        <div><h1>Metrics</h1><div class="id" style="margin-top:4px">${esc(id)}</div></div>
+        <div class="btns" style="margin-left:auto"><a class="btn" onclick="event.preventDefault();window.open('/jobs/${esc(id)}/metrics','_blank')" href="#">Raw ↗</a></div>
       </div>`;
     if(txt===null){
       app.innerHTML=head+`<div class="card"><div class="empty">This job isn't serving metrics right now.<br>Metrics come from the running job's agent — start or restart the job to see them.</div></div>`;
       return;
     }
     const M=parseProm(txt);
-    const read=mv(M,'weibo_records_read_total'), written=mv(M,'weibo_records_written_total');
+    const read=mv(M,'weibo_records_read_total'),written=mv(M,'weibo_records_written_total');
     const r=rates(id,read,written);
     const running=mv(M,'weibo_pipeline_running')===1;
     const tiles=[
-      statTile('Records read',fmtN(read)),
-      statTile('Records written',fmtN(written)),
-      statTile('Read rate',fmtN(r.read),'/s'),
-      statTile('Write rate',fmtN(r.written),'/s'),
-      statTile('Processed',fmtN((M['weibo_records_processed_total']||[]).reduce((s,x)=>s+x.value,0))),
-      statTile('Failed',fmtN(mv(M,'weibo_records_failed_total'))),
-      statTile('Source errors',fmtN(mv(M,'weibo_source_errors_total'))),
-      statTile('Sink errors',fmtN(mv(M,'weibo_sink_errors_total'))),
+      tile('Records read',fmtN(read)),
+      tile('Records written',fmtN(written)),
+      tile('Read rate',fmtN(r.read),'/s'),
+      tile('Write rate',fmtN(r.written),'/s'),
+      tile('Processed',fmtN((M['weibo_records_processed_total']||[]).reduce((s,x)=>s+x.value,0))),
+      tile('Failed',fmtN(mv(M,'weibo_records_failed_total')),null,mv(M,'weibo_records_failed_total')?'red':null),
+      tile('Source errors',fmtN(mv(M,'weibo_source_errors_total')),null,mv(M,'weibo_source_errors_total')?'red':null),
+      tile('Sink errors',fmtN(mv(M,'weibo_sink_errors_total')),null,mv(M,'weibo_sink_errors_total')?'red':null),
     ].join('');
-    // per-stage records in/out
-    const so=M['weibo_stage_records_out_total']||[], si=M['weibo_stage_records_in_total']||[];
+    const so=M['weibo_stage_records_out_total']||[],si=M['weibo_stage_records_in_total']||[];
     const stageNames=[...new Set([...si,...so].map(x=>x.labels.stage))];
     const stageRows=stageNames.map(s=>{
       const type=(so.find(x=>x.labels.stage===s)||si.find(x=>x.labels.stage===s)||{labels:{}}).labels.type||'';
@@ -351,8 +463,7 @@ function viewMetrics(id){
       const outV=mv(M,'weibo_stage_records_out_total',x=>x.labels.stage===s);
       return `<tr><td class="name">${esc(s)}</td><td class="dim">${esc(type)}</td><td class="num">${fmtN(inV)}</td><td class="num">${fmtN(outV)}</td></tr>`;
     }).join('')||`<tr><td colspan="4" class="dim">No stage metrics.</td></tr>`;
-    // per-edge backpressure (queue vs capacity)
-    const eq=M['weibo_edge_queue_size']||[], ec=M['weibo_edge_queue_capacity']||[];
+    const eq=M['weibo_edge_queue_size']||[],ec=M['weibo_edge_queue_capacity']||[];
     const edgeNames=[...new Set([...eq,...ec].map(x=>x.labels.edge))].sort();
     const edgeRows=edgeNames.map(e=>{
       const q=mv(M,'weibo_edge_queue_size',x=>x.labels.edge===e);
@@ -363,24 +474,23 @@ function viewMetrics(id){
         <td class="num">${pct}%</td></tr>`;
     }).join('')||`<tr><td colspan="4" class="dim">No edge metrics.</td></tr>`;
     app.innerHTML=head+`
-      <div class="sub" style="margin:-10px 0 16px">${running?'<span class="phase p-running"><span class="dot"></span>live</span>':'<span class="dim">pipeline not running</span>'} · auto-refreshes every 2s</div>
-      <div class="stats">${tiles}</div>
+      <div class="sub" style="margin:-8px 0 16px">${running?'<span class="phase p-running"><span class="dot"></span>live</span>':'<span class="dim">pipeline not running</span>'} · auto-refreshes every 2s</div>
+      <div class="stats" style="margin-bottom:14px">${tiles}</div>
       <div class="grid2">
-        <div class="card"><div class="hd">Stages (records in / out)</div>
-          <table><thead><tr><th>Stage</th><th>Type</th><th class="num">In</th><th class="num">Out</th></tr></thead><tbody>${stageRows}</tbody></table></div>
-        <div class="card"><div class="hd">Backpressure (edge queues)</div>
-          <table><thead><tr><th>Edge</th><th class="num">Queue</th><th>Fill</th><th class="num">%</th></tr></thead><tbody>${edgeRows}</tbody></table></div>
+        ${card('Stages · records in / out',`<table><thead><tr><th>Stage</th><th>Type</th><th class="num">In</th><th class="num">Out</th></tr></thead><tbody>${stageRows}</tbody></table>`)}
+        ${card('Backpressure · edge queues',`<table><thead><tr><th>Edge</th><th class="num">Queue</th><th>Fill</th><th class="num">%</th></tr></thead><tbody>${edgeRows}</tbody></table>`)}
       </div>`;
   },2000);
 }
 
-/* submit */
+/* ================================ submit view ============================ */
 function viewSubmit(){
-  setNav('submit');stopPoll();
+  setNav('submit');stopPoll();setConn(true);
+  document.getElementById('count').textContent='';
   app.innerHTML=`
     <h1>Submit a job</h1>
     <div class="sub" style="margin-bottom:18px">Paste a YAML workflow or an SDK manifest (kind: sdk). Preview compiles it before deploy.</div>
-    <textarea id="wf" rows="15" spellcheck="false" placeholder="name: my-job
+    <textarea id="wf" rows="16" spellcheck="false" placeholder="name: my-job
 version: &quot;1&quot;
 source:
   type: generator
@@ -399,7 +509,7 @@ async function doPreview(){
   const wf=document.getElementById('wf').value;const pv=document.getElementById('pv');
   const r=await api.validate({workflow:wf});const j=await r.json();
   if(!r.ok){pv.innerHTML=`<div class="err">${esc(j.error||'Invalid.')}</div>`;document.getElementById('deploy').disabled=true;return}
-  pv.innerHTML=`<div class="card"><div class="hd">${esc(j.name)} · ${esc(j.delivery)}</div>${graphEl(j.graph)}</div>`;
+  pv.innerHTML=card(`${esc(j.name)} · ${esc(j.delivery)}`,graphEl(j.graph));
   document.getElementById('deploy').disabled=false;
 }
 async function doDeploy(){
@@ -409,16 +519,15 @@ async function doDeploy(){
   const id=(j.job&&j.job.id)||j.id;location.hash='#/jobs/'+id;
 }
 
-/* routing */
+/* ================================== router ===============================
+   Add new routes here: match the hash, call your view*() fn.             */
 function setNav(v){document.querySelectorAll('#nav a').forEach(a=>a.classList.toggle('on',a.dataset.v===v));
   if(v!=='jobs')document.getElementById('count').textContent=''}
-function fmtTime(s){if(!s)return '—';const d=new Date(s);return isNaN(d)?s:d.toLocaleString([],{month:'short',day:'2-digit',hour:'2-digit',minute:'2-digit'})}
 function route(){
   const h=location.hash.replace(/^#/,'')||'/jobs';
-  const mm=h.match(/^\/jobs\/([^\/]+)\/metrics$/);
-  if(mm)return viewMetrics(mm[1]);
-  const m=h.match(/^\/jobs\/([^\/]+)$/);
-  if(m)return viewDetail(m[1]);
+  let m;
+  if(m=h.match(/^\/jobs\/([^\/]+)\/metrics$/))return viewMetrics(m[1]);
+  if(m=h.match(/^\/jobs\/([^\/]+)$/))return viewDetail(m[1]);
   if(h==='/submit')return viewSubmit();
   return viewJobs();
 }
