@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -80,92 +79,23 @@ type pendingRow struct {
 func (p *PostgresSink) Write(ctx context.Context, in <-chan types.Record) error {
 	defer p.pool.Close()
 
-	const shutdownTimeout = 5 * time.Second
-
-	var (
-		batch []pendingRow
-		mu    sync.Mutex
-	)
-
-	// flushBatch inserts all pending rows. Rows in a single batch are
-	// grouped by table+columns and inserted with multi-value INSERTs.
-	flushBatch := func(flushCtx context.Context) error {
-		mu.Lock()
-		if len(batch) == 0 {
-			mu.Unlock()
-			return nil
-		}
-		toWrite := batch
-		batch = nil
-		mu.Unlock()
-
-		return p.insertBatch(flushCtx, toWrite)
-	}
-
-	// drain reads remaining records from the channel until it closes or
-	// the timeout expires, mapping and accumulating them into the batch.
-	drain := func() {
-		deadline := time.NewTimer(shutdownTimeout)
-		defer deadline.Stop()
-		for {
-			select {
-			case record, ok := <-in:
-				if !ok {
-					return
-				}
-				row := p.mapRecord(record)
-				if row == nil {
-					continue
-				}
-				mu.Lock()
-				batch = append(batch, *row)
-				mu.Unlock()
-			case <-deadline.C:
-				return
-			}
-		}
-	}
-
-	// Periodic flush timer.
-	ticker := time.NewTicker(p.cfg.flushInterval)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
-			drain()
-			err := flushBatch(shutdownCtx)
-			cancel()
-			return err
-
-		case record, ok := <-in:
-			if !ok {
-				return flushBatch(ctx)
-			}
-
-			row := p.mapRecord(record)
+	bw := &batchWriter[pendingRow]{
+		batchSize:     p.cfg.batchSize,
+		flushInterval: p.cfg.flushInterval,
+		// Synchronous: each insert applies backpressure, and rows within
+		// a batch are grouped per table, so overlapping flushes could
+		// interleave writes to the same table.
+		async: false,
+		convert: func(r types.Record) (pendingRow, bool) {
+			row := p.mapRecord(r)
 			if row == nil {
-				continue
+				return pendingRow{}, false // mapper declined this record
 			}
-
-			mu.Lock()
-			batch = append(batch, *row)
-			full := len(batch) >= p.cfg.batchSize
-			mu.Unlock()
-
-			if full {
-				if err := flushBatch(ctx); err != nil {
-					return err
-				}
-			}
-
-		case <-ticker.C:
-			if err := flushBatch(ctx); err != nil {
-				return err
-			}
-		}
+			return *row, true
+		},
+		flush: p.insertBatch,
 	}
+	return bw.run(ctx, in)
 }
 
 // mapRecord runs the user-provided mapper on a record.

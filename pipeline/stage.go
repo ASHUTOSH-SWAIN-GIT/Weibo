@@ -116,6 +116,15 @@ func (s *SinkStage) Run(runCtx, hardCtx context.Context, in <-chan types.Record,
 	sm := newStageMetrics(s.Name(), "sink")
 	defer sm.setWorkers(1)()
 
+	// Barriers are engine-internal control records. A CheckpointedSink
+	// needs them in-band — that is how it knows which output belongs to
+	// which transaction (see sink.CheckpointedSink). Every other sink
+	// must never see one: an ordinary sink treats whatever it is handed
+	// as data, so a leaked barrier becomes a published Kafka message, a
+	// printed line, or an INSERT. Watermarks are dropped for every sink,
+	// including coordinated ones, which ignore them anyway.
+	_, coordinated := s.Sink.(sink.CheckpointedSink)
+
 	pumped := make(chan types.Record, internalBuf)
 	done := make(chan error, 1)
 	go func() {
@@ -155,6 +164,13 @@ func (s *SinkStage) Run(runCtx, hardCtx context.Context, in <-chan types.Record,
 			} else {
 				continue
 			}
+		}
+
+		// Drop markers now that the barrier hook (which needs them) has
+		// run. Done after the alignment wait above so checkpoint
+		// semantics are untouched.
+		if r.IsWatermark || (r.IsBarrier && !coordinated) {
+			continue
 		}
 
 		select {

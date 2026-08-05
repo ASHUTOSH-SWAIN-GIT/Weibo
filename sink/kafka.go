@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/ASHUTOSH-SWAIN-GIT/weibo/auth"
@@ -128,101 +127,38 @@ type kafkaBatchEntry struct {
 func (k *KafkaSink) Write(ctx context.Context, in <-chan types.Record) error {
 	defer k.writer.Close()
 
-	const shutdownTimeout = 5 * time.Second
-	flushThreshold := 100
-	if k.cfg.batchSize > 0 {
-		flushThreshold = k.cfg.batchSize
+	bw := &batchWriter[kafkaBatchEntry]{
+		batchSize: k.cfg.batchSize,
+		// No periodic flush: kafka-go's own BatchTimeout governs when a
+		// partial batch leaves the writer.
+		flushInterval: 0,
+		// The writer is safe for concurrent use, so a slow broker round
+		// trip doesn't stall accumulation of the next batch.
+		async: true,
+		convert: func(r types.Record) (kafkaBatchEntry, bool) {
+			return kafkaBatchEntry{msg: k.recordToKafka(r), record: r}, true
+		},
+		flush: k.flushBatch,
 	}
+	return bw.run(ctx, in)
+}
 
-	var (
-		batch   []kafkaBatchEntry
-		batchMu sync.Mutex
-		wg      sync.WaitGroup
-		errCh   = make(chan error, 1)
-	)
-
-	flush := func(flushCtx context.Context) {
-		batchMu.Lock()
-		if len(batch) == 0 {
-			batchMu.Unlock()
-			return
-		}
-		toWrite := batch
-		batch = nil
-		batchMu.Unlock()
-
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			msgs := make([]kafka.Message, len(toWrite))
-			for i, e := range toWrite {
-				msgs[i] = e.msg
-			}
-			if err := k.writeWithRetry(flushCtx, msgs); err != nil {
-				for _, e := range toWrite {
-					if ferr := applyFailurePolicy(flushCtx, k.cfg.failurePolicy, k.cfg.dlq, e.record); ferr != nil {
-						select {
-						case errCh <- ferr:
-						default:
-						}
-						return
-					}
-				}
-			}
-		}()
+// flushBatch writes one batch of messages, retrying per the configured
+// policy. When the retries are exhausted the failure policy decides each
+// record's fate; it returns an error only when that policy is to fail.
+func (k *KafkaSink) flushBatch(ctx context.Context, entries []kafkaBatchEntry) error {
+	msgs := make([]kafka.Message, len(entries))
+	for i, e := range entries {
+		msgs[i] = e.msg
 	}
-
-	drain := func() {
-		deadline := time.NewTimer(shutdownTimeout)
-		defer deadline.Stop()
-		for {
-			select {
-			case record, ok := <-in:
-				if !ok {
-					return
-				}
-				msg, rec := k.recordToKafka(record), record
-				batchMu.Lock()
-				batch = append(batch, kafkaBatchEntry{msg: msg, record: rec})
-				batchMu.Unlock()
-			case <-deadline.C:
-				return
+	if err := k.writeWithRetry(ctx, msgs); err != nil {
+		for _, e := range entries {
+			if ferr := applyFailurePolicy(ctx, k.cfg.failurePolicy, k.cfg.dlq, e.record); ferr != nil {
+				return ferr
 			}
 		}
 	}
-
-	for {
-		select {
-		case err := <-errCh:
-			wg.Wait()
-			return err
-
-		case <-ctx.Done():
-			shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
-			drain()
-			flush(shutdownCtx)
-			wg.Wait()
-			cancel()
-			return ctx.Err()
-
-		case record, ok := <-in:
-			if !ok {
-				flush(ctx)
-				wg.Wait()
-				return nil
-			}
-
-			msg, rec := k.recordToKafka(record), record
-			batchMu.Lock()
-			batch = append(batch, kafkaBatchEntry{msg: msg, record: rec})
-			full := len(batch) >= flushThreshold
-			batchMu.Unlock()
-
-			if full {
-				flush(ctx)
-			}
-		}
-	}
+	return nil
 }
 
 // writeWithRetry attempts to write the batch, retrying up to maxRetries
