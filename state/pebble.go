@@ -191,6 +191,27 @@ func (vs *pebbleValueState) Clear() {
 	}
 }
 
+func (vs *pebbleValueState) Keys() []string {
+	p := vs.backend
+	p.life.RLock()
+	defer p.life.RUnlock()
+	if p.closed {
+		return nil
+	}
+	prefix := valuePrefixBytes(vs.namespace)
+	iter, _ := p.db.NewIter(&pebble.IterOptions{
+		LowerBound: prefix,
+		UpperBound: prefixUpperBound(prefix),
+	})
+	defer iter.Close()
+
+	var keys []string
+	for iter.First(); iter.Valid(); iter.Next() {
+		keys = append(keys, valueUserKeyFromFull(vs.namespace, iter.Key()))
+	}
+	return keys
+}
+
 func (vs *pebbleValueState) SnapshotAll() map[string][]byte {
 	p := vs.backend
 	p.life.RLock()

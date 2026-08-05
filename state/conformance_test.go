@@ -2,6 +2,7 @@ package state_test
 
 import (
 	"fmt"
+	"sort"
 	"testing"
 
 	"github.com/ASHUTOSH-SWAIN-GIT/weibo/state"
@@ -167,6 +168,43 @@ func TestConformance_Value_SnapshotAll(t *testing.T) {
 			}
 			if string(snap["bob"]) != "200" {
 				t.Errorf("bob: got %q", snap["bob"])
+			}
+		})
+	}
+}
+
+// TestConformance_Value_Keys covers ValueState.Keys across backends: it must
+// list every key holding a value, independently of the key set via SetKey,
+// and must not report keys that were cleared. Reduce relies on this to sweep
+// the state of closed windows.
+func TestConformance_Value_Keys(t *testing.T) {
+	for _, bk := range backends(t) {
+		t.Run(bk.Name, func(t *testing.T) {
+			b := newBackend(t, bk.Factory, "test")
+			defer closeBackend(t, b)
+			vs := b.ValueState("reduce")
+
+			if keys := vs.Keys(); len(keys) != 0 {
+				t.Fatalf("empty namespace: expected no keys, got %v", keys)
+			}
+
+			for _, k := range []string{"alice", "bob", "carol"} {
+				vs.SetKey(k)
+				vs.Set([]byte(k))
+			}
+			vs.SetKey("bob")
+			vs.Clear()
+
+			got := vs.Keys()
+			sort.Strings(got)
+			want := []string{"alice", "carol"}
+			if len(got) != len(want) {
+				t.Fatalf("expected %v, got %v", want, got)
+			}
+			for i := range want {
+				if got[i] != want[i] {
+					t.Errorf("key %d: got %q, want %q", i, got[i], want[i])
+				}
 			}
 		})
 	}

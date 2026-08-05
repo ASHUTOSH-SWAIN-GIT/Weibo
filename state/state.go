@@ -39,6 +39,14 @@ type ValueState interface {
 	// Clear removes the value for the current key.
 	Clear()
 
+	// Keys returns every key in this namespace that currently holds a
+	// value. Order is unspecified. It is independent of the key set via
+	// SetKey. Used by operators that must iterate their whole keyspace
+	// without materializing the values — e.g. Reduce evicting the state
+	// of windows the watermark has closed. Prefer this over SnapshotAll
+	// when only the keys are needed: SnapshotAll copies every value.
+	Keys() []string
+
 	// SnapshotAll returns a copy of all key-value pairs in this state namespace.
 	// Used for checkpointing.
 	SnapshotAll() map[string][]byte

@@ -105,6 +105,18 @@ func (vs *memoryValueState) Clear() {
 	}
 }
 
+func (vs *memoryValueState) Keys() []string {
+	vs.mu.Lock()
+	defer vs.mu.Unlock()
+
+	vs.data = vs.backend.value[vs.name]
+	keys := make([]string, 0, len(vs.data))
+	for k := range vs.data {
+		keys = append(keys, k)
+	}
+	return keys
+}
+
 func (vs *memoryValueState) SnapshotAll() map[string][]byte {
 	vs.mu.Lock()
 	defer vs.mu.Unlock()

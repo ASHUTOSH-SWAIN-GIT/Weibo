@@ -2,6 +2,9 @@ package operator
 
 import (
 	"encoding/json"
+	"strings"
+	"time"
+
 	"github.com/ASHUTOSH-SWAIN-GIT/weibo/state"
 	"github.com/ASHUTOSH-SWAIN-GIT/weibo/types"
 )
@@ -56,6 +59,13 @@ type ReduceOperator struct {
 	// it checkpoints the backend natively (e.g. Pebble hard-links)
 	// and returns a state-ref marker instead of serialized state.
 	nativeSnapshot func(checkpointID string) ([]byte, error)
+
+	// windowFrontier is the highest window_end observed on an incoming
+	// record — the watermark-derived boundary below which every window
+	// has closed. It drives state eviction; see evictClosedWindows.
+	// RAM-only: after a restore it rebuilds from the first windowed
+	// record, which also sweeps any stale entries the checkpoint carried.
+	windowFrontier time.Time
 }
 
 // SetNativeSnapshot implements NativeSnapshotter.
@@ -141,7 +151,85 @@ func (op *ReduceOperator) Process(in <-chan types.Record, out chan<- types.Recor
 			Offset:    record.Offset,
 			Headers:   record.Headers,
 		}
+
+		// Emit first, then evict: the record's own window is at the
+		// frontier, never below it, so its accumulator survives.
+		op.advanceWindowFrontier(vs, record)
 	}
+}
+
+// advanceWindowFrontier tracks the highest window_end seen and, when it
+// moves, evicts the state of every window that closed below it.
+//
+// Why this is a safe completion signal: the WindowOperator only fires a
+// window once the watermark has passed its end, and a single watermark
+// pass fires EVERY window whose end it covers. So observing a record
+// tagged window_end=E proves the watermark reached E, which means every
+// window ending before E has already fired and can receive no further
+// records (later ones are dropped as late upstream). Its accumulator is
+// final and dead.
+//
+// Watermark records themselves can't be used here: the WindowOperator
+// consumes them and does not forward them, so a Reduce placed after a
+// Window never sees one.
+func (op *ReduceOperator) advanceWindowFrontier(vs state.ValueState, r types.Record) {
+	raw, ok := r.Headers["window_end"]
+	if !ok {
+		return // non-windowed reduce: state is per-key and lives forever
+	}
+	end, err := time.Parse(time.RFC3339Nano, string(raw))
+	if err != nil || !end.After(op.windowFrontier) {
+		return
+	}
+	op.windowFrontier = end
+	op.evictClosedWindows(vs)
+	vs.SetKey(StateKey(r)) // eviction re-scoped vs; restore the caller's key
+}
+
+// evictClosedWindows drops every per-(key, window) entry whose window
+// ended before the frontier. Without it a windowed Reduce accumulates one
+// dead entry per (key, window) forever — unbounded memory on a long-running
+// pipeline, and an ever-growing checkpoint, since Snapshot serializes the
+// whole namespace.
+//
+// The scan runs only when the frontier advances (once per window, not per
+// record). It leaves vs scoped to the last evicted key — the caller
+// re-scopes.
+func (op *ReduceOperator) evictClosedWindows(vs state.ValueState) {
+	var stale []string
+	for _, k := range vs.Keys() {
+		end, ok := stateKeyWindowEnd(k)
+		if ok && end.Before(op.windowFrontier) {
+			stale = append(stale, k)
+		}
+	}
+	for _, k := range stale {
+		vs.SetKey(k)
+		vs.Clear()
+	}
+}
+
+// stateKeyWindowEnd extracts the window end from a StateKey of the form
+// "<key>/<window_start>/<window_end>". It reports ok only when BOTH bounds
+// parse as RFC3339Nano — a plain (non-windowed) key that happens to contain
+// slashes must never be mistaken for a window and evicted.
+func stateKeyWindowEnd(sk string) (time.Time, bool) {
+	lastSlash := strings.LastIndex(sk, "/")
+	if lastSlash < 0 {
+		return time.Time{}, false
+	}
+	prevSlash := strings.LastIndex(sk[:lastSlash], "/")
+	if prevSlash < 0 {
+		return time.Time{}, false
+	}
+	if _, err := time.Parse(time.RFC3339Nano, sk[prevSlash+1:lastSlash]); err != nil {
+		return time.Time{}, false
+	}
+	end, err := time.Parse(time.RFC3339Nano, sk[lastSlash+1:])
+	if err != nil {
+		return time.Time{}, false
+	}
+	return end, true
 }
 
 // Snapshot returns the operator's current per-key state as JSON bytes.

@@ -51,30 +51,49 @@ threaten exactly-once. Each needs a fix **plus a regression test**.
 
 ---
 
-## Tier 2 — Windowing semantics (surfaced by the production test)
+## Tier 2 — Windowing semantics (surfaced by the production test) — ✅ DONE
 
-The load test exposed how `Window → Reduce` actually behaves, and it's the
-biggest usability gap for real analytics.
+The load test exposed how `Window → Reduce` actually behaves, and it was the
+biggest usability gap for real analytics. All three items are now fixed.
 
-6. **Windowed aggregation emits partials, not one result per window.**
-   `Window` flushes every buffered record at close, and `Reduce` emits a running
-   accumulator per record (`operator/reduce.go:137`), so a 5s window produces N
-   rows per key with growing totals — the *last* is the real total. This is
-   documented, but it's not what "windowed sum" should mean. **Add a
-   window-close-only emission** (one final aggregate per key per window), e.g. a
-   `WindowedReduce` / an "emit on fire" flag, keeping the incremental mode
-   available. Highest-value feature-correctness item.
+6. ~~**Windowed aggregation emits partials, not one result per window.**~~
+   **Fixed.** `WindowOperator.Reducer` (`operator/window.go`) folds a window's
+   buffered records internally and `fireWindow` emits ONE aggregate per
+   `(key, window)` at close. Exposed as `Stream.WindowReduce` /
+   `WindowReduceWithIdleTimeout` (`stream.go`). The incremental
+   `Window(...).Reduce(...)` form still works — the reducer is opt-in.
+   Covered by `test/unit_tests/operator/window_reduce_test.go`.
 
-7. **Per-`(key, window)` reduce state is never evicted** — `operator/reduce.go`
-   (`StateKey`). Every distinct window creates a new state entry that's never
-   removed, so a long-running windowed pipeline grows memory without bound.
-   Fix: drop a window's reduce state when the window fires / is GC'd past
-   allowed-lateness.
+7. ~~**Per-`(key, window)` reduce state is never evicted.**~~ **Fixed.**
+   `ReduceOperator` tracks a window-close frontier (the highest `window_end`
+   seen on its input) and, when it advances, evicts every state entry whose
+   window closed below it (`operator/reduce.go`,
+   `advanceWindowFrontier`/`evictClosedWindows`). Memory is now bounded by the
+   open windows, not by every window ever seen, and checkpoints stop growing.
+   Non-windowed (streaming) reduce state is untouched — its per-key
+   accumulator is still the lifetime running total.
 
-8. **Session-window multi-merge** — `operator/window.go` (~line 217) /
-   `window/session.go`. A record bridging two sessions merges only the first
-   overlap, leaving fragments. Cross-confirmed by both auditors. Fix: coalesce
-   all overlapping sessions.
+   Note on the mechanism: watermark records could **not** be used as the
+   eviction trigger, because `WindowOperator.handleWatermark` consumes
+   watermarks without forwarding them, so a `Reduce` after a `Window` never
+   sees one. Forwarding them was rejected: sinks other than `TxnKafkaSink`
+   don't filter markers and would write watermarks as data records. The
+   window-end header on the fired records carries the same information and
+   stays local to the operator. Added `ValueState.Keys()` (both backends) to
+   support the sweep without copying values the way `SnapshotAll` does.
+   Covered by `test/unit_tests/operator/reduce_evict_test.go` and
+   `TestConformance_Value_Keys`.
+
+8. ~~**Session-window multi-merge.**~~ **Fixed.** `assignToWindow`
+   (`operator/window.go`) collects *every* existing session for the key that
+   overlaps the incoming window and coalesces them all into one merged session
+   (min-start / max-end), instead of stopping at the first overlap.
+
+**Known follow-up:** the last window before a stream ends is never evicted —
+nothing arrives afterwards to advance the frontier. Bounded by one window's
+worth of keys, so harmless, but a `Close()`-time sweep would close it. Proper
+allowed-lateness (#16) will also need to push the eviction frontier back by the
+lateness bound, since late records may reopen a window that already fired.
 
 ---
 
@@ -154,14 +173,17 @@ The production test showed these gaps directly.
 
 ## Suggested sequencing
 
-- **Sprint 1 (correctness):** Tier 1 (#1 first — it's the exactly-once bug), then
-  Tier 2 #6–#7 (windowed final-emit + state eviction go together).
-- **Sprint 2 (hardening + ops):** Tier 3, plus Tier 4 #12–#13 while the testing
-  context is fresh.
+- ~~**Sprint 1 (correctness):** Tier 1, then Tier 2 #6–#7.~~ Done — Tier 1 is
+  fixed (with #5 mitigated by a poll timeout rather than the high-water-offset
+  rework), and Tier 2 is fully closed.
+- **Sprint 2 (hardening + ops) — current:** Tier 3, plus Tier 4 #12–#13 while
+  the testing context is fresh.
 - **Sprint 3+ (features):** Tier 5, starting with allowed-lateness (#16), which
   the windowing work in Sprint 1 sets up.
 - **Continuous:** Tier 6 alongside everything.
 
-The single highest-leverage item is **#1 (multi-partition checkpoint offsets)** —
-it's the difference between "claims exactly-once" and "is exactly-once" on any
-realistic multi-partition topic.
+~~The single highest-leverage item is **#1 (multi-partition checkpoint
+offsets)**~~ — shipped. With Tiers 1 and 2 closed, the highest-leverage
+remaining item is **#9 (failure policies not honored)**: a pipeline that
+silently drops records or reports success after a fatal source error
+undermines the same guarantees Tier 1 just secured.
