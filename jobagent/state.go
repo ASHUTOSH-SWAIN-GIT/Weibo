@@ -53,7 +53,16 @@ type State struct {
 	// LastCheckpointAt is when the agent observed that checkpoint
 	// complete (nil until the first one).
 	LastCheckpointAt *time.Time `json:"lastCheckpointAt,omitempty"`
+	// Checkpoints is the recent checkpoint history (newest first),
+	// for the dashboard's checkpoint section.
+	Checkpoints []Checkpoint `json:"checkpoints,omitempty"`
 
 	// LastError is the terminal error message when Phase is Failed.
 	LastError string `json:"lastError,omitempty"`
+}
+
+// Checkpoint is one completed checkpoint in the job's history.
+type Checkpoint struct {
+	ID        string    `json:"id"`
+	CompletedAt time.Time `json:"completedAt"`
 }

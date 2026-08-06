@@ -146,6 +146,14 @@ func (a *Agent) onCheckpoint(id string) {
 	defer a.mu.Unlock()
 	a.st.CurrentCheckpointID = id
 	a.st.LastCheckpointAt = &now
+	// Keep a bounded history, newest first, so /state can show a
+	// checkpoints section without unbounded memory growth.
+	cp := Checkpoint{ID: id, CompletedAt: now}
+	a.st.Checkpoints = append([]Checkpoint{cp}, a.st.Checkpoints...)
+	const maxCheckpoints = 10
+	if len(a.st.Checkpoints) > maxCheckpoints {
+		a.st.Checkpoints = a.st.Checkpoints[:maxCheckpoints]
+	}
 }
 
 // counterValue reads the current value of a Prometheus counter without

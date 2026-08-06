@@ -166,11 +166,32 @@ const api={
   job:id=>authFetch('/jobs/'+id).then(r=>r.json()),
   state:id=>authFetch('/jobs/'+id+'/state').then(r=>r.ok?r.json():null).catch(()=>null),
   describe:id=>authFetch('/jobs/'+id+'/describe').then(r=>r.ok?r.json():null).catch(()=>null),
+  plan:id=>authFetch('/jobs/'+id+'/plan').then(r=>r.ok?r.json():null).catch(()=>null),
+  metrics:id=>authFetch('/jobs/'+id+'/metrics').then(r=>r.ok?r.text():null).catch(()=>null),
   logs:id=>authFetch('/jobs/'+id+'/logs?tail=200').then(r=>r.text()).catch(()=>''),
   validate:b=>authFetch('/validate',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(b)}),
   submit:b=>authFetch('/jobs',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(b)}),
   act:(id,a,b)=>authFetch('/jobs/'+id+'/'+a,{method:'POST',headers:b?{'content-type':'application/json'}:{},body:b?JSON.stringify(b):null}),
 };
+
+/* Prometheus exposition text parser → {metric: [{labels, value}]} */
+function parseProm(txt){
+  const out={};
+  txt.split('\n').forEach(line=>{
+    line=line.trim();
+    if(!line||line[0]==='#')return;
+    const m=line.match(/^([a-zA-Z_:][\w:]*)(\{[^}]*\})?\s+(-?[\d.eE+]+|[+-]?Inf|NaN)$/);
+    if(!m)return;
+    const labels={};
+    if(m[2])m[2].slice(1,-1).split(',').forEach(p=>{
+      const i=p.indexOf('=');if(i<0)return;
+      labels[p.slice(0,i).trim()]=p.slice(i+1).trim().replace(/^"|"$/g,'');
+    });
+    (out[m[1]]=out[m[1]]||[]).push({labels,value:parseFloat(m[3])});
+  });
+  return out;
+}
+const mv=(M,n,pred)=>{const a=M[n]||[];const f=pred?a.find(pred):a[0];return f?f.value:0};
 
 function promptToken(){
   stopPoll();setConn(null);
@@ -316,7 +337,23 @@ function viewDetail(id){
     setConn(true);const job=d.job,run=d.latestRun,phase=(run&&run.phase)||'—',term=isTerm(phase);
     const st=term?null:await api.state(id);const pi=(job.kind==='sdk'&&!term)?await api.describe(id):null;
     const logs=await api.logs(id);
+    const M=term?{}:parseProm(await api.metrics(id)||'');
     const trs=(d.transitions||[]).slice(-10).reverse().map(t=>`<div class="r"><b>${esc(t.to)}</b><span>${esc(t.reason||'')}</span><span class="at">${esc(fmtTime(t.at))}</span></div>`).join('')||'<div class="dim" style="padding:5px 0">No transitions.</div>';
+
+    // stage metrics table (records in/out per stage) from Prometheus
+    const so=M['weibo_stage_records_out_total']||[],si=M['weibo_stage_records_in_total']||[];
+    const stageNames=[...new Set([...si,...so].map(x=>x.labels.stage))];
+    const stageRows=stageNames.length?stageNames.map(s=>{
+      const type=(so.find(x=>x.labels.stage===s)||si.find(x=>x.labels.stage===s)||{labels:{}}).labels.type||'';
+      const inV=mv(M,'weibo_stage_records_in_total',x=>x.labels.stage===s);
+      const outV=mv(M,'weibo_stage_records_out_total',x=>x.labels.stage===s);
+      return '<tr><td class="name">'+esc(s)+'</td><td class="dim">'+esc(type)+'</td><td class="num">'+fmtN(inV)+'</td><td class="num">'+fmtN(outV)+'</td></tr>';
+    }).join(''):'<tr><td colspan="4" class="dim">No stage metrics.</td></tr>';
+    const metricsStagesTable=card('Stages · records in / out','<table><thead><tr><th>Stage</th><th>Type</th><th class="num">In</th><th class="num">Out</th></tr></thead><tbody>'+stageRows+'</tbody></table>');
+    // operator breakdown (records processed per operator)
+    const proc=M['weibo_records_processed_total']||[];
+    const opRows=proc.length?proc.map(x=>'<tr><td class="name">'+esc(x.labels.operator||'?')+'</td><td class="num">'+fmtN(x.value)+'</td></tr>').join(''):'<tr><td colspan="2" class="dim">No operator metrics.</td></tr>';
+    const metricsOpsTable=card('Operators · records processed','<table><thead><tr><th>Operator</th><th class="num">Processed</th></tr></thead><tbody>'+opRows+'</tbody></table>');
 
     // top metadata strip (Flink-style)
     const mcell=(l,v)=>`<div class="mcell"><div class="m-l">${esc(l)}</div><div class="m-v">${v||'<span class="faint">—</span>'}</div></div>`;
@@ -349,12 +386,31 @@ function viewDetail(id){
       </div>`;
     const metricsPane=`
       <div class="tabpane" data-pane="metrics">
-        <div class="stats" style="margin-bottom:14px">
-          ${tile('Records in',st?fmtN(st.recordsIn||0):'—','b')}
-          ${tile('Records out',st?fmtN(st.recordsOut||0):'—','b')}
-          ${tile('Uptime',st?esc(st.uptime||'—'):'—')}
+        <div class="row-head" style="margin-bottom:14px">
+          <div class="stats" style="flex:1">
+            ${tile('Records read',fmtN(mv(M,'weibo_records_read_total')),'b')}
+            ${tile('Records written',fmtN(mv(M,'weibo_records_written_total')),'b')}
+            ${tile('Processed',fmtN((M['weibo_records_processed_total']||[]).reduce((s,x)=>s+x.value,0)))}
+            ${tile('Failed',fmtN(mv(M,'weibo_records_failed_total')),mv(M,'weibo_records_failed_total')?'r':'')}
+            ${tile('Source errors',fmtN(mv(M,'weibo_source_errors_total')),mv(M,'weibo_source_errors_total')?'r':'')}
+            ${tile('Sink errors',fmtN(mv(M,'weibo_sink_errors_total')),mv(M,'weibo_sink_errors_total')?'r':'')}
+          </div>
+          <a class="btn pri" href="http://localhost:3000/d/weibo/weibo-pipeline?orgId=1" target="_blank" rel="noopener">Grafana ↗</a>
         </div>
-        ${st&&st.lastCheckpointAt?card('Checkpoint',kv([['Current',code(st.currentCheckpointId)],['Last at',esc(fmtFull(st.lastCheckpointAt))]])):card('Checkpoint','<div class="empty">No checkpoint data for this job.</div>')}
+        ${metricsStagesTable}
+        <div style="margin-top:12px">${metricsOpsTable}</div>
+      </div>`;
+    // checkpoint history table (from /state checkpoints)
+    const cps=(st&&st.checkpoints)||[];
+    const cpRows=cps.length?cps.map(c=>'<tr><td class="name">'+code(c.id)+'</td><td class="dim">'+esc(fmtFull(c.completedAt))+'</td><td><span class="ph ph-finished"><span class="d"></span>completed</span></td></tr>').join(''):'<tr><td colspan="3" class="dim">No checkpoints yet.</td></tr>';
+    const checkpointsPane=`
+      <div class="tabpane" data-pane="checkpoints">
+        <div class="stats" style="margin-bottom:14px">
+          ${tile('Checkpoints',fmtN(cps.length),'b')}
+          ${tile('Last Checkpoint',st&&st.lastCheckpointAt?esc(fmtTime(st.lastCheckpointAt)):'—')}
+          ${tile('Current ID',st&&st.currentCheckpointId?'<span class="id">'+esc(st.currentCheckpointId)+'</span>':'—')}
+        </div>
+        ${card('Checkpoint History','<table><thead><tr><th>ID</th><th>Completed At</th><th>Status</th></tr></thead><tbody>'+cpRows+'</tbody></table>')}
       </div>`;
     const logsPane=`
       <div class="tabpane" data-pane="logs">
@@ -380,10 +436,11 @@ function viewDetail(id){
       <div class="tabs">
         <button class="tab ${detailTab==='overview'?'on':''}" data-tab="overview" onclick="switchTab('overview')">Overview</button>
         <button class="tab ${detailTab==='metrics'?'on':''}" data-tab="metrics" onclick="switchTab('metrics')">Metrics</button>
+        <button class="tab ${detailTab==='checkpoints'?'on':''}" data-tab="checkpoints" onclick="switchTab('checkpoints')">Checkpoints</button>
         <button class="tab ${detailTab==='logs'?'on':''}" data-tab="logs" onclick="switchTab('logs')">Logs</button>
         <button class="tab ${detailTab==='spec'?'on':''}" data-tab="spec" onclick="switchTab('spec')">Spec</button>
       </div>
-      ${overviewPane}${metricsPane}${logsPane}${specPane}`;
+      ${overviewPane}${metricsPane}${checkpointsPane}${logsPane}${specPane}`;
     switchTab(detailTab);
     const lg=document.getElementById('log');if(lg)lg.scrollTop=lg.scrollHeight;
   },2000);
