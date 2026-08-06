@@ -108,6 +108,21 @@
 
   .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}.stack{display:grid;gap:14px}
   .row-head{display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+
+  /* tabs */
+  .tabs{display:flex;gap:2px;border-bottom:1px solid var(--line);margin:18px 0 16px}
+  .tab{padding:9px 16px;font-size:13px;font-weight:500;color:var(--muted);background:none;border:none;border-bottom:2px solid transparent;cursor:pointer;transition:color .12s,border-color .12s}
+  .tab:hover{color:var(--fg)}
+  .tab.on{color:var(--accent);border-bottom-color:var(--accent)}
+  .tabpane{display:none}
+  .tabpane.on{display:block}
+
+  /* meta grid */
+  .meta-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:0;border:1px solid var(--line);border-radius:var(--r);overflow:hidden;background:var(--card)}
+  .meta-grid .mcell{padding:12px 16px;border-bottom:1px solid var(--line);border-right:1px solid var(--line)}
+  .meta-grid .mcell:nth-child(odd){background:#fafbfc}
+  .meta-grid .mcell .m-l{font-size:11px;color:var(--faint);text-transform:uppercase;letter-spacing:.03em}
+  .meta-grid .mcell .m-v{font-size:13.5px;font-weight:500;margin-top:3px;word-break:break-all}
 </style>
 </head>
 <body>
@@ -287,6 +302,12 @@ function viewCompleted(){
 }
 
 /* ---- Job Detail ---- */
+let detailTab='overview';
+function switchTab(tab){
+  detailTab=tab;
+  document.querySelectorAll('.tab').forEach(t=>t.classList.toggle('on',t.dataset.tab===tab));
+  document.querySelectorAll('.tabpane').forEach(p=>p.classList.toggle('on',p.dataset.pane===tab));
+}
 function viewDetail(id){
   setNav(null);
   poll(async()=>{
@@ -295,10 +316,57 @@ function viewDetail(id){
     setConn(true);const job=d.job,run=d.latestRun,phase=(run&&run.phase)||'—',term=isTerm(phase);
     const st=term?null:await api.state(id);const pi=(job.kind==='sdk'&&!term)?await api.describe(id):null;
     const logs=await api.logs(id);
-    const tiles=st?`<div class="stats" style="margin-bottom:16px">${tile('Records in',fmtN(st.recordsIn||0))}${tile('Records out',fmtN(st.recordsOut||0))}${tile('Uptime',esc(st.uptime||'—'))}</div>`:'';
     const trs=(d.transitions||[]).slice(-10).reverse().map(t=>`<div class="r"><b>${esc(t.to)}</b><span>${esc(t.reason||'')}</span><span class="at">${esc(fmtTime(t.at))}</span></div>`).join('')||'<div class="dim" style="padding:5px 0">No transitions.</div>';
+
+    // top metadata strip (Flink-style)
+    const mcell=(l,v)=>`<div class="mcell"><div class="m-l">${esc(l)}</div><div class="m-v">${v||'<span class="faint">—</span>'}</div></div>`;
+    const metaGrid=`
+      <div class="meta-grid">
+        ${mcell('Job Name',esc(job.name))}
+        ${mcell('Job ID',code(job.id))}
+        ${mcell('Status',phaseEl(phase))}
+        ${mcell('Type',badge(job)||'yaml')}
+        ${mcell('Kind',esc(job.kind||'yaml'))}
+        ${mcell('Delivery',job.delivery?esc(job.delivery):null)}
+        ${mcell('Created',esc(fmtFull(job.createdAt)))}
+        ${mcell('Updated',esc(fmtFull(job.updatedAt)))}
+        ${mcell('Attempt',run?esc(run.attempt!=null?run.attempt:'—'):null)}
+        ${mcell('Started',run?esc(fmtFull(run.startedAt)):null)}
+        ${run&&run.stoppedAt?mcell('Stopped',esc(fmtFull(run.stoppedAt))):''}
+        ${run&&run.hostPort?mcell('Control Port',esc(run.hostPort)):''}
+      </div>`;
+
+    // tab panes
+    const overviewPane=`
+      <div class="tabpane on" data-pane="overview">
+        <div class="stack">
+          ${card('Pipeline',job.kind==='sdk'?describeGraphEl(pi):graphEl(job.graph))}
+          <div class="grid2">
+            ${st?card('Live State',kv([['Phase',phaseEl(st.phase)],['Uptime',esc(st.uptime||'—')],['Records in',`<span class="big">${fmtN(st.recordsIn||0)}</span>`],['Records out',`<span class="big">${fmtN(st.recordsOut||0)}</span>`]])):card('Live State','<div class="empty">Not running.</div>')}
+            ${card('Lifecycle',`<div class="tl">${trs}</div>`)}
+          </div>
+        </div>
+      </div>`;
+    const metricsPane=`
+      <div class="tabpane" data-pane="metrics">
+        <div class="stats" style="margin-bottom:14px">
+          ${tile('Records in',st?fmtN(st.recordsIn||0):'—','b')}
+          ${tile('Records out',st?fmtN(st.recordsOut||0):'—','b')}
+          ${tile('Uptime',st?esc(st.uptime||'—'):'—')}
+        </div>
+        ${st&&st.lastCheckpointAt?card('Checkpoint',kv([['Current',code(st.currentCheckpointId)],['Last at',esc(fmtFull(st.lastCheckpointAt))]])):card('Checkpoint','<div class="empty">No checkpoint data for this job.</div>')}
+      </div>`;
+    const logsPane=`
+      <div class="tabpane" data-pane="logs">
+        <div class="card"><div class="hd">Logs</div><pre class="log" id="log">${esc(logs||'No output.')}</pre></div>
+      </div>`;
+    const specPane=`
+      <div class="tabpane" data-pane="spec">
+        <div class="card"><div class="hd">Spec</div><pre class="spec">${esc(job.spec||'—')}</pre></div>
+      </div>`;
+
     app.innerHTML=`
-      <a class="back" href="#/overview" onclick="event.preventDefault();go('overview')">← Back</a>
+      <a class="back" href="#/overview" onclick="event.preventDefault();go('overview')">← Jobs</a>
       <div class="row-head" style="margin:10px 0 18px">
         <div><h1>${esc(job.name)}</h1><div class="id" style="margin-top:3px">${esc(job.id)}</div></div>
         ${phaseEl(phase)} ${badge(job)}
@@ -308,20 +376,15 @@ function viewDetail(id){
           <button class="btn danger" ${term?'disabled':''} onclick="doCancel('${esc(id)}')">Cancel</button>
         </div>
       </div>
-      ${tiles}
-      <div class="stack">
-        ${card('Pipeline',job.kind==='sdk'?describeGraphEl(pi):graphEl(job.graph))}
-        <div class="grid2">
-          ${card('Metadata',kv([['Name',esc(job.name)],['ID',code(job.id)],['Kind',esc(job.kind||'yaml')],['Image',job.image?code(job.image):'<span class="faint">—</span>'],['Delivery',job.delivery?esc(job.delivery):'<span class="faint">—</span>'],['Created',esc(fmtFull(job.createdAt))]]))}
-          ${card('Latest Run',run?kv([['Phase',phaseEl(run.phase)],['Attempt',esc(run.attempt!=null?run.attempt:'—')],['Container',code(run.containerId)],run.hostPort&&['Port',esc(run.hostPort)],['Started',esc(fmtFull(run.startedAt))],run.stoppedAt&&['Stopped',esc(fmtFull(run.stoppedAt))],run.error&&['Error',`<span style="color:var(--red)">${esc(run.error)}</span>`]]):'<div class="empty">Never launched.</div>')}
-        </div>
-        <div class="grid2">
-          ${card('Lifecycle',`<div class="tl">${trs}</div>`)}
-          ${st?card('Live State',kv([['Phase',phaseEl(st.phase)],['Uptime',esc(st.uptime||'—')],['Records in',`<span class="big">${fmtN(st.recordsIn||0)}</span>`],['Records out',`<span class="big">${fmtN(st.recordsOut||0)}</span>`]])):card('Live State','<div class="empty">Not running.</div>')}
-        </div>
-        <div class="card"><div class="hd">Logs</div><pre class="log" id="log">${esc(logs||'No output.')}</pre></div>
-        <details class="card"><summary class="hd" style="cursor:pointer;list-style:none">Spec <span class="r faint">${esc(job.kind||'yaml')}</span></summary><pre class="spec">${esc(job.spec||'—')}</pre></details>
-      </div>`;
+      ${metaGrid}
+      <div class="tabs">
+        <button class="tab ${detailTab==='overview'?'on':''}" data-tab="overview" onclick="switchTab('overview')">Overview</button>
+        <button class="tab ${detailTab==='metrics'?'on':''}" data-tab="metrics" onclick="switchTab('metrics')">Metrics</button>
+        <button class="tab ${detailTab==='logs'?'on':''}" data-tab="logs" onclick="switchTab('logs')">Logs</button>
+        <button class="tab ${detailTab==='spec'?'on':''}" data-tab="spec" onclick="switchTab('spec')">Spec</button>
+      </div>
+      ${overviewPane}${metricsPane}${logsPane}${specPane}`;
+    switchTab(detailTab);
     const lg=document.getElementById('log');if(lg)lg.scrollTop=lg.scrollHeight;
   },2000);
 }
