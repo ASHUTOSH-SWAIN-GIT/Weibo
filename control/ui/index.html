@@ -269,9 +269,9 @@ function viewRunning(){
   poll(async()=>{
     let d;try{d=await api.jobs()}catch(e){setConn(false);app.innerHTML='<div class="empty">Controller unreachable.</div>';return}
     setConn(true);const jobs=(d.jobs||[]).filter(j=>String(j.phase||'').toLowerCase()==='running');
-    const rows=jobs.map(j=>`<tr class="row" onclick="go('running','${esc(j.id)}')"><td class="name">${esc(j.name)}<div class="id" style="margin-top:1px">${esc(j.id)}</div></td><td class="dim">${esc(fmtTime(j.createdAt))}</td><td class="dim">—</td><td>${phaseEl(j.phase)}</td></tr>`).join('');
+    const rows=jobs.map(j=>'<tr class="row" onclick="go(\'running\',\''+esc(j.id)+'\')"><td class="name">'+esc(j.name)+'<div class="id" style="margin-top:1px">'+esc(j.id)+'</div></td><td class="dim">'+esc(fmtTime(j.createdAt))+'</td><td class="dim">—</td><td>'+phaseEl(j.phase)+'</td></tr>').join('');
     if(!jobs.length){app.innerHTML='<h1>Running Jobs</h1><div class="card" style="margin-top:18px"><div class="empty">No jobs running.<br><br><a href="#/submit" style="color:var(--accent);cursor:pointer" onclick="event.preventDefault();go(\'submit\')">Submit one →</a></div></div>';return}
-    app.innerHTML=`<h1>Running Jobs</h1><div class="sub" style="margin-bottom:16px">${jobs.length} job${jobs.length!==1?'s':''} running</div>${card('Jobs','<table><thead><tr><th>Job Name</th><th>Start Time</th><th>Duration</th><th>Status</th></tr></thead><tbody>${rows}</tbody></table>')}`;
+    app.innerHTML='<h1>Running Jobs</h1><div class="sub" style="margin-bottom:16px">'+jobs.length+' job'+(jobs.length!==1?'s':'')+' running</div>'+card('Jobs','<table><thead><tr><th>Job Name</th><th>Start Time</th><th>Duration</th><th>Status</th></tr></thead><tbody>'+rows+'</tbody></table>');
   },3000);
 }
 function viewCompleted(){
@@ -280,9 +280,9 @@ function viewCompleted(){
     let d;try{d=await api.jobs()}catch(e){setConn(false);app.innerHTML='<div class="empty">Controller unreachable.</div>';return}
     setConn(true);const jobs=(d.jobs||[]).filter(j=>isTerm(String(j.phase||'')));
     const n=jobs.length,fin=jobs.filter(j=>String(j.phase||'').toLowerCase()==='finished').length,fail=jobs.filter(j=>String(j.phase||'').toLowerCase()==='failed').length;
-    const rows=jobs.map(j=>`<tr class="row" onclick="go('completed','${esc(j.id)}')"><td class="name">${esc(j.name)}<div class="id" style="margin-top:1px">${esc(j.id)}</div></td><td class="dim">${esc(fmtTime(j.createdAt))}</td><td class="dim">${esc(fmtTime(j.updatedAt))}</td><td>${phaseEl(j.phase)}</td></tr>`).join('');
+    const rows=jobs.map(j=>'<tr class="row" onclick="go(\'completed\',\''+esc(j.id)+'\')"><td class="name">'+esc(j.name)+'<div class="id" style="margin-top:1px">'+esc(j.id)+'</div></td><td class="dim">'+esc(fmtTime(j.createdAt))+'</td><td class="dim">'+esc(fmtTime(j.updatedAt))+'</td><td>'+phaseEl(j.phase)+'</td></tr>').join('');
     if(!jobs.length){app.innerHTML='<h1>Completed Jobs</h1><div class="card" style="margin-top:18px"><div class="empty">No completed jobs yet.</div></div>';return}
-    app.innerHTML=`<h1>Completed Jobs</h1><div class="stats" style="margin:14px 0 18px">${tile('Finished',fmtN(fin),'b')}${tile('Failed',fmtN(fail),fail?'r':'')}</div>${card('Jobs','<table><thead><tr><th>Job Name</th><th>Start Time</th><th>End Time</th><th>Status</th></tr></thead><tbody>${rows}</tbody></table>')}`;
+    app.innerHTML='<h1>Completed Jobs</h1><div class="stats" style="margin:14px 0 18px">'+tile('Finished',fmtN(fin),'b')+tile('Failed',fmtN(fail),fail?'r':'')+'</div>'+card('Jobs','<table><thead><tr><th>Job Name</th><th>Start Time</th><th>End Time</th><th>Status</th></tr></thead><tbody>'+rows+'</tbody></table>');
   },3000);
 }
 
