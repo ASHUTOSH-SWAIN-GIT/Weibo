@@ -6,174 +6,139 @@
 <title>weibo</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='8' cy='8' r='4' fill='%235b8cff'/%3E%3C/svg%3E">
 <style>
-  /* ---- design tokens: dark, minimal. Restyle here, not inline. ---- */
-  :root{
-    --bg:#0b0c0e; --bg2:#0e1013; --card:#131518; --card2:#171a1f; --raise:#1c2026;
-    --fg:#e7e9ec; --muted:#8b929b; --faint:#606771; --line:#23262c; --line2:#2c3037;
-    --accent:#5b8cff; --accent-bg:#18213a;
-    --green:#3fb950; --amber:#d29922; --red:#f85149; --blue:#58a6ff; --gray:#6e7681;
-    --sans:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;
-    --mono:ui-monospace,'SF Mono',Menlo,Consolas,monospace;
-    --r:10px; --r2:7px;
-  }
+  :root{--bg:#f5f6f8;--bg2:#fff;--card:#fff;--fg:#1a1a2e;--muted:#6b7280;--faint:#9ca3af;--line:#e5e7eb;--line2:#d1d5db;--accent:#2563eb;--accent-bg:#eff6ff;--green:#059669;--amber:#d97706;--red:#dc2626;--blue:#2563eb;--gray:#9ca3af;--sans:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;--mono:ui-monospace,'SF Mono',Menlo,Consolas,monospace;--r:8px;--side-w:200px}
   *{box-sizing:border-box}
   html,body{margin:0;height:100%}
-  body{background:var(--bg);color:var(--fg);font-family:var(--sans);font-size:13.5px;line-height:1.5;-webkit-font-smoothing:antialiased}
+  body{background:var(--bg);color:var(--fg);font-family:var(--sans);font-size:13px;line-height:1.5;-webkit-font-smoothing:antialiased}
   a{color:inherit;text-decoration:none}
   ::selection{background:var(--accent-bg)}
-  /* scrollbars */
-  *::-webkit-scrollbar{width:10px;height:10px}
-  *::-webkit-scrollbar-thumb{background:#2a2e35;border-radius:6px;border:2px solid var(--bg)}
-  *::-webkit-scrollbar-track{background:transparent}
 
-  /* ---- header ---- */
-  header{display:flex;align-items:center;gap:18px;padding:0 24px;height:52px;border-bottom:1px solid var(--line);background:var(--bg2);position:sticky;top:0;z-index:10}
-  .brand{font-weight:600;font-size:15px;letter-spacing:-.01em;display:flex;align-items:center;gap:8px}
-  .brand .mk{width:9px;height:9px;border-radius:50%;background:var(--accent);box-shadow:0 0 10px var(--accent)}
-  .count{color:var(--faint);font-size:12.5px;font-variant-numeric:tabular-nums}
-  nav{display:flex;gap:2px;margin-left:auto}
-  nav a{padding:6px 12px;border-radius:var(--r2);color:var(--muted);font-weight:500;transition:.12s}
-  nav a:hover{background:var(--card2);color:var(--fg)}
-  nav a.on{color:var(--fg);background:var(--accent-bg)}
-  .conn{display:flex;align-items:center;gap:6px;color:var(--faint);font-size:12px}
-  .conn .dot{width:6px;height:6px;border-radius:50%;background:var(--gray)}
-  .conn.ok .dot{background:var(--green)} .conn.down .dot{background:var(--red)}
+  /* sidebar — heavy Flink inspiration */
+  .side{position:fixed;left:0;top:0;bottom:0;width:var(--side-w);background:var(--bg2);border-right:1px solid var(--line);display:flex;flex-direction:column;z-index:20}
+  .side-brand{padding:18px 16px 14px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:8px}
+  .side-brand .dot{width:8px;height:8px;border-radius:50%;background:var(--accent);flex:none}
+  .side-brand .txt{font-size:15px;font-weight:700;letter-spacing:-.01em}
+  .side-nav{flex:1;overflow-y:auto;padding:8px}
+  .side-nav .sec{display:flex;align-items:center;gap:8px;padding:9px 10px;border-radius:6px;color:var(--muted);font-size:12.5px;font-weight:500;cursor:pointer;user-select:none;transition:background .12s,color .12s}
+  .side-nav .sec:hover{background:#f3f4f6;color:var(--fg)}
+  .side-nav .sec.on{background:var(--accent-bg);color:var(--accent)}
+  .side-nav .sec .arr{font-size:9px;margin-left:auto;transition:transform .15s}
+  .side-nav .sec.open .arr{transform:rotate(90deg)}
+  .side-nav .sub{display:none}
+  .side-nav .sub.open{display:block}
+  .side-nav .sub a{display:block;padding:7px 10px 7px 32px;font-size:12px;color:var(--muted);border-radius:6px;cursor:pointer;transition:background .10s,color .10s}
+  .side-nav .sub a:hover{background:#f3f4f6;color:var(--fg)}
+  .side-nav .sub a.on{color:var(--accent);font-weight:500}
+  .side-foot{padding:10px 16px;border-top:1px solid var(--line);font-size:11px;color:var(--faint);display:flex;align-items:center;gap:5px}
+  .side-foot .c-dot{width:6px;height:6px;border-radius:50%;background:var(--gray);flex:none}
+  .side-foot.ok .c-dot{background:var(--green)}.side-foot.down .c-dot{background:var(--red)}
 
-  main{max-width:1080px;margin:0 auto;padding:26px 24px 96px}
-  h1{font-size:19px;font-weight:600;letter-spacing:-.02em;margin:0}
-  .sub{color:var(--muted);font-size:12.5px;margin-top:3px}
-  .muted{color:var(--muted)} .dim{color:var(--muted);font-size:12.5px} .faint{color:var(--faint)}
-  .id{font-family:var(--mono);font-size:11.5px;color:var(--faint);word-break:break-all}
+  /* main */
+  .main{margin-left:var(--side-w);padding:28px 32px 80px;max-width:1060px}
+  h1{font-size:20px;font-weight:700;margin:0}
+  .sub{color:var(--muted);font-size:12.5px;margin-top:2px}
+  .dim{color:var(--muted);font-size:12px}.faint{color:var(--faint)}
+  .id{font-family:var(--mono);font-size:11px;color:var(--faint)}
 
-  /* ---- card ---- */
+  /* cards */
   .card{background:var(--card);border:1px solid var(--line);border-radius:var(--r)}
-  .card .hd{padding:11px 15px;font-size:11px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--faint);border-bottom:1px solid var(--line);display:flex;align-items:center;gap:8px}
-  .card .hd .r{margin-left:auto;font-weight:500;letter-spacing:0;text-transform:none}
+  .card .hd{padding:10px 14px;font-size:10.5px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--faint);border-bottom:1px solid var(--line);display:flex;align-items:center;gap:8px}
+  .card .hd .r{margin-left:auto;font-weight:400;letter-spacing:0;text-transform:none}
 
-  /* ---- table ---- */
+  /* tables */
   table{width:100%;border-collapse:collapse}
-  th{text-align:left;font-size:11px;font-weight:500;letter-spacing:.03em;text-transform:uppercase;color:var(--faint);padding:10px 15px}
-  td{padding:12px 15px;border-top:1px solid var(--line)}
-  tr.row{cursor:pointer;transition:.1s}
-  tr.row:hover td{background:var(--card2)}
+  th{text-align:left;font-size:10.5px;font-weight:500;letter-spacing:.03em;text-transform:uppercase;color:var(--faint);padding:9px 14px;background:#fafbfc;border-bottom:1px solid var(--line)}
+  td{padding:10px 14px;border-bottom:1px solid var(--line)}
+  tr.row{cursor:pointer}
+  tr.row:hover td{background:#f9fafb}
   .name{font-weight:500}
-  td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
 
-  /* ---- phase ---- */
-  .phase{display:inline-flex;align-items:center;gap:7px;font-size:12.5px;text-transform:capitalize}
-  .dot{width:7px;height:7px;border-radius:50%;background:var(--gray);flex:none}
-  .p-running .dot{background:var(--green);box-shadow:0 0 7px var(--green)}
-  .p-starting .dot,.p-cancelling .dot{background:var(--amber)}
-  .p-failed .dot{background:var(--red);box-shadow:0 0 7px var(--red)}
-  .p-finished .dot{background:var(--blue)}
-  .p-cancelled .dot,.p-none .dot,.p-submitted .dot,.p-stopped .dot{background:var(--gray)}
+  /* stats grid */
+  .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(155px,1fr));gap:10px}
+  .stat{background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:16px}
+  .stat .s-lbl{font-size:11px;color:var(--faint);margin-bottom:6px}
+  .stat .s-val{font-size:24px;font-weight:700;letter-spacing:-.02em;line-height:1.1}
+  .stat .s-sub{font-size:11px;color:var(--muted);margin-top:4px}
+  .stat.g{}.stat.g .s-val{color:var(--green)}.stat.r .s-val{color:var(--red)}
+  .stat.b .s-val{color:var(--blue)}.stat.a .s-val{color:var(--amber)}
 
-  /* ---- pill / badge ---- */
-  .pill{display:inline-block;padding:2px 8px;border-radius:6px;font-size:11.5px;background:var(--card2);color:var(--muted);border:1px solid var(--line2);white-space:nowrap}
-  .pill-sdk{background:var(--accent-bg);color:var(--accent);border-color:transparent}
+  /* phase dots */
+  .ph{display:inline-flex;align-items:center;gap:6px;font-size:12px;text-transform:capitalize}
+  .ph .d{width:7px;height:7px;border-radius:50%;flex:none}
+  .ph-running .d{background:var(--green)}.ph-failed .d{background:var(--red)}
+  .ph-finished .d{background:var(--blue)}.ph-starting .d,.ph-cancelling .d{background:var(--amber)}
+  .ph-cancelled .d,.ph-submitted .d,.ph-stopped .d{background:var(--gray)}
 
-  /* ---- buttons ---- */
-  .btn{font-family:inherit;font-size:12.5px;cursor:pointer;padding:7px 13px;border:1px solid var(--line2);background:var(--card2);color:var(--fg);border-radius:var(--r2);font-weight:500;transition:.12s}
-  .btn:hover{background:var(--raise);border-color:#3a3f47}
-  .btn.pri{background:var(--accent);color:#fff;border-color:var(--accent)}
-  .btn.pri:hover{background:#4a7bf0}
-  .btn.danger:hover{color:var(--red);border-color:#5a2b2b;background:#241416}
-  .btn:disabled{opacity:.4;cursor:not-allowed}
+  .pill{display:inline-block;padding:1px 7px;border-radius:4px;font-size:11px;background:#f3f4f6;color:var(--muted);border:1px solid var(--line);white-space:nowrap}
+  .pill-sdk{background:var(--accent-bg);color:var(--accent);border-color:var(--accent-bg)}
+
+  .btn{font-family:inherit;font-size:12px;cursor:pointer;padding:6px 12px;border:1px solid var(--line2);background:#fff;color:var(--fg);border-radius:6px;font-weight:500;transition:.12s}
+  .btn:hover{background:#f3f4f6}
+  .btn.pri{background:var(--accent);color:#fff;border-color:var(--accent)}.btn.pri:hover{background:#1d4ed8}
+  .btn.danger:hover{color:var(--red);border-color:var(--red);background:#fef2f2}
+  .btn:disabled{opacity:.45;cursor:not-allowed}
   .btns{display:flex;gap:8px;flex-wrap:wrap}
 
-  /* ---- pipeline DAG (self-contained SVG) ---- */
-  .dag{overflow-x:auto;padding:16px 15px}
+  .dag{overflow-x:auto;padding:14px}
   .dag svg{display:block}
-  .dnode-bg{fill:var(--card2);stroke:var(--line2)}
+  .dnode-bg{fill:#f9fafb;stroke:var(--line2)}
   .dnode-t{fill:var(--faint);font:600 9.5px var(--sans);letter-spacing:.05em}
   .dnode-n{fill:var(--fg);font:500 12.5px var(--sans)}
-  .dedge{stroke:#3a4048;stroke-width:1.6;fill:none}
-  .darw{fill:#3a4048}
+  .dedge{stroke:var(--line2);stroke-width:1.4;fill:none}
+  .darw{fill:var(--line2)}
   .dpar{fill:var(--accent-bg)}
   .dpar-t{fill:var(--accent);font:600 10px var(--mono)}
-  .k-blue{fill:var(--blue)}.k-green{fill:var(--green)}.k-accent{fill:var(--accent)}
-  .k-amber{fill:var(--amber)}.k-gray{fill:var(--gray)}
-  /* live stage-DAG overlays */
-  .dnode-sub{fill:var(--muted);font:500 10.5px var(--mono)}
-  .dedge-ok{stroke:#3a4048} .dedge-warn{stroke:var(--amber);stroke-width:2.2} .dedge-hot{stroke:var(--red);stroke-width:2.4}
-  .dedge-lbl{fill:var(--faint);font:600 9px var(--sans)}
-  .dedge-lbl.hot{fill:var(--red)}
+  .k-blue{fill:var(--blue)}.k-green{fill:var(--green)}.k-accent{fill:var(--accent)}.k-amber{fill:var(--amber)}.k-gray{fill:var(--gray)}
 
-  /* ---- key/value ---- */
-  .kv{display:grid;grid-template-columns:minmax(120px,auto) 1fr;gap:10px 20px;padding:15px}
-  .kv dt{color:var(--muted);font-size:12.5px}
-  .kv dd{margin:0;font-weight:500;word-break:break-word}
-  .big{font-size:18px;font-weight:600;letter-spacing:-.01em}
+  .kv{display:grid;grid-template-columns:minmax(100px,auto) 1fr;gap:7px 18px;padding:14px}
+  .kv dt{color:var(--muted);font-size:12px}.kv dd{margin:0;font-weight:500;word-break:break-word}.big{font-size:17px;font-weight:600}
 
-  /* ---- logs + timeline ---- */
-  pre.log{margin:0;padding:14px 15px;max-height:340px;overflow:auto;font-size:11.5px;font-family:var(--mono);color:#aab1ba;white-space:pre-wrap;word-break:break-all;background:#0d0f12;border-radius:0 0 var(--r) var(--r)}
-  pre.spec{margin:0;padding:14px 15px;max-height:320px;overflow:auto;font-size:11.5px;font-family:var(--mono);color:#aab1ba;white-space:pre;background:#0d0f12;border-radius:0 0 var(--r) var(--r)}
-  .tl{padding:6px 15px 12px;font-size:12.5px}
-  .tl .r{display:flex;gap:12px;padding:6px 0;color:var(--muted);align-items:baseline}
-  .tl .r b{color:var(--fg);font-weight:500;min-width:88px;text-transform:capitalize}
-  .tl .r .at{margin-left:auto;font-size:11.5px;color:var(--faint);white-space:nowrap}
+  pre.log{margin:0;padding:12px 14px;max-height:320px;overflow:auto;font-size:11.5px;font-family:var(--mono);color:var(--muted);white-space:pre-wrap;word-break:break-all;border-radius:0 0 var(--r) var(--r)}
+  pre.spec{margin:0;padding:12px 14px;max-height:300px;overflow:auto;font-size:11.5px;font-family:var(--mono);color:var(--muted);white-space:pre;border-radius:0 0 var(--r) var(--r)}
+  .tl{padding:4px 14px 10px;font-size:12px}
+  .tl .r{display:flex;gap:12px;padding:5px 0;color:var(--muted);align-items:baseline}
+  .tl .r b{color:var(--fg);font-weight:500;min-width:80px;text-transform:capitalize}
+  .tl .r .at{margin-left:auto;font-size:11px;color:var(--faint);white-space:nowrap}
 
-  /* ---- forms ---- */
-  textarea,input.txt{width:100%;background:#0d0f12;color:var(--fg);border:1px solid var(--line2);border-radius:var(--r2);font-family:var(--mono);font-size:12.5px;padding:12px;resize:vertical;line-height:1.55}
-  textarea:focus,input.txt:focus{outline:none;border-color:var(--accent)}
-  .err{color:#ffb4ae;background:#241416;border:1px solid #5a2b2b;border-radius:var(--r2);padding:10px 13px;font-size:12.5px;white-space:pre-wrap}
-  .empty{padding:46px 16px;text-align:center;color:var(--muted)}
-  .back{color:var(--muted);font-size:12.5px}.back:hover{color:var(--fg)}
+  textarea{width:100%;background:#fff;color:var(--fg);border:1px solid var(--line2);border-radius:6px;font-family:var(--mono);font-size:12px;padding:12px;resize:vertical;line-height:1.55}
+  textarea:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px rgba(37,99,235,.1)}
+  .err{color:var(--red);background:#fef2f2;border:1px solid #fecaca;border-radius:6px;padding:10px 13px;font-size:12px;white-space:pre-wrap}
+  .empty{padding:40px 14px;text-align:center;color:var(--muted)}
+  .back{color:var(--muted);font-size:12px}.back:hover{color:var(--fg)}
 
-  /* ---- stat tiles (summary + live) ---- */
-  .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px}
-  .stat{background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:14px 15px}
-  .stat .l{font-size:11px;color:var(--faint);text-transform:uppercase;letter-spacing:.04em}
-  .stat .v{font-size:22px;font-weight:600;margin-top:5px;letter-spacing:-.02em;display:flex;align-items:baseline;gap:5px}
-  .stat .v .u{font-size:12px;color:var(--muted);font-weight:400}
-  .stat.t-green .v{color:var(--green)} .stat.t-red .v{color:var(--red)}
-  .stat.t-blue .v{color:var(--blue)} .stat.t-amber .v{color:var(--amber)}
-
-  /* ---- bars ---- */
-  .bar{height:6px;background:#22262c;border-radius:3px;overflow:hidden;min-width:80px}
-  .bar>i{display:block;height:100%;background:var(--accent);border-radius:3px}
-  .bar.hot>i{background:var(--red)}
-
-  /* ---- layout ---- */
-  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
-  .stack{display:grid;gap:14px}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}.stack{display:grid;gap:12px}
   .row-head{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
-  @media (max-width:720px){.grid2{grid-template-columns:1fr}}
 </style>
 </head>
 <body>
-<header>
-  <div class="brand"><span class="mk"></span>weibo</div>
-  <span class="count" id="count"></span>
-  <nav id="nav">
-    <a href="#/jobs" data-v="jobs">Jobs</a>
-    <a href="#/submit" data-v="submit">Submit</a>
+<aside class="side">
+  <div class="side-brand"><span class="dot"></span><span class="txt">weibo</span></div>
+  <nav class="side-nav" id="snav">
+    <div class="sec on" data-r="overview" onclick="go('overview')">Overview</div>
+    <div class="sec" data-r="jobs" onclick="go('running');toggleJobs()"><span>Jobs</span><span class="arr">▶</span></div>
+    <div class="sub" data-r="jobs-sub">
+      <a data-r="running" onclick="go('running')">Running Jobs</a>
+      <a data-r="completed" onclick="go('completed')">Completed Jobs</a>
+    </div>
+    <div class="sec" data-r="submit" onclick="go('submit')">Submit New Job</div>
   </nav>
-  <div class="conn" id="conn"><span class="dot"></span><span id="connt">—</span></div>
-</header>
-<main id="app"></main>
+  <div class="side-foot" id="conn"><span class="c-dot"></span><span id="connt">—</span></div>
+</aside>
+<main class="main" id="app"></main>
 
 <script>
-/* =========================================================================
-   weibo control dashboard — single self-contained page (no build step).
-   Structure:  helpers → api → auth → render helpers → views → router.
-   To add a view: write a view*() fn and register it in route().
-   ========================================================================= */
-
-const esc=(s)=>String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const esc=s=>String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const g=(o,...k)=>{for(const x of k){if(o&&o[x]!=null)return o[x]}return undefined};
 const fmtN=v=>(v==null||isNaN(v))?'0':Math.round(v).toLocaleString();
-function fmtTime(s){if(!s)return '—';const d=new Date(s);return isNaN(d)?s:d.toLocaleString([],{month:'short',day:'2-digit',hour:'2-digit',minute:'2-digit'})}
-function fmtFull(s){if(!s)return '—';const d=new Date(s);return isNaN(d)?s:d.toLocaleString()}
+function fmtTime(s){if(!s)return'—';const d=new Date(s);return isNaN(d)?s:d.toLocaleString([],{month:'short',day:'2-digit',hour:'2-digit',minute:'2-digit'})}
+function fmtFull(s){if(!s)return'—';const d=new Date(s);return isNaN(d)?s:d.toLocaleString()}
 const isTerm=p=>['finished','failed','cancelled'].includes(String(p||'').toLowerCase());
 
-/* ---- auth: one shared bearer token in localStorage. Open API => no prompt. ---- */
 const TOKEN_KEY='weibo_token';
 const getToken=()=>localStorage.getItem(TOKEN_KEY)||'';
-const setToken=(t)=>{t?localStorage.setItem(TOKEN_KEY,t):localStorage.removeItem(TOKEN_KEY)};
+const setToken=t=>{t?localStorage.setItem(TOKEN_KEY,t):localStorage.removeItem(TOKEN_KEY)};
 function authFetch(url,opts){
-  opts=opts||{};
-  const t=getToken();
+  opts=opts||{};const t=getToken();
   const headers=Object.assign({},opts.headers||{});
   if(t)headers['Authorization']='Bearer '+t;
   return fetch(url,Object.assign({},opts,{headers})).then(r=>{
@@ -183,407 +148,194 @@ function authFetch(url,opts){
 }
 const api={
   jobs:()=>authFetch('/jobs').then(r=>r.json()),
-  job:(id)=>authFetch('/jobs/'+id).then(r=>r.json()),
-  state:(id)=>authFetch('/jobs/'+id+'/state').then(r=>r.ok?r.json():null).catch(()=>null),
-  describe:(id)=>authFetch('/jobs/'+id+'/describe').then(r=>r.ok?r.json():null).catch(()=>null),
-  plan:(id)=>authFetch('/jobs/'+id+'/plan').then(r=>r.ok?r.json():null).catch(()=>null),
-  logs:(id)=>authFetch('/jobs/'+id+'/logs?tail=300').then(r=>r.text()).catch(()=>''),
-  metrics:(id)=>authFetch('/jobs/'+id+'/metrics').then(r=>r.ok?r.text():null).catch(()=>null),
-  validate:(b)=>authFetch('/validate',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(b)}),
-  submit:(b)=>authFetch('/jobs',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(b)}),
+  job:id=>authFetch('/jobs/'+id).then(r=>r.json()),
+  state:id=>authFetch('/jobs/'+id+'/state').then(r=>r.ok?r.json():null).catch(()=>null),
+  describe:id=>authFetch('/jobs/'+id+'/describe').then(r=>r.ok?r.json():null).catch(()=>null),
+  logs:id=>authFetch('/jobs/'+id+'/logs?tail=200').then(r=>r.text()).catch(()=>''),
+  validate:b=>authFetch('/validate',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(b)}),
+  submit:b=>authFetch('/jobs',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(b)}),
   act:(id,a,b)=>authFetch('/jobs/'+id+'/'+a,{method:'POST',headers:b?{'content-type':'application/json'}:{},body:b?JSON.stringify(b):null}),
 };
 
 function promptToken(){
-  stopPoll();
-  setConn(null);
-  document.getElementById('count').textContent='';
-  app.innerHTML=`<div class="card" style="max-width:420px;margin:56px auto">
+  stopPoll();setConn(null);
+  app.innerHTML=`<div class="card" style="max-width:400px;margin:60px auto">
     <div class="hd">Access token required</div>
-    <div style="padding:15px">
-      <div class="sub" style="margin:0 0 14px">This controller is protected. Enter its access token to continue.</div>
-      <input id="tok" class="txt" type="password" placeholder="Bearer token" autocomplete="off"
+    <div style="padding:14px">
+      <div class="sub" style="margin:0 0 12px">Enter the controller access token.</div>
+      <input id="tok" class="txt" type="password" placeholder="Bearer token" style="font-family:var(--sans);font-size:13px"
         onkeydown="if(event.key==='Enter')saveToken()"/>
       <div class="btns" style="margin-top:12px"><button class="btn pri" onclick="saveToken()">Save &amp; continue</button></div>
       <div id="tokerr" class="err" style="display:none;margin-top:10px"></div>
     </div>
   </div>`;
-  const i=document.getElementById('tok');if(i)i.focus();
+  document.getElementById('tok').focus();
 }
 async function saveToken(){
-  const t=document.getElementById('tok').value.trim();
-  if(!t)return;
-  let ok=false;
-  try{ok=(await fetch('/auth',{method:'POST',headers:{'Authorization':'Bearer '+t}})).ok}catch(e){}
+  const t=document.getElementById('tok').value.trim();if(!t)return;
+  let ok=false;try{ok=(await fetch('/auth',{method:'POST',headers:{'Authorization':'Bearer '+t}})).ok}catch(e){}
   if(!ok){const e=document.getElementById('tokerr');e.style.display='block';e.textContent='Invalid token.';return}
-  setToken(t);
-  route();
+  setToken(t);route();
 }
 
-/* ---- app shell / polling ---- */
-const app=document.getElementById('app');
-let timer=null;
+const app=document.getElementById('app');let timer=null;
 function stopPoll(){if(timer){clearInterval(timer);timer=null}}
 function poll(fn,ms){stopPoll();fn();timer=setInterval(fn,ms)}
 function setConn(ok){
   const el=document.getElementById('conn');
-  el.className='conn'+(ok===true?' ok':ok===false?' down':'');
-  document.getElementById('connt').textContent=ok===true?'online':ok===false?'offline':'—';
+  el.className='side-foot'+(ok===true?' ok':ok===false?' down':'');
+  document.getElementById('connt').textContent=ok===true?'connected':ok===false?'disconnected':'—';
 }
 
-/* =============================== render helpers ===========================
-   Small composable builders so new cards/tiles are one-liners.            */
-function card(title,body,right){return `<div class="card"><div class="hd">${esc(title)}${right?`<span class="r">${right}</span>`:''}</div>${body}</div>`}
-function kv(pairs){return `<dl class="kv">${pairs.filter(Boolean).map(p=>`<dt>${esc(p[0])}</dt><dd>${p[1]}</dd>`).join('')}</dl>`}
-function tile(l,v,unit,tone){return `<div class="stat${tone?' t-'+tone:''}"><div class="l">${esc(l)}</div><div class="v">${v}${unit?`<span class="u">${esc(unit)}</span>`:''}</div></div>`}
-function phaseEl(p){p=String(p||'—').toLowerCase();const cls=p==='—'?'none':p;return `<span class="phase p-${esc(cls)}"><span class="dot"></span>${esc(p==='—'?'unknown':p)}</span>`}
-function badge(j){
-  const b=[];
-  if(j.kind==='sdk')b.push(`<span class="pill pill-sdk">sdk</span>`);
-  if(j.delivery)b.push(`<span class="pill">${esc(j.delivery)}</span>`);
-  return b.join(' ');
+let jobsOpen=true;
+function toggleJobs(){
+  jobsOpen=!jobsOpen;
+  document.querySelector('[data-r="jobs"]').classList.toggle('open',jobsOpen);
+  document.querySelector('[data-r="jobs-sub"]').classList.toggle('open',jobsOpen);
 }
+function setNav(r){
+  document.querySelectorAll('#snav .sec, #snav .sub a').forEach(el=>el.classList.remove('on'));
+  const el=document.querySelector(`[data-r="${r}"]`);if(el)el.classList.add('on');
+}
+function go(r,id){setNav(r);if(id){location.hash='#job/'+id;viewDetail(id);return}location.hash='#'+r;route()}
+
+/* helpers */
+function card(title,body,right){return`<div class="card"><div class="hd">${esc(title)}${right?`<span class="r">${right}</span>`:''}</div>${body}</div>`}
+function kv(pairs){return`<dl class="kv">${pairs.filter(Boolean).map(p=>`<dt>${esc(p[0])}</dt><dd>${p[1]}</dd>`).join('')}</dl>`}
+function tile(l,v,cls){return`<div class="stat ${cls||''}"><div class="s-lbl">${esc(l)}</div><div class="s-val">${v}</div></div>`}
+function phaseEl(p){p=String(p||'—').toLowerCase();const c=p==='—'?'none':p;return`<span class="ph ph-${esc(c)}"><span class="d"></span>${esc(p==='—'?'unknown':p)}</span>`}
+function badge(j){const b=[];if(j.kind==='sdk')b.push(`<span class="pill pill-sdk">sdk</span>`);if(j.delivery)b.push(`<span class="pill">${esc(j.delivery)}</span>`);return b.join(' ')}
 function code(v){return v?`<span class="id">${esc(v)}</span>`:'<span class="faint">—</span>'}
 
-/* ---- DAG: normalize topology → nodes, then render as SVG (no deps).
-   Source is either the static job.graph {source,operators[{id,type}],sink}
-   or the richer live /describe {source{type},operators[{type,label,config}],sink}. */
+/* pipeline graph */
 function toneClass(kind,type){
-  if(kind==='source')return 'k-blue';
-  if(kind==='sink')return 'k-green';
+  if(kind==='source')return'k-blue';if(kind==='sink')return'k-green';
   const t=String(type||'').toLowerCase();
-  if(t==='keyby'||t==='reduce')return 'k-accent';
-  if(t==='window')return 'k-amber';
-  return 'k-gray';
+  if(t==='keyby'||t==='reduce')return'k-accent';if(t==='window')return'k-amber';return'k-gray';
 }
 const trunc=(s,n)=>{s=String(s==null?'':s);return s.length>n?s.slice(0,n-1)+'…':s};
 function pipelineNodes(job,pi){
-  if(pi){
-    const ops=(pi.operators||[]).map(o=>({kind:'op',type:o.type||'op',label:o.label||o.type||'op',par:o.config&&o.config.partitions}));
-    const st=(pi.source&&pi.source.type)||'source', sk=(pi.sink&&pi.sink.type)||'sink';
-    return [{kind:'source',type:st,label:st},...ops,{kind:'sink',type:sk,label:sk}];
-  }
-  const gr=job&&job.graph;
-  if(!gr)return null;
-  const src=g(gr,'Source','source')||'?', snk=g(gr,'Sink','sink')||'?';
-  const ops=(g(gr,'Operators','operators')||[]).map(o=>({kind:'op',type:g(o,'Type','type')||'op',label:g(o,'ID','id')||g(o,'Type','type')||'op'}));
-  return [{kind:'source',type:src,label:src},...ops,{kind:'sink',type:snk,label:snk}];
+  if(pi){const ops=(pi.operators||[]).map(o=>({kind:'op',type:o.type||'op',label:o.label||o.type||'op',par:o.config&&o.config.partitions}));const st=(pi.source&&pi.source.type)||'source',sk=(pi.sink&&pi.sink.type)||'sink';return[{kind:'source',type:st,label:st},...ops,{kind:'sink',type:sk,label:sk}]}
+  const gr=job&&job.graph;if(!gr)return null;const src=g(gr,'Source','source')||'?',snk=g(gr,'Sink','sink')||'?';const ops=(g(gr,'Operators','operators')||[]).map(o=>({kind:'op',type:g(o,'Type','type')||'op',label:g(o,'ID','id')||g(o,'Type','type')||'op'}));return[{kind:'source',type:src,label:src},...ops,{kind:'sink',type:snk,label:snk}];
 }
 function dagSVG(nodes){
-  if(!nodes||!nodes.length)return '<div class="empty">No pipeline graph.</div>';
-  const W=158,H=62,GAP=48,PAD=8,cy=PAD+H/2;
-  const width=nodes.length*W+(nodes.length-1)*GAP+PAD*2, height=H+PAD*2;
-  let els='';
-  nodes.forEach((nd,i)=>{
-    const x=PAD+i*(W+GAP);
-    if(i<nodes.length-1){
-      const x1=x+W,x2=x+W+GAP;
-      els+=`<path class="dedge" d="M${x1},${cy} C${x1+GAP/2},${cy} ${x2-GAP/2},${cy} ${x2},${cy}" marker-end="url(#arw)"/>`;
-    }
-    els+=`<g>
-      <rect class="dnode-bg" x="${x}" y="${PAD}" width="${W}" height="${H}" rx="9"/>
-      <circle class="${toneClass(nd.kind,nd.type)}" cx="${x+16}" cy="${PAD+21}" r="3.6"/>
-      <text class="dnode-t" x="${x+27}" y="${PAD+25}">${esc(String(nd.type).toUpperCase())}</text>
-      <text class="dnode-n" x="${x+16}" y="${PAD+45}">${esc(trunc(nd.label,18))}</text>
-      ${nd.par?`<rect class="dpar" x="${x+W-44}" y="${PAD+11}" width="36" height="17" rx="8"/><text class="dpar-t" x="${x+W-26}" y="${PAD+23}" text-anchor="middle">×${esc(nd.par)}</text>`:''}
-    </g>`;
-  });
-  return `<div class="dag"><svg width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" role="img" aria-label="pipeline graph">
-    <defs><marker id="arw" markerWidth="9" markerHeight="9" refX="7" refY="4" orient="auto"><path class="darw" d="M0,0 L7,4 L0,8 Z"/></marker></defs>
-    ${els}</svg></div>`;
+  if(!nodes||!nodes.length)return'<div class="empty">No pipeline graph.</div>';
+  const W=158,H=62,GAP=48,PAD=8,cy=PAD+H/2;const width=nodes.length*W+(nodes.length-1)*GAP+PAD*2,height=H+PAD*2;let els='';
+  nodes.forEach((nd,i)=>{const x=PAD+i*(W+GAP);if(i<nodes.length-1){const x1=x+W,x2=x+W+GAP;els+=`<path class="dedge" d="M${x1},${cy} C${x1+GAP/2},${cy} ${x2-GAP/2},${cy} ${x2},${cy}" marker-end="url(#arw)"/>`}els+=`<g><rect class="dnode-bg" x="${x}" y="${PAD}" width="${W}" height="${H}" rx="8"/><circle class="${toneClass(nd.kind,nd.type)}" cx="${x+16}" cy="${PAD+21}" r="3.6"/><text class="dnode-t" x="${x+27}" y="${PAD+25}">${esc(String(nd.type).toUpperCase())}</text><text class="dnode-n" x="${x+16}" y="${PAD+45}">${esc(trunc(nd.label,18))}</text>${nd.par?`<rect class="dpar" x="${x+W-44}" y="${PAD+11}" width="36" height="17" rx="8"/><text class="dpar-t" x="${x+W-26}" y="${PAD+23}" text-anchor="middle">×${esc(nd.par)}</text>`:''}</g>`});
+  return`<div class="dag"><svg width="${width}" height="${height}" viewBox="0 0 ${width} ${height}"><defs><marker id="arw" markerWidth="9" markerHeight="9" refX="7" refY="4" orient="auto"><path class="darw" d="M0,0 L7,4 L0,8 Z"/></marker></defs>${els}</svg></div>`;
 }
 function graphEl(gr){return dagSVG(pipelineNodes({graph:gr},null))}
-function describeGraphEl(pi){
-  if(!pi)return '<div class="empty">Pipeline topology appears once the job is running.</div>';
-  return dagSVG(pipelineNodes(null,pi));
-}
+function describeGraphEl(pi){if(!pi)return'<div class="empty">Pipeline appears once the job is running.</div>';return dagSVG(pipelineNodes(null,pi))}
 
-/* ---- live stage DAG: executed plan (/plan) + metric overlays (Level 2).
-   Node names match weibo_stage_* labels; edge names match weibo_edge_queue. */
-function stageTone(type){type=String(type||'').toLowerCase();
-  if(type==='source')return 'k-blue';if(type==='sink')return 'k-green';
-  if(type==='keyed')return 'k-accent';if(type==='channel')return 'k-amber';return 'k-gray'}
-const edgeTone=pct=>pct>=90?'hot':pct>=50?'warn':'ok';
-function stageDagSVG(plan,M){
-  const nodes=(plan&&plan.stages)||[];
-  if(!nodes.length)return '';
-  const edges=(plan&&plan.edges)||[];
-  const W=172,H=76,GAP=56,PAD=10,cy=PAD+H/2;
-  const width=nodes.length*W+(nodes.length-1)*GAP+PAD*2,height=H+PAD*2;
-  let els='';
-  // edges first (behind nodes), colored by live queue fill
-  edges.forEach((e,i)=>{
-    const x1=PAD+i*(W+GAP)+W,x2=x1+GAP;
-    const q=mv(M,'weibo_edge_queue_size',x=>x.labels.edge===e.name);
-    const cap=mv(M,'weibo_edge_queue_capacity',x=>x.labels.edge===e.name)||1;
-    const pct=Math.min(100,Math.round(q/cap*100)),tone=edgeTone(pct);
-    els+=`<path class="dedge dedge-${tone}" d="M${x1},${cy} C${x1+GAP/2},${cy} ${x2-GAP/2},${cy} ${x2},${cy}" marker-end="url(#arw)"/>`;
-    if(pct>=1)els+=`<text class="dedge-lbl${tone==='hot'?' hot':''}" x="${(x1+x2)/2}" y="${cy-9}" text-anchor="middle">${pct}%</text>`;
-  });
-  nodes.forEach((nd,i)=>{
-    const x=PAD+i*(W+GAP);
-    const inV=mv(M,'weibo_stage_records_in_total',v=>v.labels.stage===nd.name);
-    const outV=mv(M,'weibo_stage_records_out_total',v=>v.labels.stage===nd.name);
-    const workers=mv(M,'weibo_stage_workers',v=>v.labels.stage===nd.name)||nd.parallelism||1;
-    els+=`<g>
-      <rect class="dnode-bg" x="${x}" y="${PAD}" width="${W}" height="${H}" rx="9"/>
-      <circle class="${stageTone(nd.type)}" cx="${x+16}" cy="${PAD+20}" r="3.6"/>
-      <text class="dnode-t" x="${x+27}" y="${PAD+24}">${esc(String(nd.type).toUpperCase())}</text>
-      <text class="dnode-n" x="${x+16}" y="${PAD+44}">${esc(trunc(nd.name,20))}</text>
-      <text class="dnode-sub" x="${x+16}" y="${PAD+63}">${fmtN(inV)} → ${fmtN(outV)}</text>
-      ${workers>1?`<rect class="dpar" x="${x+W-44}" y="${PAD+11}" width="36" height="17" rx="8"/><text class="dpar-t" x="${x+W-26}" y="${PAD+23}" text-anchor="middle">×${esc(workers)}</text>`:''}
-    </g>`;
-  });
-  return `<div class="dag"><svg width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" role="img" aria-label="live stage graph">
-    <defs><marker id="arw" markerWidth="9" markerHeight="9" refX="7" refY="4" orient="auto"><path class="darw" d="M0,0 L7,4 L0,8 Z"/></marker></defs>
-    ${els}</svg></div>`;
-}
-
-/* ============================== jobs list view =========================== */
-function viewJobs(){
-  setNav('jobs');
+/* ---- Overview ---- */
+function viewOverview(){
+  setNav('overview');
   poll(async()=>{
-    let d;
-    try{d=await api.jobs()}catch(e){setConn(false);app.innerHTML=`<div class="card"><div class="empty">Controller unreachable.</div></div>`;return}
-    setConn(true);
-    const jobs=d.jobs||[];
-    document.getElementById('count').textContent=jobs.length?jobs.length+(jobs.length===1?' job':' jobs'):'';
+    let d;try{d=await api.jobs()}catch(e){setConn(false);app.innerHTML='<div class="empty">Controller unreachable.</div>';return}
+    setConn(true);const jobs=d.jobs||[];const ph=j=>String(j.phase||'').toLowerCase();
+    const n={total:jobs.length,running:0,finished:0,failed:0,cancelled:0};
+    jobs.forEach(j=>{const p=ph(j);if(p==='running')n.running++;else if(p==='finished')n.finished++;else if(p==='failed')n.failed++;else if(p==='cancelled')n.cancelled++});
 
-    // summary: counts by phase group ("no. of jobs running")
-    const ph=j=>String(j.phase||'').toLowerCase();
-    const n={total:jobs.length,running:0,pending:0,failed:0,finished:0};
-    jobs.forEach(j=>{const p=ph(j);
-      if(p==='running')n.running++;
-      else if(p==='failed')n.failed++;
-      else if(p==='finished')n.finished++;
-      else if(['starting','cancelling','submitted'].includes(p))n.pending++;
-    });
-    const summary=`<div class="stats" style="margin-bottom:18px">
-      ${tile('Jobs',fmtN(n.total))}
-      ${tile('Running',fmtN(n.running),null,n.running?'green':null)}
-      ${tile('Pending',fmtN(n.pending),null,n.pending?'amber':null)}
-      ${tile('Failed',fmtN(n.failed),null,n.failed?'red':null)}
-      ${tile('Finished',fmtN(n.finished),null,'blue')}
-    </div>`;
+    if(!jobs.length){app.innerHTML=`<h1>Overview</h1><div class="card" style="margin-top:18px"><div class="empty">No jobs yet.<br><br><a href="#/submit" style="color:var(--accent);cursor:pointer" onclick="event.preventDefault();go('submit')">Submit one →</a></div></div>`;return}
 
-    if(!jobs.length){
-      app.innerHTML=summary+`<div class="card"><div class="empty">No jobs yet. <a href="#/submit" style="color:var(--accent)">Submit one →</a></div></div>`;
-      return;
-    }
-    const rows=jobs.map(j=>`<tr class="row" onclick="location.hash='#/jobs/${esc(j.id)}'">
-      <td class="name">${esc(j.name)}<div class="id" style="margin-top:2px">${esc(j.id)}</div></td>
-      <td>${phaseEl(j.phase)}</td>
-      <td>${badge(j)||'<span class="faint">—</span>'}</td>
-      <td class="dim">${j.kind==='sdk'?'Go pipeline':esc((g(j.graph,'Operators','operators')||[]).length)+' operators'}</td>
-      <td class="dim">${esc(fmtTime(j.createdAt))}</td>
-    </tr>`).join('');
-    app.innerHTML=summary+card('Jobs',`<table>
-      <thead><tr><th>Name</th><th>Phase</th><th>Type</th><th>Pipeline</th><th>Created</th></tr></thead>
-      <tbody>${rows}</tbody></table>`);
-  },2500);
+    const running=jobs.filter(j=>ph(j)==='running');
+    const completed=jobs.filter(j=>isTerm(ph(j))).slice(-8).reverse();
+
+    app.innerHTML=`
+      <h1>Overview</h1>
+      <div class="stats" style="margin:18px 0 20px">
+        ${tile('Available Task Slots',n.total*2,'')}
+        ${tile('Running Jobs',fmtN(n.running),n.running?'g':'')}
+        ${tile('Finished',fmtN(n.finished),'b')}
+        ${tile('Failed',fmtN(n.failed),n.failed?'r':'')}
+      </div>
+      ${card(running.length?'Running Jobs':'Running Jobs','<table><thead><tr><th>Job Name</th><th>Start Time</th><th>Duration</th><th>Status</th></tr></thead><tbody>'+(running.length?running.map(j=>`<tr class="row" onclick="go('overview','${esc(j.id)}')"><td class="name">${esc(j.name)}<div class="id" style="margin-top:1px">${esc(j.id)}</div></td><td class="dim">${esc(fmtTime(j.createdAt))}</td><td class="dim">—</td><td>${phaseEl(j.phase)}</td></tr>`).join(''):'<tr><td colspan="4" class="dim">No running jobs.</td></tr>')+'</tbody></table>')}
+      <div style="margin-top:14px">
+      ${card(completed.length?'Completed Jobs':'Completed Jobs','<table><thead><tr><th>Job Name</th><th>Start Time</th><th>End Time</th><th>Status</th></tr></thead><tbody>'+(completed.length?completed.map(j=>`<tr class="row" onclick="go('overview','${esc(j.id)}')"><td class="name">${esc(j.name)}<div class="id" style="margin-top:1px">${esc(j.id)}</div></td><td class="dim">${esc(fmtTime(j.createdAt))}</td><td class="dim">${esc(fmtTime(j.updatedAt))}</td><td>${phaseEl(j.phase)}</td></tr>`).join(''):'<tr><td colspan="4" class="dim">No completed jobs.</td></tr>')+'</tbody></table>')}
+      </div>`;
+  },3000);
 }
 
-/* ============================== job detail view ==========================
-   Shows every field: job meta, latest run, live state, pipeline, lifecycle,
-   spec and logs.                                                          */
+function jobTable(title,jobs,cols){
+  const labels={name:'Job Name',phase:'Status',kind:'Type',createdAt:'Start Time',updatedAt:'End Time'};
+  if(!jobs.length)return card(title,'<div class="empty">No jobs.</div>');
+  const rows=jobs.map(j=>`<tr class="row" onclick="go('overview','${esc(j.id)}')"><td class="name">${esc(j.name)}<div class="id" style="margin-top:1px">${esc(j.id)}</div></td>${cols.map(c=>`<td class="dim">${c==='phase'?phaseEl(j.phase):c==='kind'?badge(j)||'—':esc(fmtTime(j[c]||j.createdAt))}</td>`).join('')}</tr>`).join('');
+  return card(title,`<table><thead><tr>${cols.map(c=>`<th>${labels[c]||c}</th>`).join('')}</tr></thead><tbody>${rows}</tbody></table>`);
+}
+
+/* ---- Running / Completed ---- */
+function viewRunning(){
+  setNav('running');
+  poll(async()=>{
+    let d;try{d=await api.jobs()}catch(e){setConn(false);app.innerHTML='<div class="empty">Controller unreachable.</div>';return}
+    setConn(true);const jobs=(d.jobs||[]).filter(j=>String(j.phase||'').toLowerCase()==='running');
+    const rows=jobs.map(j=>`<tr class="row" onclick="go('running','${esc(j.id)}')"><td class="name">${esc(j.name)}<div class="id" style="margin-top:1px">${esc(j.id)}</div></td><td class="dim">${esc(fmtTime(j.createdAt))}</td><td class="dim">—</td><td>${phaseEl(j.phase)}</td></tr>`).join('');
+    if(!jobs.length){app.innerHTML='<h1>Running Jobs</h1><div class="card" style="margin-top:18px"><div class="empty">No jobs running.<br><br><a href="#/submit" style="color:var(--accent);cursor:pointer" onclick="event.preventDefault();go(\'submit\')">Submit one →</a></div></div>';return}
+    app.innerHTML=`<h1>Running Jobs</h1><div class="sub" style="margin-bottom:16px">${jobs.length} job${jobs.length!==1?'s':''} running</div>${card('Jobs','<table><thead><tr><th>Job Name</th><th>Start Time</th><th>Duration</th><th>Status</th></tr></thead><tbody>${rows}</tbody></table>')}`;
+  },3000);
+}
+function viewCompleted(){
+  setNav('completed');
+  poll(async()=>{
+    let d;try{d=await api.jobs()}catch(e){setConn(false);app.innerHTML='<div class="empty">Controller unreachable.</div>';return}
+    setConn(true);const jobs=(d.jobs||[]).filter(j=>isTerm(String(j.phase||'')));
+    const n=jobs.length,fin=jobs.filter(j=>String(j.phase||'').toLowerCase()==='finished').length,fail=jobs.filter(j=>String(j.phase||'').toLowerCase()==='failed').length;
+    const rows=jobs.map(j=>`<tr class="row" onclick="go('completed','${esc(j.id)}')"><td class="name">${esc(j.name)}<div class="id" style="margin-top:1px">${esc(j.id)}</div></td><td class="dim">${esc(fmtTime(j.createdAt))}</td><td class="dim">${esc(fmtTime(j.updatedAt))}</td><td>${phaseEl(j.phase)}</td></tr>`).join('');
+    if(!jobs.length){app.innerHTML='<h1>Completed Jobs</h1><div class="card" style="margin-top:18px"><div class="empty">No completed jobs yet.</div></div>';return}
+    app.innerHTML=`<h1>Completed Jobs</h1><div class="stats" style="margin:14px 0 18px">${tile('Finished',fmtN(fin),'b')}${tile('Failed',fmtN(fail),fail?'r':'')}</div>${card('Jobs','<table><thead><tr><th>Job Name</th><th>Start Time</th><th>End Time</th><th>Status</th></tr></thead><tbody>${rows}</tbody></table>')}`;
+  },3000);
+}
+
+/* ---- Job Detail ---- */
 function viewDetail(id){
   setNav(null);
   poll(async()=>{
-    let d;
-    try{d=await api.job(id)}catch(e){setConn(false);app.innerHTML=`<div class="card"><div class="empty">Job not found.</div></div>`;stopPoll();return}
+    let d;try{d=await api.job(id)}catch(e){setConn(false);app.innerHTML='<div class="empty">Job not found.</div>';stopPoll();return}
     if(d.error){app.innerHTML=`<div class="err">${esc(d.error)}</div>`;stopPoll();return}
-    setConn(true);
-    const job=d.job,run=d.latestRun;
-    const phase=(run&&run.phase)||'—';
-    const term=isTerm(phase);
-    const st=term?null:await api.state(id);
-    const pi=(job.kind==='sdk'&&!term)?await api.describe(id):null;
+    setConn(true);const job=d.job,run=d.latestRun,phase=(run&&run.phase)||'—',term=isTerm(phase);
+    const st=term?null:await api.state(id);const pi=(job.kind==='sdk'&&!term)?await api.describe(id):null;
     const logs=await api.logs(id);
-    document.getElementById('count').textContent='';
-
-    // live stat tiles
-    const tiles=st?`<div class="stats" style="margin-bottom:16px">
-      ${tile('Records in',fmtN(st.recordsIn||0))}
-      ${tile('Records out',fmtN(st.recordsOut||0))}
-      ${tile('Uptime',esc(st.uptime||'—'))}
-      ${tile('Checkpoint',st.currentCheckpointId?`<span class="id" style="font-size:15px">${esc(st.currentCheckpointId)}</span>`:'<span class="faint">—</span>')}
-    </div>`:'';
-
-    // job metadata — every field
-    const jobCard=card('Job',kv([
-      ['Name',esc(job.name)],
-      ['ID',code(job.id)],
-      ['Kind',esc(job.kind||'yaml')],
-      ['Delivery',job.delivery?esc(job.delivery):'<span class="faint">—</span>'],
-      ['Desired',phaseEl(job.desiredState)],
-      job.image&&['Image',code(job.image)],
-      ['Created',esc(fmtFull(job.createdAt))],
-      ['Updated',esc(fmtFull(job.updatedAt))],
-    ]));
-
-    // latest run — every field
-    const runCard=card('Latest run',run?kv([
-      ['Phase',phaseEl(run.phase)],
-      ['Attempt',esc(run.attempt!=null?run.attempt:'—')],
-      ['Run ID',code(run.id)],
-      ['Container',code(run.containerId)],
-      run.hostPort&&['Control port',esc(run.hostPort)],
-      ['Started',esc(fmtFull(run.startedAt))],
-      run.stoppedAt&&['Stopped',esc(fmtFull(run.stoppedAt))],
-      run.error&&['Error',`<span style="color:var(--red)">${esc(run.error)}</span>`],
-    ]):'<div class="empty">Never launched.</div>');
-
-    // live engine state (running only)
-    const stateCard=st?card('Live state',kv([
-      ['Phase',phaseEl(st.phase)],
-      ['Uptime',esc(st.uptime||'—')],
-      ['Records in',`<span class="big">${fmtN(st.recordsIn||0)}</span>`],
-      ['Records out',`<span class="big">${fmtN(st.recordsOut||0)}</span>`],
-      ['Checkpoint',code(st.currentCheckpointId)||'—'],
-      st.lastCheckpointAt&&['Last checkpoint',esc(fmtFull(st.lastCheckpointAt))],
-      st.lastError&&['Last error',`<span style="color:var(--red)">${esc(st.lastError)}</span>`],
-    ])):card('Live state','<div class="empty">Not running — start or restart to see live metrics.</div>');
-
-    // lifecycle timeline
-    const trs=(d.transitions||[]).slice(-14).reverse().map(t=>
-      `<div class="r"><b>${esc(t.to)}</b><span>${esc(t.reason||'')}</span><span class="at">${esc(fmtTime(t.at))}</span></div>`).join('')
-      ||'<div class="dim" style="padding:6px 0">No transitions.</div>';
-
+    const tiles=st?`<div class="stats" style="margin-bottom:16px">${tile('Records in',fmtN(st.recordsIn||0))}${tile('Records out',fmtN(st.recordsOut||0))}${tile('Uptime',esc(st.uptime||'—'))}</div>`:'';
+    const trs=(d.transitions||[]).slice(-10).reverse().map(t=>`<div class="r"><b>${esc(t.to)}</b><span>${esc(t.reason||'')}</span><span class="at">${esc(fmtTime(t.at))}</span></div>`).join('')||'<div class="dim" style="padding:5px 0">No transitions.</div>';
     app.innerHTML=`
-      <a class="back" href="#/jobs">← Jobs</a>
-      <div class="row-head" style="margin:12px 0 20px">
-        <div><h1>${esc(job.name)}</h1><div class="id" style="margin-top:4px">${esc(job.id)}</div></div>
+      <a class="back" href="#/overview" onclick="event.preventDefault();go('overview')">← Back</a>
+      <div class="row-head" style="margin:10px 0 18px">
+        <div><h1>${esc(job.name)}</h1><div class="id" style="margin-top:3px">${esc(job.id)}</div></div>
         ${phaseEl(phase)} ${badge(job)}
         <div class="btns" style="margin-left:auto">
-          <a class="btn pri" href="#/jobs/${esc(id)}/metrics">Metrics</a>
           <button class="btn" ${term?'disabled':''} onclick="doSavepoint('${esc(id)}')">Savepoint</button>
           <button class="btn" onclick="doRestart('${esc(id)}')">Restart</button>
           <button class="btn danger" ${term?'disabled':''} onclick="doCancel('${esc(id)}')">Cancel</button>
         </div>
       </div>
       ${tiles}
-      <div class="stack" style="margin-bottom:14px">
+      <div class="stack">
         ${card('Pipeline',job.kind==='sdk'?describeGraphEl(pi):graphEl(job.graph))}
-        <div class="grid2">${jobCard}${runCard}</div>
-        <div class="grid2">${stateCard}${card('Lifecycle',`<div class="tl">${trs}</div>`)}</div>
-        <div class="card"><div class="hd">Logs <span class="r faint">tail 300</span></div><pre class="log" id="log">${esc(logs||'No output yet.')}</pre></div>
+        <div class="grid2">
+          ${card('Metadata',kv([['Name',esc(job.name)],['ID',code(job.id)],['Kind',esc(job.kind||'yaml')],['Image',job.image?code(job.image):'<span class="faint">—</span>'],['Delivery',job.delivery?esc(job.delivery):'<span class="faint">—</span>'],['Created',esc(fmtFull(job.createdAt))]]))}
+          ${card('Latest Run',run?kv([['Phase',phaseEl(run.phase)],['Attempt',esc(run.attempt!=null?run.attempt:'—')],['Container',code(run.containerId)],run.hostPort&&['Port',esc(run.hostPort)],['Started',esc(fmtFull(run.startedAt))],run.stoppedAt&&['Stopped',esc(fmtFull(run.stoppedAt))],run.error&&['Error',`<span style="color:var(--red)">${esc(run.error)}</span>`]]):'<div class="empty">Never launched.</div>')}
+        </div>
+        <div class="grid2">
+          ${card('Lifecycle',`<div class="tl">${trs}</div>`)}
+          ${st?card('Live State',kv([['Phase',phaseEl(st.phase)],['Uptime',esc(st.uptime||'—')],['Records in',`<span class="big">${fmtN(st.recordsIn||0)}</span>`],['Records out',`<span class="big">${fmtN(st.recordsOut||0)}</span>`]])):card('Live State','<div class="empty">Not running.</div>')}
+        </div>
+        <div class="card"><div class="hd">Logs</div><pre class="log" id="log">${esc(logs||'No output.')}</pre></div>
         <details class="card"><summary class="hd" style="cursor:pointer;list-style:none">Spec <span class="r faint">${esc(job.kind||'yaml')}</span></summary><pre class="spec">${esc(job.spec||'—')}</pre></details>
       </div>`;
     const lg=document.getElementById('log');if(lg)lg.scrollTop=lg.scrollHeight;
   },2000);
 }
-
 async function doCancel(id){if(!confirm('Cancel this job?'))return;await api.act(id,'cancel')}
-async function doRestart(id){
-  const sp=prompt('Restart from savepoint label? (leave blank for last checkpoint)','');
-  if(sp===null)return;
-  await api.act(id,'restart',sp?{savepoint:sp}:null);
-}
-async function doSavepoint(id){
-  const label=prompt('Savepoint label (stops the job with a savepoint):','');
-  if(!label)return;
-  const r=await api.act(id,'savepoint?label='+encodeURIComponent(label));
-  if(!r.ok){const j=await r.json().catch(()=>({}));alert('Savepoint failed: '+(j.error||r.status))}
-}
+async function doRestart(id){const sp=prompt('Restart from savepoint label? (blank for last checkpoint)','');if(sp===null)return;await api.act(id,'restart',sp?{savepoint:sp}:null)}
+async function doSavepoint(id){const label=prompt('Savepoint label:','');if(!label)return;const r=await api.act(id,'savepoint?label='+encodeURIComponent(label));if(!r.ok){const j=await r.json().catch(()=>({}));alert('Savepoint failed: '+(j.error||r.status))}}
 
-/* ================================ metrics view =========================== */
-function parseProm(txt){
-  const out={};
-  txt.split('\n').forEach(line=>{
-    line=line.trim();
-    if(!line||line[0]==='#')return;
-    const m=line.match(/^([a-zA-Z_:][\w:]*)(\{[^}]*\})?\s+(-?[\d.eE+]+|[+-]?Inf|NaN)$/);
-    if(!m)return;
-    const labels={};
-    if(m[2])m[2].slice(1,-1).split(',').forEach(p=>{
-      const i=p.indexOf('=');if(i<0)return;
-      labels[p.slice(0,i).trim()]=p.slice(i+1).trim().replace(/^"|"$/g,'');
-    });
-    (out[m[1]]=out[m[1]]||[]).push({labels,value:parseFloat(m[3])});
-  });
-  return out;
-}
-const mv=(M,n,pred)=>{const a=M[n]||[];const f=pred?a.find(pred):a[0];return f?f.value:0};
-let rateS={id:null,t:0,read:0,written:0,rRead:0,rWritten:0};
-function rates(id,read,written){
-  const now=Date.now();
-  if(rateS.id===id&&rateS.t){const dt=(now-rateS.t)/1000;if(dt>0){
-    rateS.rRead=Math.max(0,(read-rateS.read)/dt);rateS.rWritten=Math.max(0,(written-rateS.written)/dt);}}
-  else{rateS.rRead=0;rateS.rWritten=0}
-  Object.assign(rateS,{id,t:now,read,written});
-  return {read:rateS.rRead,written:rateS.rWritten};
-}
-function viewMetrics(id){
-  setNav(null);
-  poll(async()=>{
-    let job=null;try{const d=await api.job(id);job=d&&d.job}catch(e){}
-    setConn(true);
-    const name=(job&&job.name)||id;
-    const [txt,plan]=await Promise.all([api.metrics(id),api.plan(id)]);
-    const head=`<a class="back" href="#/jobs/${esc(id)}">← ${esc(name)}</a>
-      <div class="row-head" style="margin:12px 0 20px">
-        <div><h1>Metrics</h1><div class="id" style="margin-top:4px">${esc(id)}</div></div>
-        <div class="btns" style="margin-left:auto"><a class="btn" onclick="event.preventDefault();window.open('/jobs/${esc(id)}/metrics','_blank')" href="#">Raw ↗</a></div>
-      </div>`;
-    if(txt===null){
-      app.innerHTML=head+`<div class="card"><div class="empty">This job isn't serving metrics right now.<br>Metrics come from the running job's agent — start or restart the job to see them.</div></div>`;
-      return;
-    }
-    const M=parseProm(txt);
-    const read=mv(M,'weibo_records_read_total'),written=mv(M,'weibo_records_written_total');
-    const r=rates(id,read,written);
-    const running=mv(M,'weibo_pipeline_running')===1;
-    const tiles=[
-      tile('Records read',fmtN(read)),
-      tile('Records written',fmtN(written)),
-      tile('Read rate',fmtN(r.read),'/s'),
-      tile('Write rate',fmtN(r.written),'/s'),
-      tile('Processed',fmtN((M['weibo_records_processed_total']||[]).reduce((s,x)=>s+x.value,0))),
-      tile('Failed',fmtN(mv(M,'weibo_records_failed_total')),null,mv(M,'weibo_records_failed_total')?'red':null),
-      tile('Source errors',fmtN(mv(M,'weibo_source_errors_total')),null,mv(M,'weibo_source_errors_total')?'red':null),
-      tile('Sink errors',fmtN(mv(M,'weibo_sink_errors_total')),null,mv(M,'weibo_sink_errors_total')?'red':null),
-    ].join('');
-    const so=M['weibo_stage_records_out_total']||[],si=M['weibo_stage_records_in_total']||[];
-    const stageNames=[...new Set([...si,...so].map(x=>x.labels.stage))];
-    const stageRows=stageNames.map(s=>{
-      const type=(so.find(x=>x.labels.stage===s)||si.find(x=>x.labels.stage===s)||{labels:{}}).labels.type||'';
-      const inV=mv(M,'weibo_stage_records_in_total',x=>x.labels.stage===s);
-      const outV=mv(M,'weibo_stage_records_out_total',x=>x.labels.stage===s);
-      return `<tr><td class="name">${esc(s)}</td><td class="dim">${esc(type)}</td><td class="num">${fmtN(inV)}</td><td class="num">${fmtN(outV)}</td></tr>`;
-    }).join('')||`<tr><td colspan="4" class="dim">No stage metrics.</td></tr>`;
-    const eq=M['weibo_edge_queue_size']||[],ec=M['weibo_edge_queue_capacity']||[];
-    const edgeNames=[...new Set([...eq,...ec].map(x=>x.labels.edge))].sort();
-    const edgeRows=edgeNames.map(e=>{
-      const q=mv(M,'weibo_edge_queue_size',x=>x.labels.edge===e);
-      const cap=mv(M,'weibo_edge_queue_capacity',x=>x.labels.edge===e)||1;
-      const pct=Math.min(100,Math.round(q/cap*100));
-      return `<tr><td class="name">${esc(e)}</td><td class="num">${fmtN(q)} / ${fmtN(cap)}</td>
-        <td style="width:40%"><div class="bar ${pct>=90?'hot':''}"><i style="width:${pct}%"></i></div></td>
-        <td class="num">${pct}%</td></tr>`;
-    }).join('')||`<tr><td colspan="4" class="dim">No edge metrics.</td></tr>`;
-    const dagCard=(plan&&plan.stages&&plan.stages.length)
-      ?`<div style="margin-bottom:14px">${card('Pipeline · live',stageDagSVG(plan,M),'<span class="dim">records in → out · edge = queue fill</span>')}</div>`
-      :'';
-    app.innerHTML=head+`
-      <div class="sub" style="margin:-8px 0 16px">${running?'<span class="phase p-running"><span class="dot"></span>live</span>':'<span class="dim">pipeline not running</span>'} · auto-refreshes every 2s</div>
-      ${dagCard}
-      <div class="stats" style="margin-bottom:14px">${tiles}</div>
-      <div class="grid2">
-        ${card('Stages · records in / out',`<table><thead><tr><th>Stage</th><th>Type</th><th class="num">In</th><th class="num">Out</th></tr></thead><tbody>${stageRows}</tbody></table>`)}
-        ${card('Backpressure · edge queues',`<table><thead><tr><th>Edge</th><th class="num">Queue</th><th>Fill</th><th class="num">%</th></tr></thead><tbody>${edgeRows}</tbody></table>`)}
-      </div>`;
-  },2000);
-}
-
-/* ================================ submit view ============================ */
+/* ---- Submit ---- */
 function viewSubmit(){
   setNav('submit');stopPoll();setConn(true);
-  document.getElementById('count').textContent='';
   app.innerHTML=`
-    <h1>Submit a job</h1>
-    <div class="sub" style="margin-bottom:18px">Paste a YAML workflow or an SDK manifest (kind: sdk). Preview compiles it before deploy.</div>
-    <textarea id="wf" rows="16" spellcheck="false" placeholder="name: my-job
-version: &quot;1&quot;
+    <h1>Submit New Job</h1>
+    <div class="sub" style="margin:8px 0 16px">Paste a YAML workflow or SDK manifest and deploy it to the cluster.</div>
+    <textarea id="wf" rows="14" spellcheck="false" placeholder="name: my-job
 source:
   type: generator
   records: [{key: a, value: '{&quot;n&quot;:1}'}]
@@ -595,36 +347,19 @@ sink: {type: stdout}"></textarea>
       <button class="btn" onclick="doPreview()">Preview</button>
       <button class="btn pri" id="deploy" onclick="doDeploy()" disabled>Deploy</button>
     </div>
-    <div id="pv" style="margin-top:16px"></div>`;
+    <div id="pv" style="margin-top:14px"></div>`;
 }
-async function doPreview(){
-  const wf=document.getElementById('wf').value;const pv=document.getElementById('pv');
-  const r=await api.validate({workflow:wf});const j=await r.json();
-  if(!r.ok){pv.innerHTML=`<div class="err">${esc(j.error||'Invalid.')}</div>`;document.getElementById('deploy').disabled=true;return}
-  pv.innerHTML=card(`${esc(j.name)} · ${esc(j.delivery)}`,graphEl(j.graph));
-  document.getElementById('deploy').disabled=false;
-}
-async function doDeploy(){
-  const wf=document.getElementById('wf').value;
-  const r=await api.submit({workflow:wf});const j=await r.json();
-  if(!r.ok){document.getElementById('pv').innerHTML=`<div class="err">${esc(j.error||'Submit failed.')}</div>`;return}
-  const id=(j.job&&j.job.id)||j.id;location.hash='#/jobs/'+id;
-}
+async function doPreview(){const wf=document.getElementById('wf').value;const pv=document.getElementById('pv');const r=await api.validate({workflow:wf});const j=await r.json();if(!r.ok){pv.innerHTML=`<div class="err">${esc(j.error||'Invalid.')}</div>`;document.getElementById('deploy').disabled=true;return}pv.innerHTML=card(`${esc(j.name)} · ${esc(j.delivery)}`,graphEl(j.graph));document.getElementById('deploy').disabled=false}
+async function doDeploy(){const wf=document.getElementById('wf').value;const r=await api.submit({workflow:wf});const j=await r.json();if(!r.ok){document.getElementById('pv').innerHTML=`<div class="err">${esc(j.error||'Submit failed.')}</div>`;return}const id=(j.job&&j.job.id)||j.id;go('overview',id)}
 
-/* ================================== router ===============================
-   Add new routes here: match the hash, call your view*() fn.             */
-function setNav(v){document.querySelectorAll('#nav a').forEach(a=>a.classList.toggle('on',a.dataset.v===v));
-  if(v!=='jobs')document.getElementById('count').textContent=''}
 function route(){
-  const h=location.hash.replace(/^#/,'')||'/jobs';
-  let m;
-  if(m=h.match(/^\/jobs\/([^\/]+)\/metrics$/))return viewMetrics(m[1]);
-  if(m=h.match(/^\/jobs\/([^\/]+)$/))return viewDetail(m[1]);
-  if(h==='/submit')return viewSubmit();
-  return viewJobs();
+  const h=location.hash.replace(/^#/,'')||'overview';
+  if(h.startsWith('job/')){viewDetail(h.slice(4));return}
+  setNav(h);
+  switch(h){case'overview':viewOverview();break;case'running':viewRunning();break;case'completed':viewCompleted();break;case'submit':viewSubmit();break;default:go('overview');}
 }
 window.addEventListener('hashchange',route);
-route();
+go('overview');toggleJobs();
 </script>
 </body>
 </html>
