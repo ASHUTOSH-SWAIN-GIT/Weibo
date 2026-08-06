@@ -39,6 +39,7 @@ func NewServer(ctrl *control.Controller, token string) *Server {
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("GET /{$}", ui.Index()) // dashboard at the app root
+	mux.Handle("GET /logo.png", ui.Logo())
 	mux.HandleFunc("GET /healthz", s.health)
 	mux.HandleFunc("POST /auth", s.authCheck)
 	mux.HandleFunc("POST /validate", s.validate)

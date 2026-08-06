@@ -8,7 +8,7 @@ import (
 	"net/http"
 )
 
-//go:embed index.html
+//go:embed index.html logo.png
 var files embed.FS
 
 // Index serves the embedded single-page dashboard at the app root.
@@ -20,5 +20,18 @@ func Index() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		_, _ = w.Write(page)
+	})
+}
+
+// Logo serves the embedded logo PNG.
+func Logo() http.Handler {
+	data, err := files.ReadFile("logo.png")
+	if err != nil {
+		panic("ui: embedded logo.png missing: " + err.Error())
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/png")
+		w.Header().Set("Cache-Control", "public, max-age=86400")
+		_, _ = w.Write(data)
 	})
 }
