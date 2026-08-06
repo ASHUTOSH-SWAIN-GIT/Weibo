@@ -49,3 +49,4 @@ kafka-dashboard
 control/weibo-control.db
 data/
 control/data/
+control/weibo
