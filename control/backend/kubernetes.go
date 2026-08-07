@@ -95,6 +95,52 @@ func (k *Kubernetes) Ping(ctx context.Context) error {
 	return err
 }
 
+func (k *Kubernetes) Capacity(ctx context.Context, cfg CapacityConfig) (CapacitySnapshot, error) {
+	snap := CapacitySnapshot{
+		Backend:     "kubernetes",
+		Health:      "healthy",
+		Source:      "kubernetes_api",
+		At:          time.Now().UTC(),
+		MaxJobs:     cfg.MaxJobs,
+		Unsupported: true,
+		Reason:      "detailed kubernetes capacity requires quota/node-resource aggregation",
+	}
+	if err := k.Ping(ctx); err != nil {
+		snap.Health = "unreachable"
+		snap.Reason = err.Error()
+		return snap, nil
+	}
+	jobs, err := k.cs.BatchV1().Jobs(k.namespace).List(ctx, metav1.ListOptions{LabelSelector: "app.kubernetes.io/managed-by=weibo"})
+	if err != nil {
+		snap.Health = "degraded"
+		snap.Reason = err.Error()
+		return snap, nil
+	}
+	for _, j := range jobs.Items {
+		switch {
+		case j.Status.Active > 0:
+			snap.RunningContainers += int(j.Status.Active)
+			snap.UsedSlots += int(j.Status.Active)
+		case j.Status.Succeeded > 0 || j.Status.Failed > 0:
+			snap.ExitedContainers++
+		default:
+			snap.StartingContainers++
+			snap.UsedSlots++
+		}
+	}
+	if cfg.MaxJobs > 0 {
+		available := cfg.MaxJobs - snap.UsedSlots
+		if available < 0 {
+			available = 0
+		}
+		total := snap.UsedSlots + available
+		snap.AvailableSlots = &available
+		snap.TotalSlots = &total
+		snap.Source = "configured_limit"
+	}
+	return snap, nil
+}
+
 const (
 	k8sWorkflowPath = "/wf/workflow.yaml"
 	k8sDataDir      = "/data"

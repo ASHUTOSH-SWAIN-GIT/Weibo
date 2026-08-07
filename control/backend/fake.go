@@ -87,6 +87,47 @@ func (f *Fake) Remove(ctx context.Context, id string) error {
 	return nil
 }
 
+func (f *Fake) Capacity(ctx context.Context, cfg CapacityConfig) (CapacitySnapshot, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	used := 0
+	exited := 0
+	for _, c := range f.containers {
+		if c.removed {
+			continue
+		}
+		switch c.status.Phase {
+		case PhaseRunning:
+			used++
+		case PhaseExited, PhaseGone:
+			exited++
+		}
+	}
+	available := 0
+	total := used
+	if cfg.MaxJobs > 0 {
+		available = cfg.MaxJobs - used
+		if available < 0 {
+			available = 0
+		}
+		total = used + available
+	}
+	return CapacitySnapshot{
+		Backend:               "fake",
+		Health:                "healthy",
+		Source:                "configured_limit",
+		At:                    time.Now().UTC(),
+		TotalSlots:            &total,
+		UsedSlots:             used,
+		AvailableSlots:        &available,
+		MaxJobs:               cfg.MaxJobs,
+		RunningContainers:     used,
+		ExitedContainers:      exited,
+		DefaultJobCPUMilli:    1000,
+		DefaultJobMemoryBytes: 1 << 30,
+	}, nil
+}
+
 // --- test controls (not part of ContainerBackend) ---
 
 // SetPhase forces a container's phase, simulating an exit or crash.

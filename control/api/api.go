@@ -42,6 +42,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /logo.png", ui.Logo())
 	mux.HandleFunc("GET /healthz", s.health)
 	mux.HandleFunc("POST /auth", s.authCheck)
+	mux.HandleFunc("GET /cluster", s.cluster)
 	mux.HandleFunc("POST /validate", s.validate)
 	mux.HandleFunc("POST /jobs", s.submit)
 	mux.HandleFunc("GET /jobs", s.list)
@@ -92,6 +93,15 @@ func publicRoute(r *http.Request) bool {
 // before storing it, without listing jobs.
 func (s *Server) authCheck(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (s *Server) cluster(w http.ResponseWriter, r *http.Request) {
+	snap, err := s.ctrl.Cluster(r.Context())
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, snap)
 }
 
 // submitRequest is the JSON envelope for POST /jobs. A raw (non-JSON)

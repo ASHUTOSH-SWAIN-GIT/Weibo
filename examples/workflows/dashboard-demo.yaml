@@ -1,0 +1,40 @@
+name: dashboard-demo
+version: "1"
+
+env:
+  checkpointing:
+    interval: 15s
+  state:
+    backend: pebble
+
+source:
+  type: kafka
+  kafka:
+    brokers: [host.docker.internal:9092]
+    topic: dashboard-demo
+    groupID: dashboard-demo
+    startFrom: latest
+    deserialize: json
+    watermark:
+      maxOutOfOrderness: 10s
+      interval: 1s
+
+pipeline:
+  - id: valid-orders
+    type: filter
+    filter: {field: amount, operator: greater_than, value: 0}
+  - id: orders-summary
+    type: selectFields
+    selectFields: {fields: [product, region, amount]}
+  - id: by-product
+    type: keyBy
+    keyBy: {field: product, partitions: 4}
+  - id: per-30s
+    type: window
+    window: {type: tumbling, size: 30s}
+  - id: totals
+    type: reduce
+    reduce: {function: sum, field: amount}
+
+sink:
+  type: stdout

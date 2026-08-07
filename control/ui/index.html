@@ -130,6 +130,7 @@
   <div class="side-brand"><img src="/logo.png" alt="weibo" class="logo"><span class="txt">weibo</span></div>
   <nav class="side-nav" id="snav">
     <div class="sec on" data-r="overview" onclick="go('overview')">Overview</div>
+    <div class="sec" data-r="job-manager" onclick="go('job-manager')">Job Manager</div>
     <div class="sec" data-r="jobs" onclick="go('running');toggleJobs()"><span>Jobs</span><span class="arr">▶</span></div>
     <div class="sub" data-r="jobs-sub">
       <a data-r="running" onclick="go('running')">Running Jobs</a>
@@ -147,6 +148,8 @@ const g=(o,...k)=>{for(const x of k){if(o&&o[x]!=null)return o[x]}return undefin
 const fmtN=v=>(v==null||isNaN(v))?'0':Math.round(v).toLocaleString();
 function fmtTime(s){if(!s)return'—';const d=new Date(s);return isNaN(d)?s:d.toLocaleString([],{month:'short',day:'2-digit',hour:'2-digit',minute:'2-digit'})}
 function fmtFull(s){if(!s)return'—';const d=new Date(s);return isNaN(d)?s:d.toLocaleString()}
+function fmtCPU(m){return m==null?'—':(m/1000).toLocaleString(undefined,{maximumFractionDigits:2})+' cores'}
+function fmtMem(b){if(b==null)return'—';const u=['B','KiB','MiB','GiB','TiB'];let n=Number(b),i=0;while(n>=1024&&i<u.length-1){n/=1024;i++}return n.toLocaleString(undefined,{maximumFractionDigits:i?1:0})+' '+u[i]}
 const isTerm=p=>['finished','failed','cancelled'].includes(String(p||'').toLowerCase());
 
 const TOKEN_KEY='weibo_token';
@@ -163,6 +166,7 @@ function authFetch(url,opts){
 }
 const api={
   jobs:()=>authFetch('/jobs').then(r=>r.json()),
+  cluster:()=>authFetch('/cluster').then(r=>r.json()),
   job:id=>authFetch('/jobs/'+id).then(r=>r.json()),
   state:id=>authFetch('/jobs/'+id+'/state').then(r=>r.ok?r.json():null).catch(()=>null),
   describe:id=>authFetch('/jobs/'+id+'/describe').then(r=>r.ok?r.json():null).catch(()=>null),
@@ -263,6 +267,46 @@ function dagSVG(nodes){
 function graphEl(gr){return dagSVG(pipelineNodes({graph:gr},null))}
 function describeGraphEl(pi){if(!pi)return'<div class="empty">Pipeline appears once the job is running.</div>';return dagSVG(pipelineNodes(null,pi))}
 
+function jobManagerContent(cl,runningCount){
+  const slots=cl&&cl.totalSlots!=null?fmtN(cl.totalSlots):'—';
+  const used=cl?fmtN(cl.usedSlots||0):fmtN(runningCount||0);
+  const avail=cl&&cl.availableSlots!=null?fmtN(cl.availableSlots):'—';
+  const backend=cl?`${esc(cl.backend||'unknown')} · ${esc(cl.health||'unknown')}`:'unknown';
+  const capDetails=cl?card('Cluster Capacity',kv([
+    ['Backend',esc(cl.backend||'—')],
+    ['Backend health',esc(cl.health||'—')],
+    ['Capacity source',esc(cl.source||'—')],
+    ['Max jobs',cl.maxJobs?fmtN(cl.maxJobs):'<span class="faint">not configured</span>'],
+    ['Default job CPU',cl.defaultJobCPUMilli?esc(fmtCPU(cl.defaultJobCPUMilli)):'<span class="faint">—</span>'],
+    ['Default job memory',cl.defaultJobMemoryBytes?esc(fmtMem(cl.defaultJobMemoryBytes)):'<span class="faint">—</span>'],
+    ['CPU reserved',esc(fmtCPU(cl.cpuReservedMilli))+' / '+esc(fmtCPU(cl.cpuTotalMilli))],
+    ['Memory reserved',esc(fmtMem(cl.memoryReservedBytes))+' / '+esc(fmtMem(cl.memoryTotalBytes))],
+    ['Containers',`${fmtN(cl.runningContainers||0)} running, ${fmtN(cl.startingContainers||0)} starting, ${fmtN(cl.exitedContainers||0)} exited`],
+    ['Observed',esc(fmtFull(cl.observedAt))],
+    cl&&cl.reason?['Reason',esc(cl.reason)]:null,
+  ])):card('Cluster Capacity','<div class="empty">Capacity unavailable.</div>');
+  return `
+    <div class="stats" style="margin:18px 0 14px">
+      ${tile('Total Slots',slots,'')}
+      ${tile('Used Slots',used,runningCount?'a':'')}
+      ${tile('Available Slots',avail,cl&&cl.availableSlots?'g':'')}
+      ${tile('Backend',backend,cl&&cl.health==='healthy'?'g':'r')}
+    </div>
+    ${capDetails}`;
+}
+
+/* ---- Job Manager ---- */
+function viewJobManager(){
+  setNav('job-manager');
+  poll(async()=>{
+    let d=null,cl=null;
+    try{[d,cl]=await Promise.all([api.jobs().catch(()=>null),api.cluster()])}catch(e){setConn(false);app.innerHTML='<div class="empty">Controller unreachable.</div>';return}
+    setConn(true);
+    const running=(d&&d.jobs||[]).filter(j=>String(j.phase||'').toLowerCase()==='running').length;
+    app.innerHTML=`<h1>Job Manager</h1><div class="sub">Controller, backend, and slot capacity.</div>${jobManagerContent(cl,running)}`;
+  },3000);
+}
+
 /* ---- Overview ---- */
 function viewOverview(){
   setNav('overview');
@@ -280,7 +324,6 @@ function viewOverview(){
     app.innerHTML=`
       <h1>Overview</h1>
       <div class="stats" style="margin:18px 0 20px">
-        ${tile('Available Task Slots',n.total*2,'')}
         ${tile('Running Jobs',fmtN(n.running),n.running?'g':'')}
         ${tile('Finished',fmtN(n.finished),'b')}
         ${tile('Failed',fmtN(n.failed),n.failed?'r':'')}
@@ -386,16 +429,13 @@ function viewDetail(id){
       </div>`;
     const metricsPane=`
       <div class="tabpane" data-pane="metrics">
-        <div class="row-head" style="margin-bottom:14px">
-          <div class="stats" style="flex:1">
-            ${tile('Records read',fmtN(mv(M,'weibo_records_read_total')),'b')}
-            ${tile('Records written',fmtN(mv(M,'weibo_records_written_total')),'b')}
-            ${tile('Processed',fmtN((M['weibo_records_processed_total']||[]).reduce((s,x)=>s+x.value,0)))}
-            ${tile('Failed',fmtN(mv(M,'weibo_records_failed_total')),mv(M,'weibo_records_failed_total')?'r':'')}
-            ${tile('Source errors',fmtN(mv(M,'weibo_source_errors_total')),mv(M,'weibo_source_errors_total')?'r':'')}
-            ${tile('Sink errors',fmtN(mv(M,'weibo_sink_errors_total')),mv(M,'weibo_sink_errors_total')?'r':'')}
-          </div>
-          <a class="btn pri" href="http://localhost:3000/d/weibo/weibo-pipeline?orgId=1" target="_blank" rel="noopener">Grafana ↗</a>
+        <div class="stats" style="margin-bottom:14px">
+          ${tile('Records read',fmtN(mv(M,'weibo_records_read_total')),'b')}
+          ${tile('Records written',fmtN(mv(M,'weibo_records_written_total')),'b')}
+          ${tile('Processed',fmtN((M['weibo_records_processed_total']||[]).reduce((s,x)=>s+x.value,0)))}
+          ${tile('Failed',fmtN(mv(M,'weibo_records_failed_total')),mv(M,'weibo_records_failed_total')?'r':'')}
+          ${tile('Source errors',fmtN(mv(M,'weibo_source_errors_total')),mv(M,'weibo_source_errors_total')?'r':'')}
+          ${tile('Sink errors',fmtN(mv(M,'weibo_sink_errors_total')),mv(M,'weibo_sink_errors_total')?'r':'')}
         </div>
         ${metricsStagesTable}
         <div style="margin-top:12px">${metricsOpsTable}</div>
@@ -427,6 +467,7 @@ function viewDetail(id){
         <div><h1>${esc(job.name)}</h1><div class="id" style="margin-top:3px">${esc(job.id)}</div></div>
         ${phaseEl(phase)} ${badge(job)}
         <div class="btns" style="margin-left:auto">
+          <a class="btn pri" href="http://localhost:3000/d/weibo/weibo-pipeline?orgId=1" target="_blank" rel="noopener">Grafana ↗</a>
           <button class="btn" ${term?'disabled':''} onclick="doSavepoint('${esc(id)}')">Savepoint</button>
           <button class="btn" onclick="doRestart('${esc(id)}')">Restart</button>
           <button class="btn danger" ${term?'disabled':''} onclick="doCancel('${esc(id)}')">Cancel</button>
@@ -476,7 +517,7 @@ function route(){
   const h=location.hash.replace(/^#/,'')||'overview';
   if(h.startsWith('job/')){viewDetail(h.slice(4));return}
   setNav(h);
-  switch(h){case'overview':viewOverview();break;case'running':viewRunning();break;case'completed':viewCompleted();break;case'submit':viewSubmit();break;default:go('overview');}
+  switch(h){case'overview':viewOverview();break;case'job-manager':viewJobManager();break;case'running':viewRunning();break;case'completed':viewCompleted();break;case'submit':viewSubmit();break;default:go('overview');}
 }
 window.addEventListener('hashchange',route);
 go('overview');toggleJobs();

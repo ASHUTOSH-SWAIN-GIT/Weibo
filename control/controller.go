@@ -37,8 +37,9 @@ type Options struct {
 	ControlPort int                     // container control port (default 8080)
 	Restart     lifecycle.RestartPolicy // default: lifecycle.DefaultRestartPolicy()
 	StopTimeout time.Duration           // graceful stop wait (default 30s)
-	NewID       func() string           // override for deterministic tests
-	Logf        func(string, ...any)    // optional logger
+	Capacity    backend.CapacityConfig
+	NewID       func() string        // override for deterministic tests
+	Logf        func(string, ...any) // optional logger
 }
 
 // Controller ties the store, backend, and lifecycle rules together.
@@ -49,6 +50,7 @@ type Controller struct {
 	port        int
 	restart     lifecycle.RestartPolicy
 	stopTimeout time.Duration
+	capacity    backend.CapacityConfig
 	newID       func() string
 	logf        func(string, ...any)
 	httpc       *http.Client // talks to job agents (savepoint trigger)
@@ -66,6 +68,7 @@ func New(opts Options) *Controller {
 		port:        opts.ControlPort,
 		restart:     opts.Restart,
 		stopTimeout: opts.StopTimeout,
+		capacity:    opts.Capacity,
 		newID:       opts.NewID,
 		logf:        opts.Logf,
 		httpc:       &http.Client{Timeout: 10 * time.Second},
@@ -79,6 +82,12 @@ func New(opts Options) *Controller {
 	}
 	if c.stopTimeout == 0 {
 		c.stopTimeout = 30 * time.Second
+	}
+	if c.capacity.DefaultJobCPU == "" {
+		c.capacity.DefaultJobCPU = "1"
+	}
+	if c.capacity.DefaultJobMemory == "" {
+		c.capacity.DefaultJobMemory = "1Gi"
 	}
 	if c.newID == nil {
 		c.newID = randomID
@@ -347,6 +356,11 @@ func (c *Controller) LatestRun(jobID string) (*store.Run, error) { return c.stor
 // Transitions returns a job's lifecycle audit log.
 func (c *Controller) Transitions(jobID string) ([]*store.Transition, error) {
 	return c.store.ListTransitions(jobID)
+}
+
+// Cluster returns controller/backend health and capacity for the dashboard.
+func (c *Controller) Cluster(ctx context.Context) (backend.CapacitySnapshot, error) {
+	return c.backend.Capacity(ctx, c.capacity)
 }
 
 // Logs returns up to tail lines from a job's latest container.

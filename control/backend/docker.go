@@ -352,6 +352,169 @@ func (d *Docker) Remove(ctx context.Context, id string) error {
 	return err
 }
 
+func (d *Docker) Capacity(ctx context.Context, cfg CapacityConfig) (CapacitySnapshot, error) {
+	now := time.Now().UTC()
+	snap := CapacitySnapshot{
+		Backend: "docker",
+		Health:  "healthy",
+		Source:  "docker_host_resources",
+		At:      now,
+		MaxJobs: cfg.MaxJobs,
+	}
+	info, err := d.cli.Info(ctx)
+	if err != nil {
+		snap.Health = "unreachable"
+		snap.Reason = err.Error()
+		return snap, nil
+	}
+	snap.CPUTotalMilli = int64(info.NCPU) * 1000
+	snap.MemoryTotalBytes = info.MemTotal
+
+	defaultCPU, err := cpuToMilli(orString(cfg.DefaultJobCPU, "1"))
+	if err != nil {
+		snap.Health = "degraded"
+		snap.Reason = "invalid default job cpu: " + err.Error()
+		defaultCPU = 1000
+	}
+	defaultMem, err := memoryToBytes(orString(cfg.DefaultJobMemory, "1Gi"))
+	if err != nil {
+		snap.Health = "degraded"
+		snap.Reason = joinReason(snap.Reason, "invalid default job memory: "+err.Error())
+		defaultMem = 1 << 30
+	}
+	snap.DefaultJobCPUMilli = defaultCPU
+	snap.DefaultJobMemoryBytes = defaultMem
+
+	list, err := d.cli.ContainerList(ctx, container.ListOptions{
+		All:     true,
+		Filters: filters.NewArgs(filters.Arg("label", "weibo.job")),
+	})
+	if err != nil {
+		snap.Health = "degraded"
+		snap.Reason = joinReason(snap.Reason, "list containers: "+err.Error())
+		return snap, nil
+	}
+
+	for _, c := range list {
+		switch c.State {
+		case "running":
+			snap.RunningContainers++
+			snap.UsedSlots++
+		case "created", "restarting":
+			snap.StartingContainers++
+			snap.UsedSlots++
+		case "exited", "dead", "removing":
+			snap.ExitedContainers++
+		}
+		if c.State != "running" && c.State != "created" && c.State != "restarting" && c.State != "exited" {
+			snap.UnhealthyContainers++
+		}
+		if c.State != "running" && c.State != "created" && c.State != "restarting" {
+			continue
+		}
+		ins, err := d.cli.ContainerInspect(ctx, c.ID)
+		if err != nil {
+			snap.Health = "degraded"
+			snap.Reason = joinReason(snap.Reason, "inspect "+shortID(c.ID)+": "+err.Error())
+			snap.CPUReservedMilli += defaultCPU
+			snap.MemoryReservedBytes += defaultMem
+			continue
+		}
+		cpu := defaultCPU
+		mem := defaultMem
+		if ins.HostConfig != nil {
+			if ins.HostConfig.NanoCPUs > 0 {
+				cpu = ins.HostConfig.NanoCPUs / 1_000_000
+			}
+			if ins.HostConfig.Memory > 0 {
+				mem = ins.HostConfig.Memory
+			}
+		}
+		snap.CPUReservedMilli += cpu
+		snap.MemoryReservedBytes += mem
+	}
+
+	snap.CPUAvailableMilli = max64(snap.CPUTotalMilli-snap.CPUReservedMilli, 0)
+	snap.MemoryAvailableBytes = max64(snap.MemoryTotalBytes-snap.MemoryReservedBytes, 0)
+
+	const maxInt64 = int64(^uint64(0) >> 1)
+	availableByCPU := maxInt64
+	if defaultCPU > 0 && snap.CPUTotalMilli > 0 {
+		availableByCPU = snap.CPUAvailableMilli / defaultCPU
+	}
+	availableByMem := maxInt64
+	if defaultMem > 0 && snap.MemoryTotalBytes > 0 {
+		availableByMem = snap.MemoryAvailableBytes / defaultMem
+	}
+	availableByMax := maxInt64
+	if cfg.MaxJobs > 0 {
+		availableByMax = int64(cfg.MaxJobs - snap.UsedSlots)
+		if availableByMax < 0 {
+			availableByMax = 0
+		}
+		snap.Source = "docker_host_resources + configured_limit"
+	}
+
+	available := int(min64(availableByCPU, availableByMem, availableByMax))
+	if available < 0 {
+		available = 0
+	}
+	total := snap.UsedSlots + available
+	snap.AvailableSlots = &available
+	snap.TotalSlots = &total
+	return snap, nil
+}
+
+func cpuToMilli(s string) (int64, error) {
+	q, err := resource.ParseQuantity(s)
+	if err != nil {
+		return 0, err
+	}
+	return q.MilliValue(), nil
+}
+
+func memoryToBytes(s string) (int64, error) {
+	q, err := resource.ParseQuantity(s)
+	if err != nil {
+		return 0, err
+	}
+	return q.Value(), nil
+}
+
+func min64(v int64, rest ...int64) int64 {
+	m := v
+	for _, x := range rest {
+		if x < m {
+			m = x
+		}
+	}
+	return m
+}
+
+func max64(a, b int64) int64 {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+func shortID(id string) string {
+	if len(id) <= 12 {
+		return id
+	}
+	return id[:12]
+}
+
+func joinReason(a, b string) string {
+	if a == "" {
+		return b
+	}
+	if b == "" {
+		return a
+	}
+	return a + "; " + b
+}
+
 // tarFile builds a one-file tar archive for CopyToContainer.
 func tarFile(name string, content []byte) (*bytes.Buffer, error) {
 	var buf bytes.Buffer

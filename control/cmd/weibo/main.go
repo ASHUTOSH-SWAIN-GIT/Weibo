@@ -90,6 +90,9 @@ func runDashboard(args []string) int {
 	pullSecrets := fs.String("image-pull-secrets", "", "comma-separated k8s imagePullSecret names for private registries (kubernetes backend)")
 	pvcSize := fs.String("pvc-size", "1Gi", "per-job PVC size (kubernetes backend)")
 	storageClass := fs.String("storage-class", "", "PVC storage class; empty = cluster default (kubernetes backend)")
+	maxJobs := fs.Int("max-jobs", 0, "maximum concurrent jobs; 0 = resource-limited only")
+	defaultJobCPU := fs.String("default-job-cpu", "1", "default CPU reserved per job for capacity math")
+	defaultJobMemory := fs.String("default-job-memory", "1Gi", "default memory reserved per job for capacity math")
 	authToken := fs.String("auth-token", os.Getenv("WEIBO_AUTH_TOKEN"), "shared bearer token required by the API + UI; empty = open (env WEIBO_AUTH_TOKEN)")
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -112,7 +115,17 @@ func runDashboard(args []string) int {
 	}
 	defer st.Close()
 
-	ctrl := control.New(control.Options{Store: st, Backend: be, Image: *image, Logf: log.Printf})
+	ctrl := control.New(control.Options{
+		Store:   st,
+		Backend: be,
+		Image:   *image,
+		Capacity: backend.CapacityConfig{
+			MaxJobs:          *maxJobs,
+			DefaultJobCPU:    *defaultJobCPU,
+			DefaultJobMemory: *defaultJobMemory,
+		},
+		Logf: log.Printf,
+	})
 	go ctrl.RunReconciler(ctx, *interval)
 
 	srv := &http.Server{Addr: *addr, Handler: api.NewServer(ctrl, *authToken).Handler()}

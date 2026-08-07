@@ -62,6 +62,46 @@ type ResourceLimits struct {
 	Memory string
 }
 
+// CapacityConfig describes Weibo's scheduling policy for converting backend
+// resources into user-facing job slots.
+type CapacityConfig struct {
+	MaxJobs          int
+	DefaultJobCPU    string
+	DefaultJobMemory string
+}
+
+// CapacitySnapshot is a backend-normalized view of how many Weibo job
+// containers can run now. Nil slot values mean the backend cannot determine
+// them accurately.
+type CapacitySnapshot struct {
+	Backend string    `json:"backend"`
+	Health  string    `json:"health"`
+	Source  string    `json:"source,omitempty"`
+	Reason  string    `json:"reason,omitempty"`
+	At      time.Time `json:"observedAt"`
+
+	TotalSlots     *int `json:"totalSlots,omitempty"`
+	UsedSlots      int  `json:"usedSlots"`
+	AvailableSlots *int `json:"availableSlots,omitempty"`
+	MaxJobs        int  `json:"maxJobs,omitempty"`
+
+	CPUTotalMilli     int64 `json:"cpuTotalMilli,omitempty"`
+	CPUReservedMilli  int64 `json:"cpuReservedMilli,omitempty"`
+	CPUAvailableMilli int64 `json:"cpuAvailableMilli,omitempty"`
+
+	MemoryTotalBytes     int64 `json:"memoryTotalBytes,omitempty"`
+	MemoryReservedBytes  int64 `json:"memoryReservedBytes,omitempty"`
+	MemoryAvailableBytes int64 `json:"memoryAvailableBytes,omitempty"`
+
+	DefaultJobCPUMilli    int64 `json:"defaultJobCPUMilli,omitempty"`
+	DefaultJobMemoryBytes int64 `json:"defaultJobMemoryBytes,omitempty"`
+	RunningContainers     int   `json:"runningContainers"`
+	StartingContainers    int   `json:"startingContainers"`
+	ExitedContainers      int   `json:"exitedContainers"`
+	UnhealthyContainers   int   `json:"unhealthyContainers"`
+	Unsupported           bool  `json:"unsupported,omitempty"`
+}
+
 // Pull policies for LaunchSpec.PullPolicy.
 const (
 	// PullIfNotPresent pulls only when the image is absent locally. Default.
@@ -96,4 +136,6 @@ type ContainerBackend interface {
 	Logs(ctx context.Context, containerID string, tail int) (string, error)
 	// Remove deletes the container (not its data volume).
 	Remove(ctx context.Context, containerID string) error
+	// Capacity reports backend health and job-slot capacity.
+	Capacity(ctx context.Context, cfg CapacityConfig) (CapacitySnapshot, error)
 }
