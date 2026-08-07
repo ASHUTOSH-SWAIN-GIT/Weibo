@@ -1,0 +1,72 @@
+name: control release
+
+on:
+  push:
+    tags:
+      - 'control/v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag, for example control/v0.8.5'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  linux-binaries:
+    name: build linux binaries
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve release tag
+        id: release
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            tag="${{ inputs.tag }}"
+          else
+            tag="${GITHUB_REF_NAME}"
+          fi
+          version="${tag#control/}"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.release.outputs.tag }}
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.2'
+          cache: true
+          cache-dependency-path: control/go.sum
+
+      - name: Build Linux binaries
+        working-directory: control
+        env:
+          CGO_ENABLED: '0'
+        run: |
+          mkdir -p dist
+          for arch in amd64 arm64; do
+            GOOS=linux GOARCH="$arch" go build \
+              -trimpath \
+              -ldflags="-s -w" \
+              -o "dist/weibo-linux-$arch" \
+              ./cmd/weibo
+          done
+
+      - name: Generate checksums
+        working-directory: control/dist
+        run: sha256sum weibo-linux-* > checksums.txt
+
+      - name: Upload binaries to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --title "$TAG" --notes "Weibo control release $TAG"
+          gh release upload "$TAG" \
+            control/dist/weibo-linux-amd64 \
+            control/dist/weibo-linux-arm64 \
+            control/dist/checksums.txt \
+            --clobber
