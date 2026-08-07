@@ -68,6 +68,7 @@
   .ph-running .d{background:var(--green)}.ph-failed .d{background:var(--red)}
   .ph-finished .d{background:var(--blue)}.ph-starting .d,.ph-cancelling .d{background:var(--amber)}
   .ph-cancelled .d,.ph-submitted .d,.ph-stopped .d{background:var(--gray)}
+  .ph-healthy .d{background:var(--green)}.ph-degraded .d{background:var(--amber)}.ph-unreachable .d{background:var(--red)}
 
   .pill{display:inline-block;padding:1px 7px;border-radius:4px;font-size:11px;background:#f3f4f6;color:var(--muted);border:1px solid var(--line);white-space:nowrap}
   .pill-sdk{background:var(--accent-bg);color:var(--accent);border-color:var(--accent-bg)}
@@ -123,6 +124,14 @@
   .meta-grid .mcell:nth-child(odd){background:#fafbfc}
   .meta-grid .mcell .m-l{font-size:11px;color:var(--faint);text-transform:uppercase;letter-spacing:.03em}
   .meta-grid .mcell .m-v{font-size:13.5px;font-weight:500;margin-top:3px;word-break:break-all}
+  .topline{height:44px;margin:-32px -36px 22px;padding:0 36px;background:#fff;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:flex-end;gap:22px;font-size:12px;color:var(--muted)}
+  .topline b{color:var(--fg);font-weight:600}
+  .jm-model{width:180px;margin:auto;border:1px solid #9ca3af;background:#fff8dc;padding:10px;font-size:10px;color:#111827;text-align:center}
+  .jm-model .box{border:1px solid #9ca3af;background:#e5e7eb;padding:5px;margin:5px 0}
+  .jm-model .heap{background:#dbeafe}.jm-model .mem{background:#fef3c7}.jm-model .outer{border-style:dashed;padding:6px;margin-top:5px}
+  .bar{height:6px;background:#eef0f3;border-radius:0;overflow:hidden;min-width:220px}
+  .bar span{display:block;height:100%;background:var(--accent)}
+  .metric-cell{display:grid;grid-template-columns:1fr auto;gap:8px;align-items:center}.metric-cell .detail{grid-column:1/-1;color:var(--muted);font-size:12px}
 </style>
 </head>
 <body>
@@ -268,31 +277,68 @@ function graphEl(gr){return dagSVG(pipelineNodes({graph:gr},null))}
 function describeGraphEl(pi){if(!pi)return'<div class="empty">Pipeline appears once the job is running.</div>';return dagSVG(pipelineNodes(null,pi))}
 
 function jobManagerContent(cl,runningCount){
-  const slots=cl&&cl.totalSlots!=null?fmtN(cl.totalSlots):'—';
-  const used=cl?fmtN(cl.usedSlots||0):fmtN(runningCount||0);
-  const avail=cl&&cl.availableSlots!=null?fmtN(cl.availableSlots):'—';
-  const backend=cl?`${esc(cl.backend||'unknown')} · ${esc(cl.health||'unknown')}`:'unknown';
-  const capDetails=cl?card('Cluster Capacity',kv([
-    ['Backend',esc(cl.backend||'—')],
-    ['Backend health',esc(cl.health||'—')],
-    ['Capacity source',esc(cl.source||'—')],
-    ['Max jobs',cl.maxJobs?fmtN(cl.maxJobs):'<span class="faint">not configured</span>'],
-    ['Default job CPU',cl.defaultJobCPUMilli?esc(fmtCPU(cl.defaultJobCPUMilli)):'<span class="faint">—</span>'],
-    ['Default job memory',cl.defaultJobMemoryBytes?esc(fmtMem(cl.defaultJobMemoryBytes)):'<span class="faint">—</span>'],
-    ['CPU reserved',esc(fmtCPU(cl.cpuReservedMilli))+' / '+esc(fmtCPU(cl.cpuTotalMilli))],
-    ['Memory reserved',esc(fmtMem(cl.memoryReservedBytes))+' / '+esc(fmtMem(cl.memoryTotalBytes))],
-    ['Containers',`${fmtN(cl.runningContainers||0)} running, ${fmtN(cl.startingContainers||0)} starting, ${fmtN(cl.exitedContainers||0)} exited`],
-    ['Observed',esc(fmtFull(cl.observedAt))],
-    cl&&cl.reason?['Reason',esc(cl.reason)]:null,
-  ])):card('Cluster Capacity','<div class="empty">Capacity unavailable.</div>');
+  if(!cl)return card('Job Manager','<div class="empty">Capacity unavailable.</div>');
+  const status=phaseEl(cl.health||'unknown');
+  const pct=(used,total)=>total>0?Math.min(100,Math.max(0,(used/total)*100)):0;
+  const memPct=pct(cl.memoryReservedBytes||0,cl.memoryTotalBytes||0);
+  const cpuPct=pct(cl.cpuReservedMilli||0,cl.cpuTotalMilli||0);
+  const slotPct=pct(cl.usedSlots||0,cl.totalSlots||0);
+  const metric=(used,total,fmt,p)=>`<div class="metric-cell"><div class="bar"><span style="width:${p.toFixed(2)}%"></span></div><span>${p.toFixed(2)}%</span><div class="detail">${esc(fmt(used))} / ${esc(fmt(total))}</div></div>`;
+  const model=`
+    <div class="jm-model">
+      <div>Total Host Capacity</div>
+      <div class="outer">
+        <div>Container Runtime</div>
+        <div class="box heap">CPU Slots</div>
+        <div class="box mem">Memory Reservation</div>
+      </div>
+      <div class="box">Job Containers</div>
+      <div class="box">Controller</div>
+    </div>`;
   return `
-    <div class="stats" style="margin:18px 0 14px">
-      ${tile('Total Slots',slots,'')}
-      ${tile('Used Slots',used,runningCount?'a':'')}
-      ${tile('Available Slots',avail,cl&&cl.availableSlots?'g':'')}
-      ${tile('Backend',backend,cl&&cl.health==='healthy'?'g':'r')}
+    <div class="topline">
+      <span><b>Backend:</b> ${esc(cl.backend||'—')}</span>
+      <span><b>Source:</b> ${esc(cl.source||'—')}</span>
+      <span><b>Status:</b> ${status}</span>
+      <span><b>Message:</b> ${cl.reason?esc(cl.reason):'0'}</span>
     </div>
-    ${capDetails}`;
+    <div class="tabs">
+      <button class="tab on" data-tab="metrics">Metrics</button>
+    </div>
+    <div class="tabpane on" data-pane="metrics">
+      <div class="card">
+        <table>
+          <thead><tr><th>Weibo Resource Model</th><th>Effective Configuration</th><th>Metric</th></tr></thead>
+          <tbody>
+            <tr>
+              <td rowspan="4">${model}</td>
+              <td><b>CPU Capacity</b><div class="dim">${cl.defaultJobCPUMilli?`Default job: ${esc(fmtCPU(cl.defaultJobCPUMilli))}`:'Default job: —'}</div></td>
+              <td>${metric(cl.cpuReservedMilli||0,cl.cpuTotalMilli||0,fmtCPU,cpuPct)}</td>
+            </tr>
+            <tr>
+              <td><b>Memory Capacity</b><div class="dim">${cl.defaultJobMemoryBytes?`Default job: ${esc(fmtMem(cl.defaultJobMemoryBytes))}`:'Default job: —'}</div></td>
+              <td>${metric(cl.memoryReservedBytes||0,cl.memoryTotalBytes||0,fmtMem,memPct)}</td>
+            </tr>
+            <tr>
+              <td><b>Job Slots</b><div class="dim">${cl.maxJobs?`Configured max: ${fmtN(cl.maxJobs)}`:'No configured max'}</div></td>
+              <td>${cl.totalSlots!=null?metric(cl.usedSlots||0,cl.totalSlots,v=>fmtN(v),slotPct):'<span class="faint">—</span>'}</td>
+            </tr>
+            <tr>
+              <td><b>Containers</b><div class="dim">${fmtN(cl.runningContainers||0)} running, ${fmtN(cl.startingContainers||0)} starting</div></td>
+              <td>${fmtN(cl.exitedContainers||0)} exited</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div style="margin-top:14px"><b>Advanced</b></div>
+      <div class="grid2" style="margin-top:12px">
+        ${card('CPU',`<table><thead><tr><th>Type</th><th>Reserved</th><th>Available</th><th>Total</th></tr></thead><tbody><tr><td class="name">Host</td><td>${esc(fmtCPU(cl.cpuReservedMilli))}</td><td>${esc(fmtCPU(cl.cpuAvailableMilli))}</td><td>${esc(fmtCPU(cl.cpuTotalMilli))}</td></tr></tbody></table>`)}
+        ${card('Memory',`<table><thead><tr><th>Type</th><th>Reserved</th><th>Available</th><th>Total</th></tr></thead><tbody><tr><td class="name">Host</td><td>${esc(fmtMem(cl.memoryReservedBytes))}</td><td>${esc(fmtMem(cl.memoryAvailableBytes))}</td><td>${esc(fmtMem(cl.memoryTotalBytes))}</td></tr></tbody></table>`)}
+      </div>
+      <div style="margin-top:14px">
+        ${card('Containers',`<table><thead><tr><th>State</th><th>Count</th></tr></thead><tbody><tr><td class="name">Running</td><td>${fmtN(cl.runningContainers||0)}</td></tr><tr><td class="name">Starting</td><td>${fmtN(cl.startingContainers||0)}</td></tr><tr><td class="name">Exited</td><td>${fmtN(cl.exitedContainers||0)}</td></tr><tr><td class="name">Unhealthy</td><td>${fmtN(cl.unhealthyContainers||0)}</td></tr></tbody></table>`)}
+      </div>
+    </div>`;
 }
 
 /* ---- Job Manager ---- */
