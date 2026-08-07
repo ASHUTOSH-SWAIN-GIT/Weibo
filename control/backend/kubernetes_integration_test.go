@@ -1,3 +1,5 @@
+//go:build kubernetes
+
 package backend_test
 
 import (

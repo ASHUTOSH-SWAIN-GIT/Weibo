@@ -1,3 +1,5 @@
+//go:build kubernetes
+
 package backend
 
 import (
@@ -427,13 +429,6 @@ func labels(jobID, run string) map[string]string {
 		m["weibo.run"] = run
 	}
 	return m
-}
-
-func orString(v, def string) string {
-	if v == "" {
-		return def
-	}
-	return v
 }
 
 func int32Ptr(v int32) *int32 { return &v }
