@@ -109,6 +109,9 @@
 
   .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}.stack{display:grid;gap:14px}
   .row-head{display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+  .usage{display:flex;align-items:center;gap:9px;min-width:130px}.usage .bar{flex:1;min-width:64px}.usage b{width:48px;text-align:right;font-variant-numeric:tabular-nums}
+  .machine-line{display:flex;gap:18px;align-items:center;flex-wrap:wrap;padding:12px 16px;border-bottom:1px solid var(--line);color:var(--muted)}
+  .machine-line strong{color:var(--fg)}
 
   /* tabs */
   .tabs{display:flex;gap:2px;border-bottom:1px solid var(--line);margin:18px 0 16px}
@@ -126,12 +129,32 @@
   .meta-grid .mcell .m-v{font-size:13.5px;font-weight:500;margin-top:3px;word-break:break-all}
   .topline{height:44px;margin:-32px -36px 22px;padding:0 36px;background:#fff;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:flex-end;gap:22px;font-size:12px;color:var(--muted)}
   .topline b{color:var(--fg);font-weight:600}
-  .jm-model{width:180px;margin:auto;border:1px solid #9ca3af;background:#fff8dc;padding:10px;font-size:10px;color:#111827;text-align:center}
-  .jm-model .box{border:1px solid #9ca3af;background:#e5e7eb;padding:5px;margin:5px 0}
-  .jm-model .heap{background:#dbeafe}.jm-model .mem{background:#fef3c7}.jm-model .outer{border-style:dashed;padding:6px;margin-top:5px}
   .bar{height:6px;background:#eef0f3;border-radius:0;overflow:hidden;min-width:220px}
   .bar span{display:block;height:100%;background:var(--accent)}
   .metric-cell{display:grid;grid-template-columns:1fr auto;gap:8px;align-items:center}.metric-cell .detail{grid-column:1/-1;color:var(--muted);font-size:12px}
+
+  /* weibo console */
+  :root{--bg:#f8f8fa;--bg2:#111218;--card:#fff;--fg:#18191f;--muted:#686b76;--faint:#999ca6;--line:#e8e8ed;--line2:#d9dae1;--accent:#635bff;--accent-bg:#f0efff;--green:#138a5b;--amber:#b76a16;--red:#d13b4c;--blue:#635bff;--r:12px;--side-w:224px}
+  body{font-size:14px;letter-spacing:-.006em}
+  .side{background:var(--bg2);border:0;color:#fff;padding:12px}
+  .side-brand{border:0;padding:10px 10px 24px}.side-brand .logo{width:25px;height:25px;border-radius:7px}.side-brand .txt{font-size:14px;letter-spacing:.01em}
+  .side-nav{padding:0}.side-nav .sec{color:#999ba5;padding:10px 12px;margin:2px 0;border-radius:8px;transition:transform .16s ease,background .16s ease,color .16s ease}
+  .side-nav .sec:hover{background:#1d1f27;color:#fff;transform:translateX(2px)}.side-nav .sec.on{background:#252732;color:#fff}
+  .side-nav .sub{display:block!important;margin:2px 0 8px}.side-nav .sub a{color:#7e808b;padding:8px 12px 8px 24px}.side-nav .sub a:hover{background:#1d1f27;color:#fff}.side-nav .sub a.on{color:#fff}
+  .side-nav .arr{display:none}.side-foot{border:0;color:#7e808b;padding:14px 10px}
+  .main{max-width:1440px;padding:42px 48px 90px;animation:page-in .28s ease both}@keyframes page-in{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+  h1{font-size:25px;font-weight:650;letter-spacing:-.035em}.sub{margin-top:5px}
+  .card{border:1px solid var(--line);box-shadow:none;border-radius:var(--r);overflow:hidden}.card .hd{padding:14px 18px;background:#fff;color:var(--muted);font-size:11px}
+  th{background:#fbfbfc;padding:11px 18px;color:#898c97}td{padding:13px 18px}tr:last-child td{border-bottom:0}tr.row td{transition:background .14s ease}tr.row:hover td{background:#f7f7fa}
+  .stats{gap:0;border-top:1px solid var(--line);border-bottom:1px solid var(--line)}.stat{border:0;border-right:1px solid var(--line);border-radius:0;box-shadow:none;background:transparent;padding:20px 20px}.stat:last-child{border-right:0}.stat .s-val{font-size:29px;font-weight:620;color:var(--fg)!important}.stat .s-lbl{color:var(--muted)}
+  .pill{border:0;border-radius:99px;padding:2px 8px}.btn{border-radius:8px;padding:8px 14px}.btn.pri{background:var(--fg);border-color:var(--fg)}.btn.pri:hover{background:#30313a}
+  .meta-grid{border-radius:12px;background:#fff}.meta-grid .mcell:nth-child(odd){background:#fff}.meta-grid .mcell{padding:14px 18px}
+  .topline{margin:-42px -48px 28px;padding:0 48px;height:48px;justify-content:flex-start;background:#fff}.tabs{margin-top:24px}.tab{padding:10px 2px;margin-right:24px}.tab.on{color:var(--fg);border-bottom-color:var(--fg)}
+  .bar{height:5px;min-width:90px;border-radius:99px}.bar span{border-radius:99px;transition:width .35s ease}.usage{min-width:140px}.usage b{font-size:12px;font-weight:550}
+  .infra-section{margin-top:30px}.section-head{display:flex;align-items:end;justify-content:space-between;margin-bottom:12px}.section-head h2{font-size:16px;margin:0;letter-spacing:-.02em}.section-head p{margin:0;color:var(--muted);font-size:12px}
+  .host-strip{display:grid;grid-template-columns:1.4fr repeat(4,1fr);border:1px solid var(--line);border-radius:12px;background:#fff;overflow:hidden}.host-cell{padding:20px;border-right:1px solid var(--line)}.host-cell:last-child{border:0}.host-cell .label{font-size:11px;color:var(--faint);text-transform:uppercase;letter-spacing:.04em}.host-cell .value{font-size:20px;font-weight:620;margin-top:7px;letter-spacing:-.025em}.host-cell .note{font-size:11px;color:var(--muted);margin-top:4px}
+  .image-ref{font-family:var(--mono);font-size:11px;color:var(--muted);margin-top:3px;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  @media(max-width:850px){:root{--side-w:0px}.side{position:static;width:auto;height:auto}.side-nav{display:flex;overflow:auto}.side-nav .sec{white-space:nowrap}.side-nav .sub,.side-foot{display:none!important}.main{margin:0;padding:28px 18px}.topline{margin:-28px -18px 24px;padding:0 18px}.host-strip{grid-template-columns:1fr 1fr}.host-cell{border-bottom:1px solid var(--line)}.stats{grid-template-columns:1fr 1fr}}
 </style>
 </head>
 <body>
@@ -139,13 +162,13 @@
   <div class="side-brand"><img src="/logo.png" alt="weibo" class="logo"><span class="txt">weibo</span></div>
   <nav class="side-nav" id="snav">
     <div class="sec on" data-r="overview" onclick="go('overview')">Overview</div>
-    <div class="sec" data-r="job-manager" onclick="go('job-manager')">Job Manager</div>
-    <div class="sec" data-r="jobs" onclick="go('running');toggleJobs()"><span>Jobs</span><span class="arr">▶</span></div>
+    <div class="sec" data-r="job-manager" onclick="go('job-manager')">Infrastructure</div>
+    <div class="sec" data-r="jobs" onclick="go('running')"><span>Jobs</span><span class="arr">▶</span></div>
     <div class="sub" data-r="jobs-sub">
-      <a data-r="running" onclick="go('running')">Running Jobs</a>
-      <a data-r="completed" onclick="go('completed')">Completed Jobs</a>
+      <a data-r="running" onclick="go('running')">Active</a>
+      <a data-r="completed" onclick="go('completed')">History</a>
     </div>
-    <div class="sec" data-r="submit" onclick="go('submit')">Submit New Job</div>
+    <div class="sec" data-r="submit" onclick="go('submit')">Deploy</div>
   </nav>
   <div class="side-foot" id="conn"><span class="c-dot"></span><span id="connt">—</span></div>
 </aside>
@@ -276,80 +299,46 @@ function dagSVG(nodes){
 function graphEl(gr){return dagSVG(pipelineNodes({graph:gr},null))}
 function describeGraphEl(pi){if(!pi)return'<div class="empty">Pipeline appears once the job is running.</div>';return dagSVG(pipelineNodes(null,pi))}
 
-function jobManagerContent(cl,runningCount){
-  if(!cl)return card('Job Manager','<div class="empty">Capacity unavailable.</div>');
-  const status=phaseEl(cl.health||'unknown');
-  const pct=(used,total)=>total>0?Math.min(100,Math.max(0,(used/total)*100)):0;
-  const memPct=pct(cl.memoryReservedBytes||0,cl.memoryTotalBytes||0);
-  const cpuPct=pct(cl.cpuReservedMilli||0,cl.cpuTotalMilli||0);
-  const slotPct=pct(cl.usedSlots||0,cl.totalSlots||0);
-  const metric=(used,total,fmt,p)=>`<div class="metric-cell"><div class="bar"><span style="width:${p.toFixed(2)}%"></span></div><span>${p.toFixed(2)}%</span><div class="detail">${esc(fmt(used))} / ${esc(fmt(total))}</div></div>`;
-  const model=`
-    <div class="jm-model">
-      <div>Total Host Capacity</div>
-      <div class="outer">
-        <div>Container Runtime</div>
-        <div class="box heap">CPU Slots</div>
-        <div class="box mem">Memory Reservation</div>
-      </div>
-      <div class="box">Job Containers</div>
-      <div class="box">Controller</div>
-    </div>`;
+function jobManagerContent(cl){
+  if(!cl)return'<div class="empty">Infrastructure data is unavailable.</div>';
+  const host=cl.host||{},containers=cl.containers||[];
+  const percent=v=>`${Number(v||0).toFixed(1)}%`;
+  const usage=v=>`<div class="usage"><div class="bar"><span style="width:${Math.min(100,Math.max(0,Number(v||0))).toFixed(2)}%"></span></div><b>${percent(v)}</b></div>`;
+  const rows=containers.length?containers.map(c=>`<tr>
+    <td class="name">${esc(c.name||c.id)} ${c.managed?'<span class="pill pill-sdk">weibo</span>':''}<div class="id">${esc(c.id)}${c.jobId?` · job ${esc(c.jobId)}`:''}</div></td>
+    <td><div>${esc(c.image||'—')}</div><div class="image-ref">image ${esc(c.imageId||'—')}</div></td>
+    <td>${phaseEl(c.state)}</td><td>${usage(c.cpuPercent)}</td>
+    <td>${usage(c.memoryPercent)}<div class="dim">${esc(fmtMem(c.memoryUsedBytes))} of ${esc(fmtMem(c.memoryLimitBytes))}</div></td>
+    <td><div>${esc(fmtMem(c.networkRxBytes))} in</div><div class="dim">${esc(fmtMem(c.networkTxBytes))} out</div></td>
+    <td><div>${esc(fmtMem(c.blockReadBytes))} read</div><div class="dim">${esc(fmtMem(c.blockWriteBytes))} written</div></td>
+    <td>${fmtN(c.pids||0)}</td><td class="dim">${c.startedAt?esc(fmtTime(new Date(c.startedAt*1000))):'—'}</td>
+  </tr>`).join(''):'<tr><td colspan="9" class="empty">No containers on this host.</td></tr>';
   return `
-    <div class="topline">
-      <span><b>Backend:</b> ${esc(cl.backend||'—')}</span>
-      <span><b>Source:</b> ${esc(cl.source||'—')}</span>
-      <span><b>Status:</b> ${status}</span>
-      <span><b>Message:</b> ${cl.reason?esc(cl.reason):'0'}</span>
-    </div>
-    <div class="tabs">
-      <button class="tab on" data-tab="metrics">Metrics</button>
-    </div>
-    <div class="tabpane on" data-pane="metrics">
-      <div class="card">
-        <table>
-          <thead><tr><th>Weibo Resource Model</th><th>Effective Configuration</th><th>Metric</th></tr></thead>
-          <tbody>
-            <tr>
-              <td rowspan="4">${model}</td>
-              <td><b>CPU Capacity</b><div class="dim">${cl.defaultJobCPUMilli?`Default job: ${esc(fmtCPU(cl.defaultJobCPUMilli))}`:'Default job: —'}</div></td>
-              <td>${metric(cl.cpuReservedMilli||0,cl.cpuTotalMilli||0,fmtCPU,cpuPct)}</td>
-            </tr>
-            <tr>
-              <td><b>Memory Capacity</b><div class="dim">${cl.defaultJobMemoryBytes?`Default job: ${esc(fmtMem(cl.defaultJobMemoryBytes))}`:'Default job: —'}</div></td>
-              <td>${metric(cl.memoryReservedBytes||0,cl.memoryTotalBytes||0,fmtMem,memPct)}</td>
-            </tr>
-            <tr>
-              <td><b>Job Slots</b><div class="dim">${cl.maxJobs?`Configured max: ${fmtN(cl.maxJobs)}`:'No configured max'}</div></td>
-              <td>${cl.totalSlots!=null?metric(cl.usedSlots||0,cl.totalSlots,v=>fmtN(v),slotPct):'<span class="faint">—</span>'}</td>
-            </tr>
-            <tr>
-              <td><b>Containers</b><div class="dim">${fmtN(cl.runningContainers||0)} running, ${fmtN(cl.startingContainers||0)} starting</div></td>
-              <td>${fmtN(cl.exitedContainers||0)} exited</td>
-            </tr>
-          </tbody>
-        </table>
+    <div class="topline"><span>${phaseEl(cl.health||'unknown')}</span><span>${esc(cl.backend||'—')} runtime</span><span>Updated ${esc(fmtTime(cl.observedAt))}</span>${cl.reason?`<span>${esc(cl.reason)}</span>`:''}</div>
+    <section class="infra-section">
+      <div class="section-head"><h2>Host machine</h2><p>Live system utilization</p></div>
+      <div class="host-strip">
+        <div class="host-cell"><div class="label">Host</div><div class="value">${esc(host.hostname||'Unknown')}</div><div class="note">${esc(host.operatingSystem||'Unknown OS')} · ${esc(host.architecture||'—')}</div></div>
+        <div class="host-cell"><div class="label">CPU</div><div class="value">${percent(host.cpuPercent)}</div><div class="note">Current utilization</div></div>
+        <div class="host-cell"><div class="label">Memory</div><div class="value">${percent(host.memoryPercent)}</div><div class="note">${esc(fmtMem(host.memoryUsedBytes))} used</div></div>
+        <div class="host-cell"><div class="label">Load</div><div class="value">${Number(host.load1||0).toFixed(2)}</div><div class="note">1 minute average</div></div>
+        <div class="host-cell"><div class="label">Containers</div><div class="value">${fmtN(cl.runningContainers||0)}</div><div class="note">Docker ${esc(host.dockerVersion||'—')} · ${fmtN(cl.exitedContainers||0)} stopped</div></div>
       </div>
-      <div style="margin-top:14px"><b>Advanced</b></div>
-      <div class="grid2" style="margin-top:12px">
-        ${card('CPU',`<table><thead><tr><th>Type</th><th>Reserved</th><th>Available</th><th>Total</th></tr></thead><tbody><tr><td class="name">Host</td><td>${esc(fmtCPU(cl.cpuReservedMilli))}</td><td>${esc(fmtCPU(cl.cpuAvailableMilli))}</td><td>${esc(fmtCPU(cl.cpuTotalMilli))}</td></tr></tbody></table>`)}
-        ${card('Memory',`<table><thead><tr><th>Type</th><th>Reserved</th><th>Available</th><th>Total</th></tr></thead><tbody><tr><td class="name">Host</td><td>${esc(fmtMem(cl.memoryReservedBytes))}</td><td>${esc(fmtMem(cl.memoryAvailableBytes))}</td><td>${esc(fmtMem(cl.memoryTotalBytes))}</td></tr></tbody></table>`)}
-      </div>
-      <div style="margin-top:14px">
-        ${card('Containers',`<table><thead><tr><th>State</th><th>Count</th></tr></thead><tbody><tr><td class="name">Running</td><td>${fmtN(cl.runningContainers||0)}</td></tr><tr><td class="name">Starting</td><td>${fmtN(cl.startingContainers||0)}</td></tr><tr><td class="name">Exited</td><td>${fmtN(cl.exitedContainers||0)}</td></tr><tr><td class="name">Unhealthy</td><td>${fmtN(cl.unhealthyContainers||0)}</td></tr></tbody></table>`)}
-      </div>
-    </div>`;
+    </section>
+    <section class="infra-section">
+      <div class="section-head"><h2>Containers</h2><p>Image and compute usage for every container</p></div>
+      <div class="card"><div style="overflow-x:auto"><table><thead><tr><th>Container</th><th>Image</th><th>State</th><th>CPU</th><th>Memory</th><th>Network</th><th>Disk I/O</th><th>PIDs</th><th>Started</th></tr></thead><tbody>${rows}</tbody></table></div></div>
+    </section>`;
 }
 
 /* ---- Job Manager ---- */
 function viewJobManager(){
   setNav('job-manager');
   poll(async()=>{
-    let d=null,cl=null;
-    try{[d,cl]=await Promise.all([api.jobs().catch(()=>null),api.cluster()])}catch(e){setConn(false);app.innerHTML='<div class="empty">Controller unreachable.</div>';return}
+    let cl=null;
+    try{cl=await api.cluster()}catch(e){setConn(false);app.innerHTML='<div class="empty">Controller unreachable.</div>';return}
     setConn(true);
-    const running=(d&&d.jobs||[]).filter(j=>String(j.phase||'').toLowerCase()==='running').length;
-    app.innerHTML=`<h1>Job Manager</h1><div class="sub">Controller, backend, and slot capacity.</div>${jobManagerContent(cl,running)}`;
+    app.innerHTML=`<h1>Infrastructure</h1><div class="sub">The machine and containers running your jobs.</div>${jobManagerContent(cl)}`;
   },3000);
 }
 
@@ -444,15 +433,15 @@ function viewDetail(id){
     const opRows=proc.length?proc.map(x=>'<tr><td class="name">'+esc(x.labels.operator||'?')+'</td><td class="num">'+fmtN(x.value)+'</td></tr>').join(''):'<tr><td colspan="2" class="dim">No operator metrics.</td></tr>';
     const metricsOpsTable=card('Operators · records processed','<table><thead><tr><th>Operator</th><th class="num">Processed</th></tr></thead><tbody>'+opRows+'</tbody></table>');
 
-    // top metadata strip (Flink-style)
+    // compact job metadata
     const mcell=(l,v)=>`<div class="mcell"><div class="m-l">${esc(l)}</div><div class="m-v">${v||'<span class="faint">—</span>'}</div></div>`;
     const metaGrid=`
       <div class="meta-grid">
         ${mcell('Job Name',esc(job.name))}
         ${mcell('Job ID',code(job.id))}
         ${mcell('Status',phaseEl(phase))}
-        ${mcell('Type',badge(job)||'yaml')}
-        ${mcell('Kind',esc(job.kind||'yaml'))}
+        ${mcell('Type',badge(job)||'sdk')}
+        ${mcell('Kind',esc(job.kind||'sdk'))}
         ${mcell('Delivery',job.delivery?esc(job.delivery):null)}
         ${mcell('Created',esc(fmtFull(job.createdAt)))}
         ${mcell('Updated',esc(fmtFull(job.updatedAt)))}
@@ -513,7 +502,6 @@ function viewDetail(id){
         <div><h1>${esc(job.name)}</h1><div class="id" style="margin-top:3px">${esc(job.id)}</div></div>
         ${phaseEl(phase)} ${badge(job)}
         <div class="btns" style="margin-left:auto">
-          <a class="btn pri" href="http://localhost:3000/d/weibo/weibo-pipeline?orgId=1" target="_blank" rel="noopener">Grafana ↗</a>
           <button class="btn" ${term?'disabled':''} onclick="doSavepoint('${esc(id)}')">Savepoint</button>
           <button class="btn" onclick="doRestart('${esc(id)}')">Restart</button>
           <button class="btn danger" ${term?'disabled':''} onclick="doCancel('${esc(id)}')">Cancel</button>
@@ -525,7 +513,7 @@ function viewDetail(id){
         <button class="tab ${detailTab==='metrics'?'on':''}" data-tab="metrics" onclick="switchTab('metrics')">Metrics</button>
         <button class="tab ${detailTab==='checkpoints'?'on':''}" data-tab="checkpoints" onclick="switchTab('checkpoints')">Checkpoints</button>
         <button class="tab ${detailTab==='logs'?'on':''}" data-tab="logs" onclick="switchTab('logs')">Logs</button>
-        <button class="tab ${detailTab==='spec'?'on':''}" data-tab="spec" onclick="switchTab('spec')">Spec</button>
+        <button class="tab ${detailTab==='spec'?'on':''}" data-tab="spec" onclick="switchTab('spec')">Manifest</button>
       </div>
       ${overviewPane}${metricsPane}${checkpointsPane}${logsPane}${specPane}`;
     switchTab(detailTab);
@@ -540,23 +528,19 @@ async function doSavepoint(id){const label=prompt('Savepoint label:','');if(!lab
 function viewSubmit(){
   setNav('submit');stopPoll();setConn(true);
   app.innerHTML=`
-    <h1>Submit New Job</h1>
-    <div class="sub" style="margin:8px 0 16px">Paste a YAML workflow or SDK manifest and deploy it to the cluster.</div>
-    <textarea id="wf" rows="14" spellcheck="false" placeholder="name: my-job
-source:
-  type: generator
-  records: [{key: a, value: '{&quot;n&quot;:1}'}]
-pipeline:
-  - {id: by-n, type: keyBy, keyBy: {field: n, partitions: 1}}
-  - {id: count, type: reduce, reduce: {function: count}}
-sink: {type: stdout}"></textarea>
+    <h1>Deploy a job</h1>
+    <div class="sub" style="margin:8px 0 16px">Run a container image built with the Weibo SDK.</div>
+    <textarea id="wf" rows="12" spellcheck="false" placeholder="kind: sdk
+name: orders-stream
+image: ghcr.io/company/orders-stream:1.0.0
+resources:
+  cpu: 500m
+  memory: 512Mi"></textarea>
     <div class="btns" style="margin-top:12px">
-      <button class="btn" onclick="doPreview()">Preview</button>
-      <button class="btn pri" id="deploy" onclick="doDeploy()" disabled>Deploy</button>
+      <button class="btn pri" id="deploy" onclick="doDeploy()">Deploy image</button>
     </div>
     <div id="pv" style="margin-top:14px"></div>`;
 }
-async function doPreview(){const wf=document.getElementById('wf').value;const pv=document.getElementById('pv');const r=await api.validate({workflow:wf});const j=await r.json();if(!r.ok){pv.innerHTML=`<div class="err">${esc(j.error||'Invalid.')}</div>`;document.getElementById('deploy').disabled=true;return}pv.innerHTML=card(`${esc(j.name)} · ${esc(j.delivery)}`,graphEl(j.graph));document.getElementById('deploy').disabled=false}
 async function doDeploy(){const wf=document.getElementById('wf').value;const r=await api.submit({workflow:wf});const j=await r.json();if(!r.ok){document.getElementById('pv').innerHTML=`<div class="err">${esc(j.error||'Submit failed.')}</div>`;return}const id=(j.job&&j.job.id)||j.id;go('overview',id)}
 
 function route(){

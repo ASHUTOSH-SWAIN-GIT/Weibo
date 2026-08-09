@@ -93,13 +93,53 @@ type CapacitySnapshot struct {
 	MemoryReservedBytes  int64 `json:"memoryReservedBytes,omitempty"`
 	MemoryAvailableBytes int64 `json:"memoryAvailableBytes,omitempty"`
 
-	DefaultJobCPUMilli    int64 `json:"defaultJobCPUMilli,omitempty"`
-	DefaultJobMemoryBytes int64 `json:"defaultJobMemoryBytes,omitempty"`
-	RunningContainers     int   `json:"runningContainers"`
-	StartingContainers    int   `json:"startingContainers"`
-	ExitedContainers      int   `json:"exitedContainers"`
-	UnhealthyContainers   int   `json:"unhealthyContainers"`
-	Unsupported           bool  `json:"unsupported,omitempty"`
+	DefaultJobCPUMilli    int64            `json:"defaultJobCPUMilli,omitempty"`
+	DefaultJobMemoryBytes int64            `json:"defaultJobMemoryBytes,omitempty"`
+	RunningContainers     int              `json:"runningContainers"`
+	StartingContainers    int              `json:"startingContainers"`
+	ExitedContainers      int              `json:"exitedContainers"`
+	UnhealthyContainers   int              `json:"unhealthyContainers"`
+	Unsupported           bool             `json:"unsupported,omitempty"`
+	Host                  *HostStats       `json:"host,omitempty"`
+	Containers            []ContainerStats `json:"containers,omitempty"`
+}
+
+// HostStats is live utilization for the machine running the Docker daemon.
+type HostStats struct {
+	Hostname         string  `json:"hostname,omitempty"`
+	OperatingSystem  string  `json:"operatingSystem,omitempty"`
+	Architecture     string  `json:"architecture,omitempty"`
+	KernelVersion    string  `json:"kernelVersion,omitempty"`
+	DockerVersion    string  `json:"dockerVersion,omitempty"`
+	CPUCores         int     `json:"cpuCores"`
+	CPUPercent       float64 `json:"cpuPercent"`
+	MemoryUsedBytes  int64   `json:"memoryUsedBytes"`
+	MemoryTotalBytes int64   `json:"memoryTotalBytes"`
+	MemoryPercent    float64 `json:"memoryPercent"`
+	Load1            float64 `json:"load1"`
+	Load5            float64 `json:"load5"`
+	Load15           float64 `json:"load15"`
+}
+
+// ContainerStats is a live compute snapshot for one Weibo-managed container.
+type ContainerStats struct {
+	ID               string  `json:"id"`
+	Name             string  `json:"name"`
+	JobID            string  `json:"jobId,omitempty"`
+	Managed          bool    `json:"managed"`
+	Image            string  `json:"image,omitempty"`
+	ImageID          string  `json:"imageId,omitempty"`
+	State            string  `json:"state"`
+	CPUPercent       float64 `json:"cpuPercent"`
+	MemoryUsedBytes  uint64  `json:"memoryUsedBytes"`
+	MemoryLimitBytes uint64  `json:"memoryLimitBytes"`
+	MemoryPercent    float64 `json:"memoryPercent"`
+	NetworkRxBytes   uint64  `json:"networkRxBytes"`
+	NetworkTxBytes   uint64  `json:"networkTxBytes"`
+	BlockReadBytes   uint64  `json:"blockReadBytes"`
+	BlockWriteBytes  uint64  `json:"blockWriteBytes"`
+	PIDs             uint64  `json:"pids"`
+	StartedAt        int64   `json:"startedAt,omitempty"`
 }
 
 // Pull policies for LaunchSpec.PullPolicy.

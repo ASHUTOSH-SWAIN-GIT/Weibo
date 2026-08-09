@@ -4,15 +4,20 @@ import (
 	"archive/tar"
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
+	"os"
 	"strconv"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/distribution/reference"
 	"github.com/docker/cli/cli/config"
 	"github.com/docker/cli/cli/config/configfile"
+	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/image"
@@ -35,8 +40,11 @@ var dockerConfigDir string
 // works regardless of where the daemon runs), and /data is backed by a
 // named volume per job so state and checkpoints survive restarts.
 type Docker struct {
-	cli   *client.Client
-	image string
+	cli          *client.Client
+	image        string
+	mu           sync.Mutex
+	hostCPUTotal uint64
+	hostCPUIdle  uint64
 }
 
 // NewDocker connects to the Docker daemon from the environment. image is
@@ -369,6 +377,7 @@ func (d *Docker) Capacity(ctx context.Context, cfg CapacityConfig) (CapacitySnap
 	}
 	snap.CPUTotalMilli = int64(info.NCPU) * 1000
 	snap.MemoryTotalBytes = info.MemTotal
+	snap.Host = d.hostStats(info.Name, info.OperatingSystem, info.Architecture, info.KernelVersion, info.ServerVersion, info.NCPU, info.MemTotal)
 
 	defaultCPU, err := cpuToMilli(orString(cfg.DefaultJobCPU, "1"))
 	if err != nil {
@@ -385,10 +394,7 @@ func (d *Docker) Capacity(ctx context.Context, cfg CapacityConfig) (CapacitySnap
 	snap.DefaultJobCPUMilli = defaultCPU
 	snap.DefaultJobMemoryBytes = defaultMem
 
-	list, err := d.cli.ContainerList(ctx, container.ListOptions{
-		All:     true,
-		Filters: filters.NewArgs(filters.Arg("label", "weibo.job")),
-	})
+	list, err := d.cli.ContainerList(ctx, container.ListOptions{All: true})
 	if err != nil {
 		snap.Health = "degraded"
 		snap.Reason = joinReason(snap.Reason, "list containers: "+err.Error())
@@ -396,13 +402,12 @@ func (d *Docker) Capacity(ctx context.Context, cfg CapacityConfig) (CapacitySnap
 	}
 
 	for _, c := range list {
+		managed := c.Labels["weibo.job"] != ""
 		switch c.State {
 		case "running":
 			snap.RunningContainers++
-			snap.UsedSlots++
 		case "created", "restarting":
 			snap.StartingContainers++
-			snap.UsedSlots++
 		case "exited", "dead", "removing":
 			snap.ExitedContainers++
 		}
@@ -410,8 +415,23 @@ func (d *Docker) Capacity(ctx context.Context, cfg CapacityConfig) (CapacitySnap
 			snap.UnhealthyContainers++
 		}
 		if c.State != "running" && c.State != "created" && c.State != "restarting" {
+			snap.Containers = append(snap.Containers, containerSnapshot(c, nil))
 			continue
 		}
+		if c.State == "running" {
+			stats, statsErr := d.containerStats(ctx, c.ID)
+			if statsErr != nil {
+				snap.Health = "degraded"
+				snap.Reason = joinReason(snap.Reason, "stats "+shortID(c.ID)+": "+statsErr.Error())
+			}
+			snap.Containers = append(snap.Containers, containerSnapshot(c, stats))
+		} else {
+			snap.Containers = append(snap.Containers, containerSnapshot(c, nil))
+		}
+		if !managed {
+			continue
+		}
+		snap.UsedSlots++
 		ins, err := d.cli.ContainerInspect(ctx, c.ID)
 		if err != nil {
 			snap.Health = "degraded"
@@ -463,6 +483,102 @@ func (d *Docker) Capacity(ctx context.Context, cfg CapacityConfig) (CapacitySnap
 	snap.AvailableSlots = &available
 	snap.TotalSlots = &total
 	return snap, nil
+}
+
+func (d *Docker) containerStats(ctx context.Context, id string) (*container.StatsResponse, error) {
+	r, err := d.cli.ContainerStats(ctx, id, false)
+	if err != nil {
+		return nil, err
+	}
+	defer r.Body.Close()
+	var stats container.StatsResponse
+	if err := json.NewDecoder(r.Body).Decode(&stats); err != nil {
+		return nil, err
+	}
+	return &stats, nil
+}
+
+func containerSnapshot(c types.Container, s *container.StatsResponse) ContainerStats {
+	name := strings.TrimPrefix(firstString(c.Names), "/")
+	out := ContainerStats{ID: shortID(c.ID), Name: name, JobID: c.Labels["weibo.job"], Managed: c.Labels["weibo.job"] != "", Image: c.Image, ImageID: shortID(strings.TrimPrefix(c.ImageID, "sha256:")), State: c.State, StartedAt: c.Created}
+	if s == nil {
+		return out
+	}
+	cpuDelta := float64(s.CPUStats.CPUUsage.TotalUsage - s.PreCPUStats.CPUUsage.TotalUsage)
+	systemDelta := float64(s.CPUStats.SystemUsage - s.PreCPUStats.SystemUsage)
+	cores := float64(s.CPUStats.OnlineCPUs)
+	if cores == 0 {
+		cores = float64(len(s.CPUStats.CPUUsage.PercpuUsage))
+	}
+	if systemDelta > 0 && cpuDelta > 0 {
+		out.CPUPercent = cpuDelta / systemDelta * cores * 100
+	}
+	out.MemoryUsedBytes = s.MemoryStats.Usage
+	if cache := s.MemoryStats.Stats["cache"]; cache < out.MemoryUsedBytes {
+		out.MemoryUsedBytes -= cache
+	}
+	out.MemoryLimitBytes = s.MemoryStats.Limit
+	if out.MemoryLimitBytes > 0 {
+		out.MemoryPercent = float64(out.MemoryUsedBytes) / float64(out.MemoryLimitBytes) * 100
+	}
+	for _, n := range s.Networks {
+		out.NetworkRxBytes += n.RxBytes
+		out.NetworkTxBytes += n.TxBytes
+	}
+	for _, io := range s.BlkioStats.IoServiceBytesRecursive {
+		switch strings.ToLower(io.Op) {
+		case "read":
+			out.BlockReadBytes += io.Value
+		case "write":
+			out.BlockWriteBytes += io.Value
+		}
+	}
+	out.PIDs = s.PidsStats.Current
+	return out
+}
+
+func firstString(v []string) string {
+	if len(v) == 0 {
+		return ""
+	}
+	return v[0]
+}
+
+func (d *Docker) hostStats(hostname, operatingSystem, architecture, kernelVersion, dockerVersion string, cores int, totalMemory int64) *HostStats {
+	h := &HostStats{Hostname: hostname, OperatingSystem: operatingSystem, Architecture: architecture, KernelVersion: kernelVersion, DockerVersion: dockerVersion, CPUCores: cores, MemoryTotalBytes: totalMemory}
+	if b, err := os.ReadFile("/proc/loadavg"); err == nil {
+		_, _ = fmt.Sscanf(string(b), "%f %f %f", &h.Load1, &h.Load5, &h.Load15)
+	}
+	if b, err := os.ReadFile("/proc/meminfo"); err == nil {
+		var total, available int64
+		for _, line := range strings.Split(string(b), "\n") {
+			var kb int64
+			if _, err := fmt.Sscanf(line, "MemTotal: %d kB", &kb); err == nil {
+				total = kb * 1024
+			}
+			if _, err := fmt.Sscanf(line, "MemAvailable: %d kB", &kb); err == nil {
+				available = kb * 1024
+			}
+		}
+		if total > 0 {
+			h.MemoryTotalBytes = total
+			h.MemoryUsedBytes = total - available
+			h.MemoryPercent = float64(h.MemoryUsedBytes) / float64(total) * 100
+		}
+	}
+	if b, err := os.ReadFile("/proc/stat"); err == nil {
+		var user, nice, system, idle, iowait, irq, softirq, steal uint64
+		if _, err := fmt.Sscanf(string(b), "cpu %d %d %d %d %d %d %d %d", &user, &nice, &system, &idle, &iowait, &irq, &softirq, &steal); err == nil {
+			total, idleNow := user+nice+system+idle+iowait+irq+softirq+steal, idle+iowait
+			d.mu.Lock()
+			if total > d.hostCPUTotal {
+				h.CPUPercent = float64((total-d.hostCPUTotal)-(idleNow-d.hostCPUIdle)) / float64(total-d.hostCPUTotal) * 100
+			}
+			d.hostCPUTotal, d.hostCPUIdle = total, idleNow
+			d.mu.Unlock()
+		}
+	}
+	return h
 }
 
 func cpuToMilli(s string) (int64, error) {
