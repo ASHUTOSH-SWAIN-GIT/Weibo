@@ -16,15 +16,9 @@ import (
 	"github.com/ASHUTOSH-SWAIN-GIT/weibo/control/store"
 )
 
-const wf = `name: wordcount
-version: "1"
-source:
-  type: generator
-  records: [{key: hello, value: '{"word":"hello"}'}]
-pipeline:
-  - {id: by-word, type: keyBy, keyBy: {field: word, partitions: 1}}
-  - {id: count, type: reduce, reduce: {function: count}}
-sink: {type: stdout}
+const sdkJob = `kind: sdk
+name: orders-sdk
+image: registry.example/orders:v1
 `
 
 func newAPI(t *testing.T) *httptest.Server {
@@ -85,6 +79,12 @@ func TestAuth_TokenGating(t *testing.T) {
 	if got := do(http.MethodGet, "/jobs", "Bearer s3cret"); got != http.StatusOK {
 		t.Errorf("/jobs correct token: got %d, want 200", got)
 	}
+	if got := do(http.MethodGet, "/cluster", ""); got != http.StatusUnauthorized {
+		t.Errorf("/cluster no token: got %d, want 401", got)
+	}
+	if got := do(http.MethodGet, "/cluster", "Bearer s3cret"); got != http.StatusOK {
+		t.Errorf("/cluster correct token: got %d, want 200", got)
+	}
 
 	// Public routes need no token so the browser can load and prompt.
 	if got := do(http.MethodGet, "/", ""); got != http.StatusOK {
@@ -116,11 +116,39 @@ func TestAuth_OpenWhenNoToken(t *testing.T) {
 	}
 }
 
-func TestSubmitRawYAMLThenListAndGet(t *testing.T) {
+func TestClusterIncludesHostAndSDKContainers(t *testing.T) {
+	srv := newAPI(t)
+	body, _ := json.Marshal(map[string]any{"workflow": "kind: sdk\nname: orders\nimage: registry/orders:v2\n"})
+	resp, err := http.Post(srv.URL+"/jobs", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+
+	resp, err = http.Get(srv.URL + "/cluster")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /cluster: %d", resp.StatusCode)
+	}
+	var got backend.CapacitySnapshot
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Host == nil || got.Host.Hostname != "fake-host" {
+		t.Fatalf("host missing: %+v", got.Host)
+	}
+	if len(got.Containers) != 1 || got.Containers[0].Image != "registry/orders:v2" || !got.Containers[0].Managed {
+		t.Fatalf("containers missing: %+v", got.Containers)
+	}
+}
+
+func TestSubmitSDKManifestThenListAndGet(t *testing.T) {
 	srv := newAPI(t)
 
-	// Submit raw YAML.
-	resp, err := http.Post(srv.URL+"/jobs", "application/yaml", strings.NewReader(wf))
+	resp, err := http.Post(srv.URL+"/jobs", "application/yaml", strings.NewReader(sdkJob))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,7 +158,7 @@ func TestSubmitRawYAMLThenListAndGet(t *testing.T) {
 	var job store.Job
 	json.NewDecoder(resp.Body).Decode(&job)
 	resp.Body.Close()
-	if job.ID == "" || job.Name != "wordcount" {
+	if job.ID == "" || job.Name != "orders-sdk" || job.Kind != store.KindSDK {
 		t.Fatalf("job: %+v", job)
 	}
 
@@ -169,7 +197,7 @@ func TestSubmitRawYAMLThenListAndGet(t *testing.T) {
 
 func TestSubmitJSONEnvelopeWithEnv(t *testing.T) {
 	srv := newAPI(t)
-	body, _ := json.Marshal(map[string]any{"workflow": wf, "env": map[string]string{"K": "v"}})
+	body, _ := json.Marshal(map[string]any{"workflow": sdkJob, "env": map[string]string{"K": "v"}})
 	resp, err := http.Post(srv.URL+"/jobs", "application/json", bytes.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
@@ -180,21 +208,21 @@ func TestSubmitJSONEnvelopeWithEnv(t *testing.T) {
 	}
 }
 
-func TestSubmitInvalidRejected(t *testing.T) {
+func TestSubmitInvalidSDKRejected(t *testing.T) {
 	srv := newAPI(t)
-	resp, err := http.Post(srv.URL+"/jobs", "application/yaml", strings.NewReader("::: not valid :::"))
+	resp, err := http.Post(srv.URL+"/jobs", "application/yaml", strings.NewReader("kind: sdk\nname: missing-image\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusBadRequest {
-		t.Fatalf("expected 400 for invalid workflow, got %d", resp.StatusCode)
+		t.Fatalf("expected 400 for invalid SDK manifest, got %d", resp.StatusCode)
 	}
 }
 
 func TestCancelAndRestart(t *testing.T) {
 	srv := newAPI(t)
-	resp, _ := http.Post(srv.URL+"/jobs", "application/yaml", strings.NewReader(wf))
+	resp, _ := http.Post(srv.URL+"/jobs", "application/yaml", strings.NewReader(sdkJob))
 	var job store.Job
 	json.NewDecoder(resp.Body).Decode(&job)
 	resp.Body.Close()
@@ -220,45 +248,9 @@ func TestCancelAndRestart(t *testing.T) {
 	resp.Body.Close()
 }
 
-func TestValidatePreview(t *testing.T) {
-	srv := newAPI(t)
-	body, _ := json.Marshal(map[string]any{"workflow": wf})
-	resp, err := http.Post(srv.URL+"/validate", "application/json", bytes.NewReader(body))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("validate: got %d", resp.StatusCode)
-	}
-	var out struct {
-		Name     string `json:"name"`
-		Delivery string `json:"delivery"`
-		Graph    struct {
-			Source string `json:"Source"`
-			Sink   string `json:"Sink"`
-		} `json:"graph"`
-	}
-	json.NewDecoder(resp.Body).Decode(&out)
-	if out.Name != "wordcount" || out.Graph.Source != "generator" || out.Graph.Sink != "stdout" {
-		t.Fatalf("preview wrong: %+v", out)
-	}
-
-	// Validate must NOT create a job.
-	resp2, _ := http.Get(srv.URL + "/jobs")
-	var listed struct {
-		Jobs []any `json:"jobs"`
-	}
-	json.NewDecoder(resp2.Body).Decode(&listed)
-	resp2.Body.Close()
-	if len(listed.Jobs) != 0 {
-		t.Fatalf("validate must not launch a job, found %d", len(listed.Jobs))
-	}
-}
-
 func TestListIncludesPhase(t *testing.T) {
 	srv := newAPI(t)
-	resp, _ := http.Post(srv.URL+"/jobs", "application/yaml", strings.NewReader(wf))
+	resp, _ := http.Post(srv.URL+"/jobs", "application/yaml", strings.NewReader(sdkJob))
 	resp.Body.Close()
 
 	resp, err := http.Get(srv.URL + "/jobs")
@@ -291,8 +283,19 @@ func TestServesUI(t *testing.T) {
 		t.Fatalf("content-type: %q", ct)
 	}
 	body, _ := io.ReadAll(resp.Body)
-	if !strings.Contains(strings.ToLower(string(body)), "weibo") {
+	html := string(body)
+	if !strings.Contains(strings.ToLower(html), "weibo") {
 		t.Fatal("index.html not served")
+	}
+	for _, required := range []string{"Infrastructure", "Host machine", "Containers", "Deploy a job", "kind: sdk", "imageId"} {
+		if !strings.Contains(html, required) {
+			t.Errorf("dashboard missing current contract %q", required)
+		}
+	}
+	for _, removed := range []string{"Weibo Resource Model", "Grafana ↗", "Submit New Job", "type: generator"} {
+		if strings.Contains(html, removed) {
+			t.Errorf("dashboard still contains removed UI %q", removed)
+		}
 	}
 }
 

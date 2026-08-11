@@ -11,7 +11,7 @@ import (
 	"github.com/ASHUTOSH-SWAIN-GIT/weibo/control/backend"
 )
 
-const k8sTestImage = "weibo-runner:dev"
+const k8sTestImage = "weibo-sdk-demo:test"
 
 // clusterReady skips unless a Kubernetes cluster is reachable.
 func clusterReady(t *testing.T) *backend.Kubernetes {
@@ -33,21 +33,14 @@ func clusterReady(t *testing.T) *backend.Kubernetes {
 	return kb
 }
 
-// The P6 gate: launch a real job on a cluster, see it run, read its logs,
-// then stop and clean it up — proving the K8s backend drives the same
-// lifecycle as Docker. Requires a cluster with the runner image loaded
-// (e.g. `kind load docker-image weibo-runner:dev`).
-func TestIntegration_K8sJobLifecycle(t *testing.T) {
+// Launch a real SDK image on a cluster, observe it, read its logs, then clean
+// it up. Requires the SDK fixture image to be loaded into the test cluster.
+func TestIntegration_K8sSDKJobLifecycle(t *testing.T) {
 	kb := clusterReady(t)
 	ctx := context.Background()
 
-	wf := "name: k8s-itest\nversion: \"1\"\n" +
-		"source:\n  type: generator\n  records: [{key: a, value: '{\"word\":\"a\"}'}]\n" +
-		"pipeline:\n  - {id: by-word, type: keyBy, keyBy: {field: word, partitions: 1}}\n" +
-		"  - {id: count, type: reduce, reduce: {function: count}}\nsink: {type: stdout}\n"
-
 	id, err := kb.Launch(ctx, backend.LaunchSpec{
-		JobID: "itest1", Name: "k8s-itest", WorkflowDoc: []byte(wf), ControlPort: 8080,
+		JobID: "itest1", Name: "k8s-sdk-itest", Image: k8sTestImage, ControlPort: 8080,
 	})
 	if err != nil {
 		t.Fatalf("Launch: %v", err)

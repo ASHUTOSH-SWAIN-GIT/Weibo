@@ -92,10 +92,16 @@ func (f *Fake) Capacity(ctx context.Context, cfg CapacityConfig) (CapacitySnapsh
 	defer f.mu.Unlock()
 	used := 0
 	exited := 0
-	for _, c := range f.containers {
+	containers := make([]ContainerStats, 0, len(f.containers))
+	for id, c := range f.containers {
 		if c.removed {
 			continue
 		}
+		state := string(c.status.Phase)
+		containers = append(containers, ContainerStats{
+			ID: shortID(id), Name: "weibo-" + c.spec.JobID, JobID: c.spec.JobID,
+			Managed: true, Image: c.spec.Image, State: state, StartedAt: c.launched.Unix(),
+		})
 		switch c.status.Phase {
 		case PhaseRunning:
 			used++
@@ -125,6 +131,11 @@ func (f *Fake) Capacity(ctx context.Context, cfg CapacityConfig) (CapacitySnapsh
 		ExitedContainers:      exited,
 		DefaultJobCPUMilli:    1000,
 		DefaultJobMemoryBytes: 1 << 30,
+		Host: &HostStats{
+			Hostname: "fake-host", OperatingSystem: "test", Architecture: "test",
+			CPUCores: 4, MemoryTotalBytes: 8 << 30,
+		},
+		Containers: containers,
 	}, nil
 }
 

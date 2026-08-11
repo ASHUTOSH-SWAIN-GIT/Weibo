@@ -12,16 +12,9 @@ import (
 	"github.com/ASHUTOSH-SWAIN-GIT/weibo/control/store"
 )
 
-const validWorkflow = `name: wordcount
-version: "1"
-source:
-  type: generator
-  records:
-    - {key: hello, value: '{"word":"hello"}'}
-pipeline:
-  - {id: by-word, type: keyBy, keyBy: {field: word, partitions: 1}}
-  - {id: count, type: reduce, reduce: {function: count}}
-sink: {type: stdout}
+const validSDKManifest = `kind: sdk
+name: orders-sdk
+image: my-registry/orders-sdk:v1
 `
 
 func newController(t *testing.T, fake *backend.Fake, restart lifecycle.RestartPolicy) (*control.Controller, store.Store) {
@@ -34,22 +27,22 @@ func newController(t *testing.T, fake *backend.Fake, restart lifecycle.RestartPo
 	c := control.New(control.Options{
 		Store:       st,
 		Backend:     fake,
-		Image:       "weibo-runner:test",
+		Image:       "unused-default-image:test",
 		Restart:     restart,
 		StopTimeout: time.Second,
 	})
 	return c, st
 }
 
-func TestSubmitLaunchesJob(t *testing.T) {
+func TestSubmitSDKLaunchesJob(t *testing.T) {
 	fake := backend.NewFake()
 	c, _ := newController(t, fake, lifecycle.DefaultRestartPolicy())
 
-	job, err := c.Submit(context.Background(), []byte(validWorkflow), nil)
+	job, err := c.Submit(context.Background(), []byte(validSDKManifest), nil)
 	if err != nil {
 		t.Fatalf("Submit: %v", err)
 	}
-	if job.Name != "wordcount" || job.Desired != store.DesiredRunning {
+	if job.Name != "orders-sdk" || job.Kind != store.KindSDK || job.Desired != store.DesiredRunning {
 		t.Fatalf("job: %+v", job)
 	}
 	if fake.Launched() != 1 {
@@ -64,18 +57,13 @@ func TestSubmitLaunchesJob(t *testing.T) {
 	}
 }
 
-const sdkManifestDoc = `kind: sdk
-name: orders-sdk
-image: my-registry/orders-sdk:v1
-`
-
 // An SDK manifest is auto-detected, stored as an sdk job, and launched
 // with its own image (no workflow compilation).
 func TestSubmitSDK_DetectedAndLaunched(t *testing.T) {
 	fake := backend.NewFake()
 	c, _ := newController(t, fake, lifecycle.DefaultRestartPolicy())
 
-	job, err := c.Submit(context.Background(), []byte(sdkManifestDoc), nil)
+	job, err := c.Submit(context.Background(), []byte(validSDKManifest), nil)
 	if err != nil {
 		t.Fatalf("Submit(sdk): %v", err)
 	}
@@ -165,24 +153,11 @@ func TestSubmitSDK_MissingImage(t *testing.T) {
 	}
 }
 
-func TestSubmitRejectsInvalidWorkflow(t *testing.T) {
-	fake := backend.NewFake()
-	c, _ := newController(t, fake, lifecycle.DefaultRestartPolicy())
-
-	_, err := c.Submit(context.Background(), []byte("not: a valid: workflow: ["), nil)
-	if err == nil {
-		t.Fatal("expected submit to reject invalid workflow")
-	}
-	if fake.Launched() != 0 {
-		t.Error("no container should launch for an invalid workflow")
-	}
-}
-
 func TestSecretsPassedbutNotPersisted(t *testing.T) {
 	fake := backend.NewFake()
 	c, st := newController(t, fake, lifecycle.DefaultRestartPolicy())
 
-	job, err := c.Submit(context.Background(), []byte(validWorkflow), map[string]string{"API_KEY": "s3cr3t"})
+	job, err := c.Submit(context.Background(), []byte(validSDKManifest), map[string]string{"API_KEY": "s3cr3t"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -200,7 +175,7 @@ func TestSecretsPassedbutNotPersisted(t *testing.T) {
 func TestCancelStopsJob(t *testing.T) {
 	fake := backend.NewFake()
 	c, _ := newController(t, fake, lifecycle.DefaultRestartPolicy())
-	job, _ := c.Submit(context.Background(), []byte(validWorkflow), nil)
+	job, _ := c.Submit(context.Background(), []byte(validSDKManifest), nil)
 
 	if err := c.Cancel(context.Background(), job.ID); err != nil {
 		t.Fatalf("Cancel: %v", err)
@@ -221,7 +196,7 @@ func TestCancelStopsJob(t *testing.T) {
 func TestSingleLiveRunGuard(t *testing.T) {
 	fake := backend.NewFake()
 	c, st := newController(t, fake, lifecycle.DefaultRestartPolicy())
-	job, err := c.Submit(context.Background(), []byte(validWorkflow), nil)
+	job, err := c.Submit(context.Background(), []byte(validSDKManifest), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -252,7 +227,7 @@ func TestSingleLiveRunGuard(t *testing.T) {
 func TestRestartLaunchesNewRun(t *testing.T) {
 	fake := backend.NewFake()
 	c, _ := newController(t, fake, lifecycle.DefaultRestartPolicy())
-	job, _ := c.Submit(context.Background(), []byte(validWorkflow), nil)
+	job, _ := c.Submit(context.Background(), []byte(validSDKManifest), nil)
 	first, _ := c.LatestRun(job.ID)
 
 	if _, err := c.Restart(context.Background(), job.ID); err != nil {
@@ -273,7 +248,7 @@ func TestReconcileRestartsOnCrash(t *testing.T) {
 	fake := backend.NewFake()
 	// Zero backoff so the test doesn't sleep.
 	c, _ := newController(t, fake, lifecycle.RestartPolicy{MaxAttempts: 2, BaseBackoff: 0})
-	job, _ := c.Submit(context.Background(), []byte(validWorkflow), nil)
+	job, _ := c.Submit(context.Background(), []byte(validSDKManifest), nil)
 
 	run, _ := c.LatestRun(job.ID)
 	fake.SetPhase(run.ContainerID, backend.PhaseExited, 1) // crash
@@ -316,7 +291,7 @@ func TestControllerRestartReattaches(t *testing.T) {
 	defer st.Close()
 
 	c1 := control.New(control.Options{Store: st, Backend: fake, Image: "img", StopTimeout: time.Second})
-	job, _ := c1.Submit(context.Background(), []byte(validWorkflow), nil)
+	job, _ := c1.Submit(context.Background(), []byte(validSDKManifest), nil)
 	run, _ := c1.LatestRun(job.ID)
 
 	// New controller instance, same store + same (still-running) backend.

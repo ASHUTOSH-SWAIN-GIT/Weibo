@@ -33,6 +33,10 @@ jobs:
       - name: Build example pipelines
         run: go build ./examples/...
 
+      - name: Build controller
+        working-directory: control
+        run: go build ./...
+
   fmt-vet:
     name: fmt + vet
     runs-on: ubuntu-latest
@@ -57,6 +61,20 @@ jobs:
       - name: go vet
         run: go vet ./...
 
+      - name: Check controller formatting
+        working-directory: control
+        run: |
+          out=$(gofmt -l .)
+          if [ -n "$out" ]; then
+            echo "::error::unformatted controller files:"
+            echo "$out"
+            exit 1
+          fi
+
+      - name: Vet controller
+        working-directory: control
+        run: go vet ./...
+
   test:
     name: test (race detector)
     runs-on: ubuntu-latest
@@ -74,6 +92,10 @@ jobs:
 
       - name: Run window/watermark tests with race detector
         run: go test -race ./test/unit_tests/window/... ./test/unit_tests/watermark/...
+
+      - name: Test controller with race detector
+        working-directory: control
+        run: go test -short -race ./...
 
   coverage:
     name: coverage
@@ -100,3 +122,35 @@ jobs:
           name: coverage
           path: coverage.out
           retention-days: 7
+
+      - name: Controller coverage
+        working-directory: control
+        run: go test -short -coverprofile=control-coverage.out -covermode=atomic ./...
+
+      - name: Upload controller coverage artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: controller-coverage
+          path: control/control-coverage.out
+          retention-days: 7
+
+  controller-docker-integration:
+    name: controller SDK Docker integration
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.2'
+          cache: true
+          cache-dependency-path: control/go.sum
+
+      - name: Build SDK test image
+        run: docker build -t weibo-sdk-demo:test examples/sdk-demo
+
+      - name: Run SDK lifecycle integration
+        working-directory: control
+        run: go test -count=1 -run TestIntegration_SDKImageLifecycle .

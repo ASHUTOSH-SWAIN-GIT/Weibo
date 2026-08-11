@@ -16,7 +16,7 @@ import (
 
 func k8sBackend(t *testing.T) *Kubernetes {
 	t.Helper()
-	return newK8s(fake.NewSimpleClientset(), KubernetesOptions{Image: "weibo-runner:dev", Namespace: "weibo"})
+	return newK8s(fake.NewSimpleClientset(), KubernetesOptions{Image: "weibo-sdk-demo:test", Namespace: "weibo"})
 }
 
 // Launch must create the full object set with correct config.
@@ -26,8 +26,8 @@ func TestK8sLaunch_CreatesObjects(t *testing.T) {
 
 	id, err := k.Launch(ctx, LaunchSpec{
 		JobID:            "abc123",
-		Name:             "wordcount",
-		WorkflowDoc:      []byte("name: wordcount\n"),
+		Name:             "orders-sdk",
+		Image:            "registry/orders:v2",
 		Env:              map[string]string{"WEIBO_JOB_ID": "abc123", "API_KEY": "s3cr3t"},
 		ControlPort:      8080,
 		RestoreSavepoint: "before-upgrade",
@@ -40,10 +40,9 @@ func TestK8sLaunch_CreatesObjects(t *testing.T) {
 	if _, err := k.cs.CoreV1().PersistentVolumeClaims("weibo").Get(ctx, "weibo-abc123-data", metav1.GetOptions{}); err != nil {
 		t.Fatalf("pvc not created: %v", err)
 	}
-	// ConfigMap holds the workflow.
-	cm, err := k.cs.CoreV1().ConfigMaps("weibo").Get(ctx, id, metav1.GetOptions{})
-	if err != nil || cm.Data["workflow.yaml"] != "name: wordcount\n" {
-		t.Fatalf("configmap wrong: %v / %q", err, cm.Data["workflow.yaml"])
+	// SDK images carry their pipeline and do not create a workflow ConfigMap.
+	if _, err := k.cs.CoreV1().ConfigMaps("weibo").Get(ctx, id, metav1.GetOptions{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("SDK launch should not create a configmap: %v", err)
 	}
 	// Secret holds the env (never inline in the pod spec).
 	sec, err := k.cs.CoreV1().Secrets("weibo").Get(ctx, id, metav1.GetOptions{})
@@ -76,7 +75,7 @@ func TestK8sLaunch_CreatesObjects(t *testing.T) {
 	for _, e := range c.Env {
 		env[e.Name] = e.Value
 	}
-	if env["WORKFLOW"] != k8sWorkflowPath || env["DATA_DIR"] != k8sDataDir ||
+	if env["WORKFLOW"] != "" || env["DATA_DIR"] != k8sDataDir ||
 		env["SAVEPOINT_DIR"] != k8sSavepointDir || env["PORT"] != "8080" {
 		t.Errorf("fixed env wrong: %v", env)
 	}
@@ -89,8 +88,8 @@ func TestK8sLaunch_CreatesObjects(t *testing.T) {
 	if c.LivenessProbe == nil || c.LivenessProbe.HTTPGet == nil || c.LivenessProbe.HTTPGet.Path != "/healthz" {
 		t.Errorf("liveness probe not on /healthz: %+v", c.LivenessProbe)
 	}
-	if len(c.VolumeMounts) != 2 {
-		t.Errorf("expected data + wf mounts, got %d", len(c.VolumeMounts))
+	if len(c.VolumeMounts) != 1 {
+		t.Errorf("expected only the data mount for SDK jobs, got %d", len(c.VolumeMounts))
 	}
 }
 
@@ -98,7 +97,7 @@ func TestK8sLaunch_CreatesObjects(t *testing.T) {
 func TestK8sLaunch_NoEnvNoSecret(t *testing.T) {
 	ctx := context.Background()
 	k := k8sBackend(t)
-	id, err := k.Launch(ctx, LaunchSpec{JobID: "j1", WorkflowDoc: []byte("x"), ControlPort: 8080})
+	id, err := k.Launch(ctx, LaunchSpec{JobID: "j1", Image: "registry/job:v1", ControlPort: 8080})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,7 +150,7 @@ func TestK8sStatus_Gone(t *testing.T) {
 func TestK8sStop_DeletesJob(t *testing.T) {
 	ctx := context.Background()
 	k := k8sBackend(t)
-	id, _ := k.Launch(ctx, LaunchSpec{JobID: "j2", WorkflowDoc: []byte("x"), ControlPort: 8080})
+	id, _ := k.Launch(ctx, LaunchSpec{JobID: "j2", Image: "registry/job:v1", ControlPort: 8080})
 	if err := k.Stop(ctx, id, 30*time.Second); err != nil {
 		t.Fatalf("Stop: %v", err)
 	}
@@ -168,7 +167,7 @@ func TestK8sStop_DeletesJob(t *testing.T) {
 func TestK8sRemove_KeepsPVC(t *testing.T) {
 	ctx := context.Background()
 	k := k8sBackend(t)
-	id, _ := k.Launch(ctx, LaunchSpec{JobID: "j3", WorkflowDoc: []byte("x"), Env: map[string]string{"A": "b"}, ControlPort: 8080})
+	id, _ := k.Launch(ctx, LaunchSpec{JobID: "j3", Image: "registry/job:v1", Env: map[string]string{"A": "b"}, ControlPort: 8080})
 
 	if err := k.Remove(ctx, id); err != nil {
 		t.Fatal(err)
@@ -193,11 +192,11 @@ func TestK8sRemove_KeepsPVC(t *testing.T) {
 func TestK8sLaunch_ReusesPVC(t *testing.T) {
 	ctx := context.Background()
 	k := k8sBackend(t)
-	if _, err := k.Launch(ctx, LaunchSpec{JobID: "j4", WorkflowDoc: []byte("x"), ControlPort: 8080}); err != nil {
+	if _, err := k.Launch(ctx, LaunchSpec{JobID: "j4", Image: "registry/job:v1", ControlPort: 8080}); err != nil {
 		t.Fatal(err)
 	}
 	// Second launch of the same job must not fail on the existing PVC.
-	if _, err := k.Launch(ctx, LaunchSpec{JobID: "j4", WorkflowDoc: []byte("x"), ControlPort: 8080}); err != nil {
+	if _, err := k.Launch(ctx, LaunchSpec{JobID: "j4", Image: "registry/job:v1", ControlPort: 8080}); err != nil {
 		t.Fatalf("second Launch (PVC reuse): %v", err)
 	}
 }

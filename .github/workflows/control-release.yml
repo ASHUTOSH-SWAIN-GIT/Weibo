@@ -41,6 +41,10 @@ jobs:
           cache: true
           cache-dependency-path: control/go.sum
 
+      - name: Test control module
+        working-directory: control
+        run: go test -short ./...
+
       - name: Build Linux binaries
         working-directory: control
         env:
