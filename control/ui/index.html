@@ -149,12 +149,13 @@
   .stats{gap:0;border-top:1px solid var(--line);border-bottom:1px solid var(--line)}.stat{border:0;border-right:1px solid var(--line);border-radius:0;box-shadow:none;background:transparent;padding:20px 20px}.stat:last-child{border-right:0}.stat .s-val{font-size:29px;font-weight:620;color:var(--fg)!important}.stat .s-lbl{color:var(--muted)}
   .pill{border:0;border-radius:99px;padding:2px 8px}.btn{border-radius:8px;padding:8px 14px}.btn.pri{background:var(--fg);border-color:var(--fg)}.btn.pri:hover{background:#30313a}
   .meta-grid{border-radius:12px;background:#fff}.meta-grid .mcell:nth-child(odd){background:#fff}.meta-grid .mcell{padding:14px 18px}
-  .topline{margin:-42px -48px 28px;padding:0 48px;height:48px;justify-content:flex-start;background:#fff}.tabs{margin-top:24px}.tab{padding:10px 2px;margin-right:24px}.tab.on{color:var(--fg);border-bottom-color:var(--fg)}
+  .topline{margin:18px 0 0;padding:12px 0 0;height:auto;min-height:30px;justify-content:flex-start;align-items:center;flex-wrap:wrap;gap:8px 18px;background:transparent;border-top:1px solid var(--line);border-bottom:0}.tabs{margin-top:24px}.tab{padding:10px 2px;margin-right:24px}.tab.on{color:var(--fg);border-bottom-color:var(--fg)}
   .bar{height:5px;min-width:90px;border-radius:99px}.bar span{border-radius:99px;transition:width .35s ease}.usage{min-width:140px}.usage b{font-size:12px;font-weight:550}
   .infra-section{margin-top:30px}.section-head{display:flex;align-items:end;justify-content:space-between;margin-bottom:12px}.section-head h2{font-size:16px;margin:0;letter-spacing:-.02em}.section-head p{margin:0;color:var(--muted);font-size:12px}
   .host-strip{display:grid;grid-template-columns:1.4fr repeat(4,1fr);border:1px solid var(--line);border-radius:12px;background:#fff;overflow:hidden}.host-cell{padding:20px;border-right:1px solid var(--line)}.host-cell:last-child{border:0}.host-cell .label{font-size:11px;color:var(--faint);text-transform:uppercase;letter-spacing:.04em}.host-cell .value{font-size:20px;font-weight:620;margin-top:7px;letter-spacing:-.025em}.host-cell .note{font-size:11px;color:var(--muted);margin-top:4px}
   .image-ref{font-family:var(--mono);font-size:11px;color:var(--muted);margin-top:3px;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  @media(max-width:850px){:root{--side-w:0px}.side{position:static;width:auto;height:auto}.side-nav{display:flex;overflow:auto}.side-nav .sec{white-space:nowrap}.side-nav .sub,.side-foot{display:none!important}.main{margin:0;padding:28px 18px}.topline{margin:-28px -18px 24px;padding:0 18px}.host-strip{grid-template-columns:1fr 1fr}.host-cell{border-bottom:1px solid var(--line)}.stats{grid-template-columns:1fr 1fr}}
+  .infra-table{overflow-x:auto;overscroll-behavior-inline:contain}.infra-table table{min-width:1180px}.infra-table th,.infra-table td{vertical-align:top}.infra-table td{overflow-wrap:anywhere}
+  @media(max-width:850px){:root{--side-w:0px}.side{position:static;width:auto;height:auto}.side-nav{display:flex;overflow:auto}.side-nav .sec{white-space:nowrap}.side-nav .sub,.side-foot{display:none!important}.main{margin:0;padding:28px 18px}.topline{margin-top:16px;padding-top:10px}.host-strip{grid-template-columns:1fr 1fr}.host-cell{border-bottom:1px solid var(--line)}.stats{grid-template-columns:1fr 1fr}}
 </style>
 </head>
 <body>
@@ -327,7 +328,7 @@ function jobManagerContent(cl){
     </section>
     <section class="infra-section">
       <div class="section-head"><h2>Containers</h2><p>Image and compute usage for every container</p></div>
-      <div class="card"><div style="overflow-x:auto"><table><thead><tr><th>Container</th><th>Image</th><th>State</th><th>CPU</th><th>Memory</th><th>Network</th><th>Disk I/O</th><th>PIDs</th><th>Started</th></tr></thead><tbody>${rows}</tbody></table></div></div>
+      <div class="card"><div class="infra-table"><table><thead><tr><th>Container</th><th>Image</th><th>State</th><th>CPU</th><th>Memory</th><th>Network</th><th>Disk I/O</th><th>PIDs</th><th>Started</th></tr></thead><tbody>${rows}</tbody></table></div></div>
     </section>`;
 }
 
