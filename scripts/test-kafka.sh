@@ -27,6 +27,7 @@
 #   KAFKA_OUTPUT_TOPIC  output topic         (default: weibo-order-summary-test)
 #   KAFKA_WINDOW_SIZE   window size          (default: 5s)
 #   PIPELINE_TIMEOUT    max wait for results (default: 30s)
+#   PIPELINE_PORT       job-agent HTTP port  (default: 18080)
 
 set -euo pipefail
 
@@ -37,6 +38,7 @@ INPUT_TOPIC="${KAFKA_INPUT_TOPIC:-weibo-orders-test}"
 OUTPUT_TOPIC="${KAFKA_OUTPUT_TOPIC:-weibo-order-summary-test}"
 WINDOW_SIZE="${KAFKA_WINDOW_SIZE:-5s}"
 TIMEOUT="${PIPELINE_TIMEOUT:-30}"
+PIPELINE_PORT="${PIPELINE_PORT:-18080}"
 PROJECT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
 # --- locate kafka CLI tools ---------------------------------------------------
@@ -76,6 +78,7 @@ warn() { printf '\033[1;33m[%s]\033[0m %s\n' "$(date +%H:%M:%S)" "$*" >&2; }
 
 PIPELINE_PID=""
 PIPELINE_LOG=$(mktemp -t weibo-pipeline.XXXXXX.log)
+STATE_FILE=$(mktemp -t weibo-state.XXXXXX.json)
 
 cleanup_and_exit() {
     local code=$1
@@ -93,7 +96,7 @@ cleanup_and_exit() {
         "$KAFKA_TOPICS" --bootstrap-server "$BROKERS" --delete --topic "$INPUT_TOPIC"  2>/dev/null || true
         "$KAFKA_TOPICS" --bootstrap-server "$BROKERS" --delete --topic "$OUTPUT_TOPIC" 2>/dev/null || true
     fi
-    rm -f /tmp/weibo-kafka-orders "$PIPELINE_LOG"
+    rm -f /tmp/weibo-kafka-orders "$PIPELINE_LOG" "$STATE_FILE"
     exit "$code"
 }
 trap 'cleanup_and_exit $?' EXIT INT TERM
@@ -113,6 +116,7 @@ if ! nc -z "$HOST" "$PORT"; then
 fi
 command -v go >/dev/null || { echo "error: go toolchain not in PATH" >&2; cleanup_and_exit 1; }
 command -v python3 >/dev/null || { echo "error: python3 not in PATH (needed for JSON parsing)" >&2; cleanup_and_exit 1; }
+command -v curl >/dev/null || { echo "error: curl not in PATH (needed for agent checks)" >&2; cleanup_and_exit 1; }
 
 # --- build --------------------------------------------------------------------
 
@@ -146,12 +150,20 @@ KAFKA_INPUT_TOPIC="$INPUT_TOPIC" \
 KAFKA_OUTPUT_TOPIC="$OUTPUT_TOPIC" \
 KAFKA_GROUP_ID="weibo-test-$(date +%s)" \
 KAFKA_WINDOW_SIZE="$WINDOW_SIZE" \
+PORT="$PIPELINE_PORT" \
     /tmp/weibo-kafka-orders > "$PIPELINE_LOG" 2>&1 &
 PIPELINE_PID=$!
 log "pipeline started (pid $PIPELINE_PID)"
 
-# Give the pipeline a moment to subscribe to the input topic before producing
-sleep 2
+# Wait for the supervised job and its Kafka consumer to become ready.
+for _ in $(seq 1 30); do
+    if curl -fsS "http://127.0.0.1:${PIPELINE_PORT}/readyz" >/dev/null 2>&1; then
+        break
+    fi
+    sleep 0.2
+done
+curl -fsS "http://127.0.0.1:${PIPELINE_PORT}/livez" >/dev/null || fail "job agent did not become live"
+curl -fsS "http://127.0.0.1:${PIPELINE_PORT}/readyz" >/dev/null || fail "job agent did not become ready"
 
 # --- produce orders (now that the consumer is ready) -------------------------
 log "producing 9 records (8 valid + 1 malformed) to $INPUT_TOPIC"
@@ -191,6 +203,37 @@ while [[ $(date +%s) -lt $DEADLINE ]]; do
     fi
     sleep 1
 done
+
+# Validate the live operational contract against the real Kafka broker.
+# The source must report that partition 0 consumed all nine input messages,
+# along with a coherent high watermark, checkpoint position, and lag.
+STATE_OK=0
+while [[ $(date +%s) -lt $DEADLINE ]]; do
+    if curl -fsS "http://127.0.0.1:${PIPELINE_PORT}/state" -o "$STATE_FILE" && \
+       python3 - "$STATE_FILE" "$INPUT_TOPIC" <<'PY'
+import json, sys
+state = json.load(open(sys.argv[1]))
+parts = state.get("source") or []
+part = next((p for p in parts if p.get("topic") == sys.argv[2] and p.get("partition") == 0), None)
+if part is None:
+    raise SystemExit(1)
+required = {"currentOffset", "checkpointOffset", "highWatermark", "lag"}
+if not required.issubset(part):
+    raise SystemExit(1)
+current = part["currentOffset"]
+high = part["highWatermark"]
+lag = part["lag"]
+if current < 9 or high < current or lag != max(0, high - current):
+    raise SystemExit(1)
+PY
+    then
+        STATE_OK=1
+        break
+    fi
+    sleep 0.2
+done
+[[ "$STATE_OK" -eq 1 ]] || fail "Kafka partition progress was not exposed correctly by /state"
+log "verified Kafka partition offsets and lag through /state"
 
 # Signal the pipeline to shut down gracefully so it flushes any pending writes
 log "sending SIGINT to pipeline for graceful shutdown"

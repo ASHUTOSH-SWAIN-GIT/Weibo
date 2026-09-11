@@ -123,6 +123,10 @@ func (a *Agent) State() State {
 	}
 	st.RecordsIn = counterValue(metrics.RecordsReadTotal)
 	st.RecordsOut = counterValue(metrics.RecordsWrittenTotal)
+	st.Ready = st.Phase == PhaseRunning
+	if a.env != nil {
+		st.Source = a.env.SourceOperationalState()
+	}
 	return st
 }
 

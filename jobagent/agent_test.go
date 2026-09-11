@@ -163,6 +163,8 @@ func TestAgent_HTTPSurface(t *testing.T) {
 		method, path string
 		want         int
 	}{
+		{"GET", "/livez", 200},
+		{"GET", "/readyz", 503}, // agent has not started yet
 		{"GET", "/healthz", 200},
 		{"GET", "/state", 200},
 		{"GET", "/describe", 200},

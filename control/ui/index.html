@@ -433,6 +433,9 @@ function viewDetail(id){
     const proc=M['weibo_records_processed_total']||[];
     const opRows=proc.length?proc.map(x=>'<tr><td class="name">'+esc(x.labels.operator||'?')+'</td><td class="num">'+fmtN(x.value)+'</td></tr>').join(''):'<tr><td colspan="2" class="dim">No operator metrics.</td></tr>';
     const metricsOpsTable=card('Operators · records processed','<table><thead><tr><th>Operator</th><th class="num">Processed</th></tr></thead><tbody>'+opRows+'</tbody></table>');
+    const partitions=st&&Array.isArray(st.source)?st.source:[];
+    const partitionRows=partitions.length?partitions.map(p=>'<tr><td class="name">'+esc(p.topic||'—')+'</td><td class="num">'+fmtN(p.partition)+'</td><td class="num">'+fmtN(p.currentOffset)+'</td><td class="num">'+fmtN(p.checkpointOffset)+'</td><td class="num">'+fmtN(p.highWatermark)+'</td><td class="num">'+fmtN(p.lag)+'</td></tr>').join(''):'<tr><td colspan="6" class="dim">Source does not expose partition progress.</td></tr>';
+    const sourceProgressTable=card('Kafka partition progress','<table><thead><tr><th>Topic</th><th class="num">Partition</th><th class="num">Current</th><th class="num">Checkpoint</th><th class="num">High watermark</th><th class="num">Lag</th></tr></thead><tbody>'+partitionRows+'</tbody></table>');
 
     // compact job metadata
     const mcell=(l,v)=>`<div class="mcell"><div class="m-l">${esc(l)}</div><div class="m-v">${v||'<span class="faint">—</span>'}</div></div>`;
@@ -475,6 +478,7 @@ function viewDetail(id){
         </div>
         ${metricsStagesTable}
         <div style="margin-top:12px">${metricsOpsTable}</div>
+        <div style="margin-top:12px">${sourceProgressTable}</div>
       </div>`;
     // checkpoint history table (from /state checkpoints)
     const cps=(st&&st.checkpoints)||[];

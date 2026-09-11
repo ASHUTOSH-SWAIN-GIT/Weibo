@@ -8,7 +8,9 @@ package main
 import (
 	"encoding/binary"
 	"fmt"
+	"os"
 	"strings"
+	"time"
 
 	"github.com/ASHUTOSH-SWAIN-GIT/weibo"
 	"github.com/ASHUTOSH-SWAIN-GIT/weibo/operator"
@@ -23,6 +25,7 @@ func main() {
 	// (/healthz, /state, /metrics) the controller talks to, and runs to
 	// completion — the same lifecycle as a YAML runner job.
 	sdk.Run(func(env *weibo.StreamExecutionEnv) {
+		testRun := os.Getenv("TEST_RUN") != ""
 		sentences := []string{
 			"hello world",
 			"hello weibo",
@@ -37,6 +40,11 @@ func main() {
 		env.
 			FromSource(source.FromSlices(keys, sentences)).
 			FlatMap(func(r types.Record) []types.Record {
+				// Keep the integration fixture alive long enough to exercise
+				// its HTTP control surface while it is running.
+				if testRun {
+					time.Sleep(500 * time.Millisecond)
+				}
 				out := make([]types.Record, 0)
 				for _, w := range strings.Fields(string(r.Value)) {
 					out = append(out, types.NewRecord([]byte(w), []byte(w)))

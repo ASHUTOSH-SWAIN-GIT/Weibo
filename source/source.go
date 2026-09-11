@@ -14,6 +14,12 @@ type Source interface {
 	Run(ctx context.Context, out chan<- types.Record) error
 }
 
+// OperationalStateProvider exposes a concurrent-safe, read-only snapshot for
+// the job agent's /state endpoint.
+type OperationalStateProvider interface {
+	OperationalState() any
+}
+
 // Describable is an optional interface that Sources can implement
 // to expose metadata for the dashboard.
 type Describable interface {

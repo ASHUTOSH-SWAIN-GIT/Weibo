@@ -35,9 +35,16 @@ func (a *Agent) Handler() http.Handler {
 	})
 
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]any{
+		st := a.State()
+		status := http.StatusOK
+		if st.Phase == PhaseFailed {
+			status = http.StatusServiceUnavailable
+		}
+		writeJSON(w, status, map[string]any{
 			"status": "ok",
-			"phase":  a.State().Phase,
+			"phase":  st.Phase,
+			"ready":  st.Ready,
+			"error":  st.LastError,
 		})
 	})
 

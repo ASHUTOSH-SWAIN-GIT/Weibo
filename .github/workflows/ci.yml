@@ -88,14 +88,32 @@ jobs:
           cache: true
 
       - name: Run tests with race detector
-        run: go test -race ./test/unit_tests/...
-
-      - name: Run window/watermark tests with race detector
-        run: go test -race ./test/unit_tests/window/... ./test/unit_tests/watermark/...
+        run: go test -race ./...
 
       - name: Test controller with race detector
         working-directory: control
         run: go test -short -race ./...
+
+  kubernetes:
+    name: kubernetes (vet + test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.2'
+          cache: true
+          cache-dependency-path: control/go.sum
+
+      - name: Vet Kubernetes controller
+        working-directory: control
+        run: go vet -tags kubernetes ./...
+
+      - name: Test Kubernetes controller with race detector
+        working-directory: control
+        run: go test -short -race -tags kubernetes ./...
 
   coverage:
     name: coverage
@@ -110,7 +128,7 @@ jobs:
           cache: true
 
       - name: Run tests with coverage
-        run: go test -coverpkg=./... -coverprofile=coverage.out -covermode=atomic ./test/unit_tests/...
+        run: go test -coverpkg=./... -coverprofile=coverage.out -covermode=atomic ./...
 
       - name: Show coverage summary
         run: go tool cover -func=coverage.out | tail -1
@@ -149,7 +167,7 @@ jobs:
           cache-dependency-path: control/go.sum
 
       - name: Build SDK test image
-        run: docker build -t weibo-sdk-demo:test examples/sdk-demo
+        run: docker build -f examples/sdk-demo/Dockerfile.integration -t weibo-sdk-demo:test .
 
       - name: Run SDK lifecycle integration
         working-directory: control

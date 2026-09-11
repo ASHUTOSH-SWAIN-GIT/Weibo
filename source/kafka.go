@@ -260,6 +260,7 @@ func (k *KafkaSource) commitWithRetry(ctx context.Context, r *kafka.Reader, msgs
 	for attempt := 0; attempt <= k.cfg.commitMaxRetries; attempt++ {
 		err := r.CommitMessages(ctx, msgs...)
 		if err == nil {
+			k.offsets.markCommitted(msgs...)
 			return nil
 		}
 		if ctx.Err() != nil {
@@ -311,6 +312,9 @@ func (k *KafkaSource) commitBatchWithRetry(ctx context.Context, r *kafka.Reader)
 func (k *KafkaSource) CheckpointOffset() ([]byte, error) {
 	return k.offsets.snapshot()
 }
+
+// OperationalState returns live per-topic/partition progress and lag.
+func (k *KafkaSource) OperationalState() any { return k.offsets.operationalState() }
 
 // RestoreOffset restores per-partition offsets from a checkpoint.
 func (k *KafkaSource) RestoreOffset(data []byte) error {

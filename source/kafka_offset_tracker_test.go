@@ -59,6 +59,19 @@ func TestOffsetTracker_RestoreRejectsBadJSON(t *testing.T) {
 	}
 }
 
+func TestOffsetTrackerOperationalStateIncludesTopicPartitionAndLag(t *testing.T) {
+	tr := newOffsetTracker()
+	if err := tr.restore([]byte(`{"1":7}`)); err != nil {
+		t.Fatal(err)
+	}
+	tr.track(kafka.Message{Topic: "orders", Partition: 1, Offset: 9, HighWaterMark: 15})
+	got := tr.operationalState()
+	if len(got) != 1 || got[0].Topic != "orders" || got[0].Partition != 1 ||
+		got[0].CurrentOffset != 10 || got[0].CheckpointOffset != 7 || got[0].HighWatermark != 15 || got[0].Lag != 5 {
+		t.Fatalf("operational state = %+v", got)
+	}
+}
+
 func decodeOffsets(t *testing.T, tr *offsetTracker) map[string]int64 {
 	t.Helper()
 	data, err := tr.snapshot()

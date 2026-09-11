@@ -185,6 +185,15 @@ func (env *StreamExecutionEnv) FromSource(src source.Source) *Stream {
 	return &Stream{env: env}
 }
 
+// SourceOperationalState returns connector-specific, read-only live state for
+// the job agent. Nil means the configured source does not expose it.
+func (env *StreamExecutionEnv) SourceOperationalState() any {
+	if p, ok := env.source.(source.OperationalStateProvider); ok {
+		return p.OperationalState()
+	}
+	return nil
+}
+
 // Execute runs the pipeline. Operators are grouped into execution
 // stages (see the pipeline package); stages run concurrently,
 // connected by bounded edges. A full edge blocks the upstream stage —

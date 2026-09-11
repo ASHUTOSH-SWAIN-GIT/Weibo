@@ -46,6 +46,8 @@ type State struct {
 	Uptime     string    `json:"uptime"`
 	RecordsIn  int64     `json:"recordsIn"`
 	RecordsOut int64     `json:"recordsOut"`
+	Ready      bool      `json:"ready"`
+	Source     any       `json:"source,omitempty"`
 
 	// CurrentCheckpointID is the ID of the most recently completed
 	// checkpoint, empty until the first one completes.

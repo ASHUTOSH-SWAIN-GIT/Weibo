@@ -127,16 +127,17 @@ lateness bound, since late records may reopen a window that already fired.
 
 The production test showed these gaps directly.
 
-12. **Metrics/health server by default.** The standalone pipeline needed a
-    hand-written `:18080` server. Bake a standard `/metrics` + `/healthz` server
-    into `sdk.Run` and the runner (opt-out via env), so *every* job is scrapable
-    with zero boilerplate. The dashboard-managed jobs already get this via the
-    jobagent — unify the two paths.
+12. ~~**Metrics/health server by default.**~~ **Done.** SDK and YAML jobs share
+    `sdk.Serve` and the job agent, with `/livez`, `/readyz`, `/healthz`,
+    `/state`, `/describe`, `/plan`, `/metrics`, `/cancel`, and `/savepoint`.
+    Health now distinguishes process liveness, running readiness, and terminal
+    failure while preserving `/healthz` compatibility.
 
-13. **Consumer-group lag & offset visibility.** The "0 records read" confusion
-    was a stale consumer group resuming from a committed offset. Surface
-    per-partition offset/lag in `/state` and the dashboard, and document/flag the
-    "fresh group replays from earliest" behavior.
+13. ~~**Consumer-group lag & offset visibility.**~~ **Done.** Kafka sources
+    expose sorted per-topic/partition current, checkpoint/committed, high-water,
+    and lag positions through the shared `/state` contract. The controller's
+    state proxy and dashboard Metrics tab render the same data for Docker and
+    Kubernetes jobs.
 
 14. **Dashboard metrics: history + Grafana deep-link.** The new in-app Metrics
     page is point-in-time. Add (a) small sparklines / a short rolling window, and
@@ -184,7 +185,7 @@ The production test showed these gaps directly.
 - ~~**Sprint 1 (correctness):** Tier 1, then Tier 2 #6–#7.~~ Done — Tier 1 is
   fixed (with #5 mitigated by a poll timeout rather than the high-water-offset
   rework), and Tier 2 is fully closed.
-- **Sprint 2 (hardening + ops) — current:** Tier 4 #12–#13 while
+- **Sprint 2 (hardening + ops) — current:** Tier 4 #14–#15 while
   the testing context is fresh.
 - **Sprint 3+ (features):** Tier 5, starting with allowed-lateness (#16), which
   the windowing work in Sprint 1 sets up.
@@ -192,5 +193,5 @@ The production test showed these gaps directly.
 
 ~~The single highest-leverage item is **#1 (multi-partition checkpoint
 offsets)**~~ — shipped. With Tiers 1 and 2 closed, the highest-leverage
-remaining item is **#12 (standard health and metrics surface)** so standalone
-jobs and controller-managed jobs expose the same operational contract.
+remaining item is **#14 (metrics history and Grafana deep links)** so operators
+can diagnose trends instead of seeing only a point-in-time snapshot.

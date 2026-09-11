@@ -2,7 +2,10 @@ package control_test
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"strings"
 	"testing"
@@ -74,6 +77,19 @@ func TestIntegration_SDKImageLifecycle(t *testing.T) {
 		t.Fatal("SDK submission did not launch a container")
 	}
 
+	var agentURL string
+	if !waitFor(10*time.Second, func() bool {
+		addr, addressErr := ctrl.ControlAddress(ctx, job.ID)
+		if addressErr != nil || addr == "" {
+			return false
+		}
+		agentURL = "http://" + addr
+		return endpointStatus(agentURL+"/readyz") == http.StatusOK
+	}) {
+		t.Fatal("SDK control surface did not become ready")
+	}
+	assertAgentSurface(t, agentURL)
+
 	snap, err := docker.Capacity(ctx, backend.CapacityConfig{DefaultJobCPU: "1", DefaultJobMemory: "1Gi"})
 	if err != nil {
 		t.Fatal(err)
@@ -114,6 +130,46 @@ func TestIntegration_SDKImageLifecycle(t *testing.T) {
 	jobs, _ := ctrl2.ListJobs()
 	if len(jobs) != 1 || jobs[0].ID != job.ID || jobs[0].Kind != store.KindSDK {
 		t.Fatalf("controller restart lost SDK job: %+v", jobs)
+	}
+}
+
+func endpointStatus(url string) int {
+	client := &http.Client{Timeout: 2 * time.Second}
+	resp, err := client.Get(url)
+	if err != nil {
+		return 0
+	}
+	defer resp.Body.Close()
+	return resp.StatusCode
+}
+
+func assertAgentSurface(t *testing.T, baseURL string) {
+	t.Helper()
+	for _, path := range []string{"/livez", "/readyz", "/healthz", "/state", "/metrics"} {
+		resp, err := http.Get(baseURL + path)
+		if err != nil {
+			t.Fatalf("GET %s: %v", path, err)
+		}
+		body, readErr := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if readErr != nil {
+			t.Fatalf("read %s: %v", path, readErr)
+		}
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("GET %s: status=%d body=%s", path, resp.StatusCode, body)
+		}
+		if path == "/state" {
+			var state struct {
+				Phase string `json:"phase"`
+				Ready bool   `json:"ready"`
+			}
+			if err := json.Unmarshal(body, &state); err != nil {
+				t.Fatalf("decode /state: %v", err)
+			}
+			if state.Phase != "running" || !state.Ready {
+				t.Fatalf("unexpected running state: %+v", state)
+			}
+		}
 	}
 }
 

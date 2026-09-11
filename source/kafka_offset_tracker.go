@@ -1,9 +1,12 @@
 package source
 
 import (
+	"cmp"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/segmentio/kafka-go"
@@ -26,14 +29,33 @@ type offsetTracker struct {
 
 	// restored maps partition -> seek target populated from a checkpoint by
 	// restore. Readers seek to these on startup.
-	restored map[int]int64
+	restored  map[int]int64
+	progress  map[topicPartition]PartitionProgress
+	committed map[int]int64
+}
+
+type topicPartition struct {
+	topic     string
+	partition int
+}
+
+// PartitionProgress is one Kafka partition's live consumption position.
+type PartitionProgress struct {
+	Topic            string `json:"topic"`
+	Partition        int    `json:"partition"`
+	CurrentOffset    int64  `json:"currentOffset"`
+	CheckpointOffset int64  `json:"checkpointOffset,omitempty"`
+	HighWatermark    int64  `json:"highWatermark,omitempty"`
+	Lag              int64  `json:"lag"`
 }
 
 // newOffsetTracker returns an offsetTracker with initialised maps.
 func newOffsetTracker() *offsetTracker {
 	return &offsetTracker{
-		consumed: make(map[int]int64),
-		restored: make(map[int]int64),
+		consumed:  make(map[int]int64),
+		restored:  make(map[int]int64),
+		progress:  make(map[topicPartition]PartitionProgress),
+		committed: make(map[int]int64),
 	}
 }
 
@@ -43,7 +65,46 @@ func newOffsetTracker() *offsetTracker {
 func (t *offsetTracker) track(msg kafka.Message) {
 	t.mu.Lock()
 	t.consumed[msg.Partition] = msg.Offset + 1
+	key := topicPartition{topic: msg.Topic, partition: msg.Partition}
+	p := t.progress[key]
+	p.Topic, p.Partition = msg.Topic, msg.Partition
+	p.CurrentOffset = msg.Offset + 1
+	p.CheckpointOffset = max(t.restored[msg.Partition], t.committed[msg.Partition])
+	p.HighWatermark = msg.HighWaterMark
+	p.Lag = max(0, p.HighWatermark-p.CurrentOffset)
+	t.progress[key] = p
 	t.mu.Unlock()
+}
+
+func (t *offsetTracker) markCommitted(msgs ...kafka.Message) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for _, msg := range msgs {
+		next := msg.Offset + 1
+		t.committed[msg.Partition] = next
+		for key, p := range t.progress {
+			if key.partition == msg.Partition && (msg.Topic == "" || key.topic == msg.Topic) {
+				p.CheckpointOffset = next
+				t.progress[key] = p
+			}
+		}
+	}
+}
+
+func (t *offsetTracker) operationalState() []PartitionProgress {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	out := make([]PartitionProgress, 0, len(t.progress))
+	for _, p := range t.progress {
+		out = append(out, p)
+	}
+	slices.SortFunc(out, func(a, b PartitionProgress) int {
+		if c := strings.Compare(a.Topic, b.Topic); c != 0 {
+			return c
+		}
+		return cmp.Compare(a.Partition, b.Partition)
+	})
+	return out
 }
 
 // snapshot returns the current position as JSON bytes:

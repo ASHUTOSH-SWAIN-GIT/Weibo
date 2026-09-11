@@ -43,7 +43,7 @@ jobs:
 
       - name: Test control module
         working-directory: control
-        run: go test -short ./...
+        run: go test -short -tags kubernetes ./...
 
       - name: Build Linux binaries
         working-directory: control
@@ -53,6 +53,7 @@ jobs:
           mkdir -p dist
           for arch in amd64 arm64; do
             GOOS=linux GOARCH="$arch" go build \
+              -tags kubernetes \
               -trimpath \
               -ldflags="-s -w" \
               -o "dist/weibo-linux-$arch" \

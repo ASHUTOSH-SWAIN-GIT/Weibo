@@ -1,0 +1,21 @@
+# CI-only SDK image: compile the external-module example against the current
+# repository checkout so integration tests cover this commit's job-agent API.
+FROM golang:1.26 AS build
+WORKDIR /src
+COPY . .
+WORKDIR /src/examples/sdk-demo
+RUN GOWORK=off go mod edit -replace github.com/ASHUTOSH-SWAIN-GIT/weibo=../.. && \
+    GOWORK=off CGO_ENABLED=0 GOOS=linux go build -mod=mod -trimpath -ldflags="-s -w" -o /out/job .
+RUN mkdir -p /out/data /out/savepoints
+
+FROM gcr.io/distroless/static-debian12:nonroot
+COPY --from=build /out/job /usr/local/bin/job
+COPY --from=build --chown=65532:65532 /out/data /data
+COPY --from=build --chown=65532:65532 /out/savepoints /savepoints
+ENV DATA_DIR=/data \
+    SAVEPOINT_DIR=/savepoints \
+    PORT=8080
+VOLUME ["/data", "/savepoints"]
+EXPOSE 8080
+USER nonroot:nonroot
+ENTRYPOINT ["/usr/local/bin/job"]

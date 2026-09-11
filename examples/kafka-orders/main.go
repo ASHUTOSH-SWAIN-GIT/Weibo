@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/ASHUTOSH-SWAIN-GIT/weibo"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/sdk"
 	"github.com/ASHUTOSH-SWAIN-GIT/weibo/sink"
 	"github.com/ASHUTOSH-SWAIN-GIT/weibo/source"
 	"github.com/ASHUTOSH-SWAIN-GIT/weibo/types"
@@ -60,10 +61,12 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	if err := env.Execute(ctx); err != nil {
-		fmt.Fprintf(os.Stderr, "pipeline error: %v\n", err)
-		os.Exit(1)
-	}
+	os.Exit(sdk.Serve(ctx, env, sdk.ServeOptions{
+		Name:   "kafka-orders",
+		Port:   os.Getenv("PORT"),
+		Stdout: os.Stdout,
+		Stderr: os.Stderr,
+	}))
 }
 
 // parseOrder extracts the deserialized Order from record.Parsed and stores
