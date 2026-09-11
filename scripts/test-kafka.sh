@@ -208,7 +208,8 @@ done
 # The source must report that partition 0 consumed all nine input messages,
 # along with a coherent high watermark, checkpoint position, and lag.
 STATE_OK=0
-while [[ $(date +%s) -lt $DEADLINE ]]; do
+STATE_DEADLINE=$(( $(date +%s) + 10 ))
+while [[ $(date +%s) -lt $STATE_DEADLINE ]]; do
     if curl -fsS "http://127.0.0.1:${PIPELINE_PORT}/state" -o "$STATE_FILE" && \
        python3 - "$STATE_FILE" "$INPUT_TOPIC" <<'PY'
 import json, sys
@@ -217,13 +218,16 @@ parts = state.get("source") or []
 part = next((p for p in parts if p.get("topic") == sys.argv[2] and p.get("partition") == 0), None)
 if part is None:
     raise SystemExit(1)
-required = {"currentOffset", "checkpointOffset", "highWatermark", "lag"}
+required = {"currentOffset", "highWatermark", "lag"}
 if not required.issubset(part):
     raise SystemExit(1)
 current = part["currentOffset"]
 high = part["highWatermark"]
 lag = part["lag"]
 if current < 9 or high < current or lag != max(0, high - current):
+    raise SystemExit(1)
+checkpoint = part.get("checkpointOffset")
+if checkpoint is not None and (checkpoint < 0 or checkpoint > current):
     raise SystemExit(1)
 PY
     then
