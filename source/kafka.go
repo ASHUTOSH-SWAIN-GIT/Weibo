@@ -3,7 +3,6 @@ package source
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -147,6 +146,9 @@ func (k *KafkaSource) runOnce(ctx context.Context, out chan<- types.Record) erro
 		return k.partitions.run(ctx, k.initialPartitions, k.readerHandle(out))
 	}
 	defer k.readers.closeAll()
+	if err := k.applyRestoredGroupOffsets(ctx); err != nil {
+		return fmt.Errorf("kafka restore offsets: %w", err)
+	}
 	return k.runSerial(ctx, out)
 }
 
@@ -294,8 +296,8 @@ func (k *KafkaSource) commitBatchWithRetry(ctx context.Context, r *kafka.Reader)
 	return k.commitWithRetry(ctx, r, msgs...)
 }
 
-// CheckpointOffset returns the source's current position as JSON bytes:
-// {"<partition>": <nextOffsetToRead>} for every partition consumed so far.
+// CheckpointOffset returns the source's current topic+partition positions in a
+// versioned JSON envelope.
 //
 // This is the fallback offset source. The engine prefers barrier-aligned
 // offsets captured at barrier injection (which reflect exactly the records
@@ -304,13 +306,13 @@ func (k *KafkaSource) commitBatchWithRetry(ctx context.Context, r *kafka.Reader)
 // every partition — the previous reader.Stats() implementation reported only
 // one partition per reader, so a multi-partition consumer group lost all but
 // one partition's offset from the checkpoint.
-//
-// Keyed by partition only, matching RestoreOffset/CommitOffsets and the
-// barrier-aligned offset map; a single consumer group spanning multiple
-// topics with overlapping partition ids is not distinguished (documented
-// limitation shared by the whole offset path).
 func (k *KafkaSource) CheckpointOffset() ([]byte, error) {
 	return k.offsets.snapshot()
+}
+
+// CheckpointPosition preserves the Kafka topic during barrier-aligned tracking.
+func (k *KafkaSource) CheckpointPosition(record types.Record) PositionKey {
+	return PositionKey{Source: record.Source, Partition: record.Partition}
 }
 
 // OperationalState returns live per-topic/partition progress and lag.
@@ -318,7 +320,68 @@ func (k *KafkaSource) OperationalState() any { return k.offsets.operationalState
 
 // RestoreOffset restores per-partition offsets from a checkpoint.
 func (k *KafkaSource) RestoreOffset(data []byte) error {
-	return k.offsets.restore(data)
+	return k.offsets.restore(data, k.legacyCheckpointTopic())
+}
+
+func (k *KafkaSource) legacyCheckpointTopic() string {
+	if k.cfg.topic != "" {
+		return k.cfg.topic
+	}
+	if len(k.cfg.topics) == 1 {
+		return k.cfg.topics[0]
+	}
+	return ""
+}
+
+func (k *KafkaSource) configuredTopics() []string {
+	if k.cfg.topic != "" {
+		return []string{k.cfg.topic}
+	}
+	return append([]string(nil), k.cfg.topics...)
+}
+
+// applyRestoredGroupOffsets makes checkpoint state authoritative over broker
+// commits before the Reader joins for normal consumption. kafka-go's Reader
+// cannot SetOffset in group mode, so a short-lived group generation resets the
+// complete topic+partition map at the coordinator.
+func (k *KafkaSource) applyRestoredGroupOffsets(ctx context.Context) error {
+	positions := k.offsets.restoredPositions()
+	if len(positions) == 0 {
+		return nil
+	}
+	if k.cfg.groupID == "" {
+		if len(positions) != 1 {
+			return fmt.Errorf("non-group serial source cannot restore %d partitions", len(positions))
+		}
+		return k.readers.primary().SetOffset(positions[0].Offset)
+	}
+
+	cfg := kafka.ConsumerGroupConfig{
+		ID:          k.cfg.groupID,
+		Brokers:     k.cfg.brokers,
+		Topics:      k.configuredTopics(),
+		StartOffset: k.cfg.offsetSpec.toKafka(),
+	}
+	if k.cfg.sasl != nil || k.cfg.tls != nil {
+		cfg.Dialer = buildDialer(k.cfg.sasl, k.cfg.tls)
+	}
+	group, err := kafka.NewConsumerGroup(cfg)
+	if err != nil {
+		return err
+	}
+	defer group.Close()
+	generation, err := group.Next(ctx)
+	if err != nil {
+		return err
+	}
+	offsets := make(map[string]map[int]int64)
+	for _, position := range positions {
+		if offsets[position.Source] == nil {
+			offsets[position.Source] = make(map[int]int64)
+		}
+		offsets[position.Source][position.Partition] = position.Offset
+	}
+	return generation.CommitOffsets(offsets)
 }
 
 // KafkaToRecord converts a kafka.Message to a weibo.Record.
@@ -341,6 +404,7 @@ func KafkaToRecord(msg kafka.Message) types.Record {
 		Timestamp: msg.Time,
 		Offset:    msg.Offset,
 		Partition: msg.Partition,
+		Source:    msg.Topic,
 		Headers:   headers,
 	}
 }
@@ -355,12 +419,13 @@ func (r *kafkaSourceRunner) Run(ctx context.Context, out chan<- types.Record) er
 
 // Compile-time checks.
 var (
-	_ Source           = (*KafkaSource)(nil)
-	_ CheckpointSource = (*KafkaSource)(nil)
-	_ OffsetCommitter  = (*KafkaSource)(nil)
-	_ Drainable        = (*KafkaSource)(nil)
-	_ Describable      = (*KafkaSource)(nil)
-	_ Source           = (*kafkaSourceRunner)(nil)
+	_ Source                     = (*KafkaSource)(nil)
+	_ CheckpointSource           = (*KafkaSource)(nil)
+	_ PositionedCheckpointSource = (*KafkaSource)(nil)
+	_ OffsetCommitter            = (*KafkaSource)(nil)
+	_ Drainable                  = (*KafkaSource)(nil)
+	_ Describable                = (*KafkaSource)(nil)
+	_ Source                     = (*kafkaSourceRunner)(nil)
 )
 
 // Drain flushes pending offset commits. Called during graceful shutdown
@@ -384,23 +449,18 @@ func (k *KafkaSource) CommitOffsets(ctx context.Context, data []byte) error {
 	if k.cfg.groupID == "" {
 		return nil
 	}
-	var offsets map[string]int64
-	if err := json.Unmarshal(data, &offsets); err != nil {
-		return fmt.Errorf("commit offsets: unmarshal: %w", err)
+	positions, err := DecodePositions(data, k.legacyCheckpointTopic())
+	if err != nil {
+		return fmt.Errorf("commit offsets: %w", err)
 	}
-	msgs := make([]kafka.Message, 0, len(offsets))
-	for partStr, next := range offsets {
-		if next <= 0 {
-			continue
-		}
-		var part int
-		fmt.Sscanf(partStr, "%d", &part)
+	msgs := make([]kafka.Message, 0, len(positions))
+	for _, position := range positions {
 		// CommitMessages commits msg.Offset+1 (the next offset to
-		// read), matching our stored {"partition": nextOffset} shape.
+		// read), matching Position.Offset.
 		msgs = append(msgs, kafka.Message{
-			Topic:     k.cfg.topic,
-			Partition: part,
-			Offset:    next - 1,
+			Topic:     position.Source,
+			Partition: position.Partition,
+			Offset:    position.Offset - 1,
 		})
 	}
 	if len(msgs) == 0 {

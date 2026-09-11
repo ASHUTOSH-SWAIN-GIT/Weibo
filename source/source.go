@@ -2,9 +2,84 @@ package source
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
+	"sort"
+	"strconv"
 
 	"github.com/ASHUTOSH-SWAIN-GIT/weibo/types"
 )
+
+// Position is the next source offset to read for one source stream/partition.
+// Source is connector-defined; Kafka uses the topic name.
+type Position struct {
+	Source    string `json:"source"`
+	Partition int    `json:"partition"`
+	Offset    int64  `json:"offset"`
+}
+
+// PositionKey is the comparable identity used while tracking positions.
+type PositionKey struct {
+	Source    string
+	Partition int
+}
+
+type positionEnvelope struct {
+	Version   int        `json:"version"`
+	Positions []Position `json:"positions"`
+}
+
+// EncodePositions writes the versioned topic-aware checkpoint format.
+func EncodePositions(positions []Position) ([]byte, error) {
+	positions = append([]Position(nil), positions...)
+	sort.Slice(positions, func(i, j int) bool {
+		if positions[i].Source != positions[j].Source {
+			return positions[i].Source < positions[j].Source
+		}
+		return positions[i].Partition < positions[j].Partition
+	})
+	return json.Marshal(positionEnvelope{Version: 2, Positions: positions})
+}
+
+// DecodePositions reads the current format and legacy {"partition": offset}
+// checkpoints. Legacy data requires a single unambiguous default source.
+func DecodePositions(data []byte, legacySource string) ([]Position, error) {
+	var envelope positionEnvelope
+	if err := json.Unmarshal(data, &envelope); err == nil && envelope.Version != 0 {
+		if envelope.Version != 2 {
+			return nil, fmt.Errorf("source positions: unsupported version %d", envelope.Version)
+		}
+		seen := make(map[PositionKey]struct{}, len(envelope.Positions))
+		for _, p := range envelope.Positions {
+			if p.Source == "" || p.Partition < 0 || p.Offset < 0 {
+				return nil, fmt.Errorf("source positions: invalid position %+v", p)
+			}
+			key := PositionKey{Source: p.Source, Partition: p.Partition}
+			if _, ok := seen[key]; ok {
+				return nil, fmt.Errorf("source positions: duplicate %s/%d", p.Source, p.Partition)
+			}
+			seen[key] = struct{}{}
+		}
+		return envelope.Positions, nil
+	}
+
+	if legacySource == "" {
+		return nil, fmt.Errorf("source positions: legacy checkpoint has no unambiguous source")
+	}
+	var legacy map[string]int64
+	if err := json.Unmarshal(data, &legacy); err != nil {
+		return nil, fmt.Errorf("source positions: decode: %w", err)
+	}
+	positions := make([]Position, 0, len(legacy))
+	for partText, offset := range legacy {
+		part, err := strconv.Atoi(partText)
+		if err != nil || part < 0 || offset < 0 {
+			return nil, fmt.Errorf("source positions: invalid legacy position %q=%d", partText, offset)
+		}
+		positions = append(positions, Position{Source: legacySource, Partition: part, Offset: offset})
+	}
+	return positions, nil
+}
 
 // Source is where data enters the pipeline.
 // A Source continuously emits Records into the output channel until
@@ -42,6 +117,13 @@ type CheckpointSource interface {
 
 	// RestoreOffset seeks the source to the position saved by CheckpointOffset.
 	RestoreOffset(data []byte) error
+}
+
+// PositionedCheckpointSource lets a source preserve identity beyond a numeric
+// partition when the engine captures barrier-aligned positions. Sources that
+// do not implement it retain the legacy partition-only checkpoint contract.
+type PositionedCheckpointSource interface {
+	CheckpointPosition(record types.Record) PositionKey
 }
 
 // Drainable is an optional interface that sources implement to flush

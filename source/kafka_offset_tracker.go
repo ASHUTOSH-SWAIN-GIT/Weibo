@@ -2,10 +2,7 @@ package source
 
 import (
 	"cmp"
-	"encoding/json"
-	"fmt"
 	"slices"
-	"strconv"
 	"strings"
 	"sync"
 
@@ -23,15 +20,15 @@ type offsetTracker struct {
 	// mu guards consumed and restored.
 	mu sync.Mutex
 
-	// consumed maps partition -> next offset to read, advanced as each
+	// consumed maps topic+partition -> next offset to read, advanced as each
 	// message is consumed. It is what CheckpointOffset snapshots.
-	consumed map[int]int64
+	consumed map[topicPartition]int64
 
 	// restored maps partition -> seek target populated from a checkpoint by
 	// restore. Readers seek to these on startup.
-	restored  map[int]int64
+	restored  map[topicPartition]int64
 	progress  map[topicPartition]PartitionProgress
-	committed map[int]int64
+	committed map[topicPartition]int64
 }
 
 type topicPartition struct {
@@ -52,10 +49,10 @@ type PartitionProgress struct {
 // newOffsetTracker returns an offsetTracker with initialised maps.
 func newOffsetTracker() *offsetTracker {
 	return &offsetTracker{
-		consumed:  make(map[int]int64),
-		restored:  make(map[int]int64),
+		consumed:  make(map[topicPartition]int64),
+		restored:  make(map[topicPartition]int64),
 		progress:  make(map[topicPartition]PartitionProgress),
-		committed: make(map[int]int64),
+		committed: make(map[topicPartition]int64),
 	}
 }
 
@@ -64,12 +61,12 @@ func newOffsetTracker() *offsetTracker {
 // reader.Stats() happens to surface in consumer-group mode.
 func (t *offsetTracker) track(msg kafka.Message) {
 	t.mu.Lock()
-	t.consumed[msg.Partition] = msg.Offset + 1
 	key := topicPartition{topic: msg.Topic, partition: msg.Partition}
+	t.consumed[key] = msg.Offset + 1
 	p := t.progress[key]
 	p.Topic, p.Partition = msg.Topic, msg.Partition
 	p.CurrentOffset = msg.Offset + 1
-	p.CheckpointOffset = max(t.restored[msg.Partition], t.committed[msg.Partition])
+	p.CheckpointOffset = max(t.restored[key], t.committed[key])
 	p.HighWatermark = msg.HighWaterMark
 	p.Lag = max(0, p.HighWatermark-p.CurrentOffset)
 	t.progress[key] = p
@@ -81,12 +78,11 @@ func (t *offsetTracker) markCommitted(msgs ...kafka.Message) {
 	defer t.mu.Unlock()
 	for _, msg := range msgs {
 		next := msg.Offset + 1
-		t.committed[msg.Partition] = next
-		for key, p := range t.progress {
-			if key.partition == msg.Partition && (msg.Topic == "" || key.topic == msg.Topic) {
-				p.CheckpointOffset = next
-				t.progress[key] = p
-			}
+		key := topicPartition{topic: msg.Topic, partition: msg.Partition}
+		t.committed[key] = next
+		if p, ok := t.progress[key]; ok {
+			p.CheckpointOffset = next
+			t.progress[key] = p
 		}
 	}
 }
@@ -107,18 +103,16 @@ func (t *offsetTracker) operationalState() []PartitionProgress {
 	return out
 }
 
-// snapshot returns the current position as JSON bytes:
-// {"<partition>": <nextOffsetToRead>} for every partition consumed so far.
-// Keyed by partition only, matching restore/CommitOffsets and the
-// barrier-aligned offset map.
+// snapshot returns every current topic+partition position in the shared
+// versioned checkpoint format.
 func (t *offsetTracker) snapshot() ([]byte, error) {
 	t.mu.Lock()
-	offsets := make(map[string]int64, len(t.consumed))
-	for part, next := range t.consumed {
-		offsets[strconv.Itoa(part)] = next
+	positions := make([]Position, 0, len(t.consumed))
+	for key, next := range t.consumed {
+		positions = append(positions, Position{Source: key.topic, Partition: key.partition, Offset: next})
 	}
 	t.mu.Unlock()
-	return json.Marshal(offsets)
+	return EncodePositions(positions)
 }
 
 // restore loads per-partition offsets from a checkpoint. Each partition's
@@ -126,17 +120,16 @@ func (t *offsetTracker) snapshot() ([]byte, error) {
 // partition that receives no new message this run still carries its restored
 // position into the next checkpoint — otherwise a quiet partition would be
 // dropped and a later restart would not resume it.
-func (t *offsetTracker) restore(data []byte) error {
-	var offsets map[string]int64
-	if err := json.Unmarshal(data, &offsets); err != nil {
-		return fmt.Errorf("restore offset: unmarshal: %w", err)
+func (t *offsetTracker) restore(data []byte, legacySource string) error {
+	positions, err := DecodePositions(data, legacySource)
+	if err != nil {
+		return err
 	}
 	t.mu.Lock()
-	for partStr, off := range offsets {
-		var partInt int
-		fmt.Sscanf(partStr, "%d", &partInt)
-		t.restored[partInt] = off
-		t.consumed[partInt] = off
+	for _, position := range positions {
+		key := topicPartition{topic: position.Source, partition: position.Partition}
+		t.restored[key] = position.Offset
+		t.consumed[key] = position.Offset
 	}
 	t.mu.Unlock()
 	return nil
@@ -150,9 +143,19 @@ func (t *offsetTracker) hasRestored() bool {
 }
 
 // restoredOffset returns the seek target for a partition, if one was restored.
-func (t *offsetTracker) restoredOffset(part int) (int64, bool) {
+func (t *offsetTracker) restoredOffset(topic string, part int) (int64, bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	off, ok := t.restored[part]
+	off, ok := t.restored[topicPartition{topic: topic, partition: part}]
 	return off, ok
+}
+
+func (t *offsetTracker) restoredPositions() []Position {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	positions := make([]Position, 0, len(t.restored))
+	for key, offset := range t.restored {
+		positions = append(positions, Position{Source: key.topic, Partition: key.partition, Offset: offset})
+	}
+	return positions
 }

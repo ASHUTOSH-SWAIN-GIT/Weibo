@@ -134,7 +134,7 @@ Everything flows through the same `chan types.Record`:
 | **Barrier** | `IsBarrier` + `CheckpointID` | `injectBarriers` goroutine | stateful ops (snapshot), sink (commit), coordinator |
 
 A data `Record` = `Key []byte`, `Value []byte`, `Timestamp`, `Offset`,
-`Partition`, `Headers map[string][]byte`.
+`Partition`, `Source` (Kafka topic), `Headers map[string][]byte`.
 
 ---
 

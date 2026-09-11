@@ -1,197 +1,285 @@
-# Weibo — Roadmap
+# Weibo — Repository Audit Roadmap
 
-What to work on next, prioritized. Compiled from a dual (Claude + Codex) code
-audit and a production-style Kafka load test (continuous stream → window → sink,
-with Prometheus/Grafana and the control-plane dashboard).
+Fresh audit: 2026-09-12. This supersedes the old roadmap, which mixed completed
+work with stale findings.
 
-Ordering principle: **correctness before features.** A stream engine's whole
-value proposition is "no data loss, exactly-once." Bugs that undermine that come
-first; new capabilities come after the guarantees are solid.
+## Current baseline
 
-> Already shipped in the last pass (not repeated below): ~20 small fixes
-> (state-copy on `Get`, `WithHeader` map clone, watermark ctx-leak, tar
-> path-traversal guard, Postgres schema-qualified quoting, Kafka `batchSize`,
-> API 400 on bad JSON, validation-message fixes, doc drift), the Grafana
-> compose fix, the weibo-test observability stack, and the dashboard's built-in
-> **Metrics** page.
+Weibo already has bounded backpressure, keyed parallel stages with marker
+alignment, memory/Pebble state, coordinated checkpoints, transactional Kafka
+output, declarative and SDK jobs, Docker/Kubernetes control backends, and broad
+CI coverage.
 
----
-
-## Tier 1 — Correctness (do first; these break the core guarantees)
-
-These are real bugs found by **both** auditors independently, or that directly
-threaten exactly-once. Each needs a fix **plus a regression test**.
-
-1. **Multi-partition / multi-topic Kafka checkpoint offsets** — `source/kafka.go`
-   (`CheckpointOffset`, ~line 376–400). Offsets are derived from
-   `reader.Stats()`, which in consumer-group mode reports a single partition, and
-   the checkpoint key is partition-only (topics collide). **This silently breaks
-   exactly-once on any multi-partition source** — the most important item on this
-   list. Fix: track committed offset per `(topic, partition)` from consumed
-   messages, not aggregate reader stats.
-
-2. **Non-keyed stateful state lost on restart** — `weibo.go` (~line 854).
-   A `Window`/`Reduce` used *without* `KeyBy` is snapshotted under `op-<i>` keys
-   but recovery only restores `worker-<idx>`, so its state silently resets on
-   restart — contradicting the "restore all stateful operators" contract. Fix:
-   add an `op-<i>` restore loop mirroring the worker loop.
-
-3. **Checkpoint coordinator send-on-closed race** — `checkpoint/coordinator.go`
-   (~line 164). `OnSinkPrepared` can send on `c.events` after `Stop()` closed it
-   → panic. Fix: guard send/close mutual exclusion; add a `-race` test.
-
-4. **Transactional sink error latching** — `sink/kafka_txn.go` (~line 236).
-   `produceErr` is set once and never cleared, so one transient produce error
-   fails **every** subsequent checkpoint. Fix: reset on commit/abort.
-
-5. **`WasCommitted` can block until ctx timeout** — `sink/kafka_txn.go` (~line
-   378). If the trailing records before the target offset are transaction-control
-   / aborted (not surfaced under `read_committed`), the recovery probe never
-   drains. Fix: track progress by high-water offset, not data-record offsets.
+The ordering below is **correctness → durability → control-plane safety →
+operability → features**. Every item includes tests, documentation, and
+observable failure behavior.
 
 ---
 
-## Tier 2 — Windowing semantics (surfaced by the production test) — ✅ DONE
+## P0 — Checkpoint and delivery correctness
 
-The load test exposed how `Window → Reduce` actually behaves, and it was the
-biggest usability gap for real analytics. All three items are now fixed.
+### 1. Make source positions topic-aware end to end — ✅ DONE
 
-6. ~~**Windowed aggregation emits partials, not one result per window.**~~
-   **Fixed.** `WindowOperator.Reducer` (`operator/window.go`) folds a window's
-   buffered records internally and `fireWindow` emits ONE aggregate per
-   `(key, window)` at close. Exposed as `Stream.WindowReduce` /
-   `WindowReduceWithIdleTimeout` (`stream.go`). The incremental
-   `Window(...).Reduce(...)` form still works — the reducer is opt-in.
-   Covered by `test/unit_tests/operator/window_reduce_test.go`.
+**Finding:** Kafka operational state is keyed by `(topic, partition)`, but
+`offsetTracker.consumed` and the barrier injector in `mailer.go` use only
+`partition`. `CheckpointOffset`, `RestoreOffset`, and `CommitOffsets` serialize
+`{"<partition>": offset}`. Two topics using partition `0` can overwrite each
+other in one checkpoint.
 
-7. ~~**Per-`(key, window)` reduce state is never evicted.**~~ **Fixed.**
-   `ReduceOperator` tracks a window-close frontier (the highest `window_end`
-   seen on its input) and, when it advances, evicts every state entry whose
-   window closed below it (`operator/reduce.go`,
-   `advanceWindowFrontier`/`evictClosedWindows`). Memory is now bounded by the
-   open windows, not by every window ever seen, and checkpoints stop growing.
-   Non-windowed (streaming) reduce state is untouched — its per-key
-   accumulator is still the lifetime running total.
+**Shipped:** source positions now use a versioned topic/partition/next-offset
+envelope. Kafka records carry topic identity; barrier tracking, fallback
+snapshots, restore, broker commits, and `/state` share that identity. Existing
+single-topic partition-only checkpoints remain readable; ambiguous legacy
+multi-topic restore fails explicitly. Consumer-group recovery resets broker
+positions from the checkpoint before normal reading begins.
 
-   Note on the mechanism: watermark records could **not** be used as the
-   eviction trigger, because `WindowOperator.handleWatermark` consumes
-   watermarks without forwarding them, so a `Reduce` after a `Window` never
-   sees one. Forwarding them was rejected: sinks other than `TxnKafkaSink`
-   don't filter markers and would write watermarks as data records. The
-   window-end header on the fired records carries the same information and
-   stays local to the operator. Added `ValueState.Keys()` (both backends) to
-   support the sweep without copying values the way `SnapshotAll` does.
-   Covered by `test/unit_tests/operator/reduce_evict_test.go` and
-   `TestConformance_Value_Keys`.
+**Exit criteria:** collision unit tests, restart tests, and a real Kafka
+multi-topic exactly-once E2E test.
 
-8. ~~**Session-window multi-merge.**~~ **Fixed.** `assignToWindow`
-   (`operator/window.go`) collects *every* existing session for the key that
-   overlaps the incoming window and coalesces them all into one merged session
-   (min-start / max-end), instead of stopping at the first overlap.
+### 2. Complete filesystem crash durability and retention
 
-**Known follow-up:** the last window before a stream ends is never evicted —
-nothing arrives afterwards to advance the frontier. Bounded by one window's
-worth of keys, so harmless, but a `Close()`-time sweep would close it. Proper
-allowed-lateness (#16) will also need to push the eviction frontier back by the
-lateness bound, since late records may reopen a window that already fired.
+**Finding:** checkpoint/blob files are fsynced before rename, but parent
+directories are not fsynced after renames. `SweepOrphans` and state-dir deletion
+exist but are not wired into normal startup/retention.
 
----
+**Change:** fsync parent directories; enforce retention for completed/prepared
+checkpoints; sweep orphans at startup; preserve unresolved prepared
+transactions; recover when latest pointers or files are damaged.
 
-## Tier 3 — Robustness & failure handling
+**Exit criteria:** fault-injection tests for partial files, missing pointers,
+orphan directories, prepared checkpoints, and retention boundaries.
 
-9. ~~**Failure policies not honored.**~~ **Fixed.** Fatal deserialization and
-   source errors now propagate through the source stage and `Execute`; failed
-   deserialization/Process DLQ writes are fatal instead of silently dropping;
-   Kafka serialization failures follow the configured sink policy and never
-   fall back to publishing raw bytes; partial Kafka batches flush on the
-   configured timeout. Final sink-flush errors also remain fatal during a
-   requested graceful shutdown. Covered by source-, stage-, sink-, and
-   end-to-end propagation regression tests, including `-race`.
+### 3. Replace timeout-based transaction-marker absence detection
 
-10. ~~**Reconciler blocks the whole loop on backoff.**~~ **Fixed.** Failed runs
-    enter a non-terminal `restarting` phase with a persisted `restartAt`
-    deadline. Reconcile skips them until due instead of sleeping, so other jobs
-    continue progressing. The deadline survives controller restarts through the
-    SQLite store. Covered by multi-job and controller-restart regression tests.
+`TxnKafkaSink.WasCommitted` currently uses two empty five-second polls to infer
+absence. Read marker partitions explicitly and terminate from consumer position
+versus the read-committed boundary. Document marker-topic partitioning,
+compaction, and retention.
 
-11. ~~**K8s backend `Stop` ignores the timeout.**~~ **Fixed.** Stop now sends
-    the requested grace period, uses foreground deletion, waits for confirmed
-    Job termination, and returns timeout/cancellation/API failures. Controller
-    cancel, restart, and reconciliation no longer record a clean cancellation
-    when stop fails. Kubernetes also distinguishes pending from running and
-    surfaces pod scheduling/image-pull reasons.
+### 4. Expand the crash-consistency matrix
+
+Cover failures around barrier injection, operator snapshot, prepared-file
+persistence, sink commit, completed promotion, and advisory offset commit.
+Run it with memory/Pebble state and single-/multi-partition Kafka.
 
 ---
 
-## Tier 4 — Observability & operability (build on what we just added)
+## P1 — Control-plane consistency and recovery
 
-The production test showed these gaps directly.
+### 5. Make launch and lifecycle bookkeeping atomic
 
-12. ~~**Metrics/health server by default.**~~ **Done.** SDK and YAML jobs share
-    `sdk.Serve` and the job agent, with `/livez`, `/readyz`, `/healthz`,
-    `/state`, `/describe`, `/plan`, `/metrics`, `/cancel`, and `/savepoint`.
-    Health now distinguishes process liveness, running readiness, and terminal
-    failure while preserving `/healthz` compatibility.
+**Finding:** a backend resource is launched before `CreateRun` succeeds, so a
+store error can leave an untracked live container. Several store/transition
+errors are discarded. Concurrent restart/reconcile calls have no per-job lock
+or database constraint preventing two active runs.
 
-13. ~~**Consumer-group lag & offset visibility.**~~ **Done.** Kafka sources
-    expose sorted per-topic/partition current, checkpoint/committed, high-water,
-    and lag positions through the shared `/state` contract. The controller's
-    state proxy and dashboard Metrics tab render the same data for Docker and
-    Kubernetes jobs.
+**Change:** serialize operations per job; enforce one active run in the store;
+persist a starting run before launch and attach the backend ID afterward;
+compensate by removing resources after persistence failures; transact run and
+transition updates; propagate all store failures.
 
-14. **Dashboard metrics: history + Grafana deep-link.** The new in-app Metrics
-    page is point-in-time. Add (a) small sparklines / a short rolling window, and
-    (b) an optional controller flag (`--grafana-url`) that, when set, adds an
-    "Open in Grafana" link per job. Aggregate/all-jobs metrics view.
+**Exit criteria:** concurrent-operation tests, injected store failures at every
+launch step, and orphan-resource reconciliation tests.
 
-15. **Wire dashboard-managed jobs into Prometheus automatically.** Today the
-    scrape target is pinned to a job id. Add a `/metrics` federation or
-    service-discovery endpoint on the controller that lists all live jobs, so
-    Prometheus discovers them without hand-editing `prometheus.yml`.
+### 6. Recover initial launch failures
 
----
+Model transient first-launch failures as restartable with persisted backoff.
+Separate permanent validation/image failures from backend failures and expose
+the next retry time.
 
-## Tier 5 — Features (from README "Up next" + plans/)
+### 7. Define durable secret recovery
 
-16. **Allowed-lateness + side outputs** for late data (pairs with #7 eviction).
-17. **Multi-stream joins.**
-18. **Typed `Stream[T]` API** — replace raw `[]byte` payloads with generics.
-19. **User-facing keyed-state API** — a Flink-style `ProcessFunction` with direct
-    state access (today state is engine-internal to Reduce/Window).
-20. **S3 blobstore for savepoints** — cross-host / cross-job savepoint restore
-    (the control-plane README and plans already scope this).
-21. **Function registry** for `map`/`flatMap`/`process` refs in declarative
-    workflows (currently rejected by the compiler).
+**Finding:** API-supplied secrets live only in controller memory. After a
+controller restart, an automatic relaunch can start without required secrets.
 
----
+Add a `SecretProvider` abstraction with environment and Kubernetes Secret
+references. Never return resolved values. If references cannot resolve, place
+the job in an explicit blocked state instead of launching incomplete.
 
-## Tier 6 — CI / DevEx (cheap, prevents regressions)
+### 8. Add backend resource garbage collection
 
-22. **CI covers only the root module.** `go vet ./...` and tests run from the
-    repo root; the `control/` module isn't vetted/tested in CI, and the `fmt`
-    job already caught unformatted files. Add `control/` to the CI matrix and a
-    `gofmt` pre-commit hook.
-23. **SDK-job Docker build ergonomics.** The `replace => ../weibo` can't resolve
-    inside a Docker build; the weibo-test workaround compiles the binary on the
-    host first. Document this as the supported pattern (or provide a
-    multi-module build context) for anyone shipping SDK jobs.
-24. **Node 20 → 24 deprecation warnings** in the GitHub Actions run — bump the
-    action versions (`checkout`, `setup-go`, `upload-artifact`).
+Implement job deletion and retention for stopped containers, Kubernetes Jobs,
+Services, ConfigMaps, per-run Secrets, Docker volumes, PVCs, logs, savepoints,
+and database history. Make PVC/savepoint deletion explicit and recover labeled
+backend orphans at startup.
+
+### 9. Make controller health dependency-aware
+
+Add controller `/livez` and `/readyz`. Readiness should check the store and
+selected backend; health should report degraded dependencies without exposing
+credentials or internal network details.
 
 ---
 
-## Suggested sequencing
+## P2 — Runtime API and failure semantics
 
-- ~~**Sprint 1 (correctness):** Tier 1, then Tier 2 #6–#7.~~ Done — Tier 1 is
-  fixed (with #5 mitigated by a poll timeout rather than the high-water-offset
-  rework), and Tier 2 is fully closed.
-- **Sprint 2 (hardening + ops) — current:** Tier 4 #14–#15 while
-  the testing context is fresh.
-- **Sprint 3+ (features):** Tier 5, starting with allowed-lateness (#16), which
-  the windowing work in Sprint 1 sets up.
-- **Continuous:** Tier 6 alongside everything.
+### 10. Remove panic as the operator/sink error channel
 
-~~The single highest-leverage item is **#1 (multi-partition checkpoint
-offsets)**~~ — shipped. With Tiers 1 and 2 closed, the highest-leverage
-remaining item is **#14 (metrics history and Grafana deep links)** so operators
-can diagnose trends instead of seeing only a point-in-time snapshot.
+Invalid connector construction, Pebble mutations, and `Process` failure
+policies currently communicate through panic. Add error-returning constructors
+and an error-aware processor contract; retain panic wrappers only for backward
+compatibility and preserve operator/record context in structured errors.
+
+### 11. Separate compile-time validation from live resources
+
+**Finding:** compiling a Postgres sink creates a pool, while dry-run validation
+discards the compiled environment without a close lifecycle. Documentation
+claims this proves reachability, although `pgxpool.New` does not connect.
+
+Make compilation side-effect free, add explicit runtime `Open/Close` hooks, and
+provide a separate opt-in connectivity check with bounded timeouts.
+
+### 12. Finish window lifecycle semantics
+
+- evict the final closed window on source completion;
+- implement allowed lateness and late-record side outputs;
+- delay reduce-state eviction by the lateness bound;
+- define idle-partition behavior for multi-partition watermarks.
+
+### 13. Formalize source and sink capabilities
+
+Replace scattered type assertions with declared capabilities for checkpointing,
+draining, offset commits, transactions, operational state, and lifecycle.
+Reject incompatible combinations before execution.
+
+---
+
+## P3 — Observability and operations
+
+### 14. Add controller-native metrics aggregation and discovery
+
+- controller process/reconcile/API metrics;
+- Prometheus discovery or federation for all live jobs;
+- bounded scrape concurrency/timeouts;
+- stable job/run labels without unbounded cardinality;
+- a Kubernetes `ServiceMonitor` example.
+
+### 15. Add short metrics history and Grafana links
+
+Keep bounded rolling history for throughput, failures, checkpoints, resource
+use, and Kafka lag. Add sparklines, an all-jobs view, and optional
+`--grafana-url` job/run deep links. Do not use SQLite as a long-term metrics DB.
+
+### 16. Improve diagnostic APIs
+
+Add structured failure categories, last activity, checkpoint duration/size,
+restart countdown, bounded/followable logs, previous-run selection, and
+paginated audit history.
+
+### 17. Add tracing and structured logging
+
+Use structured logs and optional OpenTelemetry across controller, agent,
+checkpoint, and sink operations. Redact secrets and authorization centrally.
+
+---
+
+## P4 — Kubernetes and production hardening
+
+### 18. Ship deployable controller manifests
+
+Provide controller Deployment/Service, RBAC, persistent SQLite storage,
+configuration, probes, PodDisruptionBudget, and upgrades. Document that SQLite
+requires one controller replica until leader election/shared storage exists.
+
+### 19. Harden job isolation
+
+Add least-privilege service accounts, NetworkPolicies, pod/node placement
+options, priority/runtime classes, ephemeral-storage limits, PVC quotas, and
+safe per-job overrides.
+
+### 20. Improve Kubernetes operability
+
+Use watches/informers instead of repeated polling, expose Kubernetes events,
+define cleanup finalizers/TTL behavior, handle PVC resize failures, and run a
+scheduled real-kind lifecycle suite.
+
+### 21. Add object-store savepoints/checkpoints
+
+Implement S3-compatible storage with encryption, integrity metadata, multipart
+uploads, retries, and lifecycle guidance for cross-node/cross-job restore.
+
+---
+
+## P5 — Security
+
+### 22. Strengthen controller authentication
+
+Keep shared-token mode locally; add hashed tokens or OIDC, scoped roles,
+rotation, and mutation auditing. Warn or fail on insecure public binding unless
+explicitly acknowledged.
+
+### 23. Bound and validate API inputs
+
+Reject oversized bodies rather than silently truncating them, bound log tails,
+configure HTTP server timeouts, rate-limit mutations, and normalize HTTP status
+mapping.
+
+### 24. Automate dependency and artifact security
+
+Add `govulncheck`, dependency updates, SBOMs, image/binary provenance and
+signing, container scanning, minimal workflow permissions, and immutable pins
+for third-party CI actions.
+
+---
+
+## P6 — Test, CI, and developer experience
+
+### 25. Keep local and hosted CI equivalent
+
+**Finding:** the Makefile still tests only `test/unit_tests/...`, while hosted
+CI tests all root, control, and Kubernetes-tagged packages.
+
+Update local test/race/coverage/CI targets for both modules and Kubernetes tags.
+Add checks for workflows, Dockerfiles, shell, YAML, and documentation links.
+
+### 26. Add missing integration tiers
+
+- Kafka: multi-topic recovery, transactions, auth/TLS, rebalance, broker loss,
+  and partition expansion;
+- Postgres: retry, upsert, disconnect, and shutdown flush;
+- HTTP/S3: retry/idempotency and savepoint round trips;
+- Kubernetes: kind submit/readiness/state/savepoint/restart/delete;
+- browser: dashboard lifecycle, auth, and metrics rendering.
+
+Keep fake-client suites on every pull request; run fault/cluster suites on merge
+or nightly schedules.
+
+### 27. Add fuzzing and quality gates
+
+Fuzz workflow parsing, record paths, checkpoint/archive inputs, and API request
+decoding. Publish root/control coverage separately and gate changed-package
+regressions before adopting a global threshold.
+
+### 28. Clean naming and documentation drift
+
+- rename `mailer.go`, which contains the execution/checkpoint engine;
+- document `/livez`, `/readyz`, and the actual Kubernetes probes;
+- remove stale Postgres validation and savepoint-storage claims;
+- document checkpoint schema and public API compatibility;
+- remove or explicitly track generated binaries such as `kafka-orders` and
+  `s3-demo`.
+
+---
+
+## P7 — Product features (after P0–P3)
+
+29. Multi-stream joins with watermark alignment and checkpointed join state.
+30. Typed `Stream[T]` API with a migration path from `[]byte` records.
+31. User-facing keyed state/process functions with timers.
+32. Declarative function registry for map/flatMap/process references.
+33. New production connectors after capability/lifecycle contracts stabilize.
+
+---
+
+## Recommended execution sequence
+
+1. **Sprint A:** ~~topic-aware positions~~, filesystem durability,
+   deterministic transaction recovery, crash matrix (#1–#4).
+2. **Sprint B:** atomic controller lifecycle, launch recovery, durable secrets,
+   garbage collection, controller health (#5–#9).
+3. **Sprint C:** error/lifecycle contracts and window completion (#10–#13).
+4. **Sprint D:** metrics, diagnostics, Kubernetes productionization, security,
+   and CI hardening (#14–#28).
+5. Begin product expansion only after those foundations (#29–#33).
+
+**Next task:** #2, filesystem crash durability and retention.

@@ -527,7 +527,13 @@ func (env *StreamExecutionEnv) injectBarriers(ctx, hardCtx context.Context, sour
 		// passes this point advances its partition's position. A
 		// barrier injected here is therefore preceded by exactly the
 		// records reflected in the map — the alignment invariant.
-		offsets := make(map[int]int64)
+		offsets := make(map[source.PositionKey]int64)
+		positionKey := func(record types.Record) source.PositionKey {
+			if positioned, ok := env.source.(source.PositionedCheckpointSource); ok {
+				return positioned.CheckpointPosition(record)
+			}
+			return source.PositionKey{Partition: record.Partition}
+		}
 
 		// forward blocks until downstream accepts r; it gives up only
 		// on hardCtx so this goroutine can't leak when the pipeline is
@@ -559,7 +565,7 @@ func (env *StreamExecutionEnv) injectBarriers(ctx, hardCtx context.Context, sour
 				}
 				for record := range sourceCh {
 					if !record.IsWatermark && !record.IsBarrier {
-						offsets[record.Partition] = record.Offset + 1
+						offsets[positionKey(record)] = record.Offset + 1
 					}
 					if !forward(record) {
 						return
@@ -577,7 +583,7 @@ func (env *StreamExecutionEnv) injectBarriers(ctx, hardCtx context.Context, sour
 					return
 				}
 				if !record.IsWatermark && !record.IsBarrier {
-					offsets[record.Partition] = record.Offset + 1
+					offsets[positionKey(record)] = record.Offset + 1
 				}
 				if !forward(record) {
 					return
@@ -603,14 +609,24 @@ func (env *StreamExecutionEnv) injectBarriers(ctx, hardCtx context.Context, sour
 }
 
 // registerAlignedOffsets stores a JSON snapshot of the injector's
-// aligned offset map under the given checkpoint ID, in the same
-// {"partition": nextOffset} shape as source.CheckpointSource.
-func (env *StreamExecutionEnv) registerAlignedOffsets(id string, offsets map[int]int64) {
-	snapshot := make(map[string]int64, len(offsets))
-	for p, off := range offsets {
-		snapshot[strconv.Itoa(p)] = off
+// aligned offset map under the given checkpoint ID, using the shared versioned
+// source-position format.
+func (env *StreamExecutionEnv) registerAlignedOffsets(id string, offsets map[source.PositionKey]int64) {
+	var data []byte
+	var err error
+	if _, topicAware := env.source.(source.PositionedCheckpointSource); topicAware {
+		positions := make([]source.Position, 0, len(offsets))
+		for key, off := range offsets {
+			positions = append(positions, source.Position{Source: key.Source, Partition: key.Partition, Offset: off})
+		}
+		data, err = source.EncodePositions(positions)
+	} else {
+		legacy := make(map[string]int64, len(offsets))
+		for key, off := range offsets {
+			legacy[strconv.Itoa(key.Partition)] = off
+		}
+		data, err = json.Marshal(legacy)
 	}
-	data, err := json.Marshal(snapshot)
 	if err != nil {
 		return
 	}

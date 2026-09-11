@@ -78,3 +78,8 @@ jobs:
         env:
           KAFKA_BROKERS: localhost:9092
         run: ./scripts/test-kafka.sh
+
+      - name: Test multi-topic checkpoint restore
+        env:
+          KAFKA_BROKERS: localhost:9092
+        run: go test -count=1 -run TestKafkaMultiTopicCheckpointRestore ./source

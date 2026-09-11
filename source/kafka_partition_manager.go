@@ -139,7 +139,7 @@ func (m *partitionManager) startReader(ctx context.Context, id int, handle parti
 	// Seek only partitions present in the restored checkpoint. A partition
 	// that appeared after the checkpoint has no restored offset and starts
 	// from the configured StartOffset instead.
-	if off, ok := m.offsets.restoredOffset(id); ok {
+	if off, ok := m.offsets.restoredOffset(m.cfg.topic, id); ok {
 		if err := reader.SetOffset(off); err != nil {
 			fmt.Printf("weibo/source: restore offset partition %d: %v\n", id, err)
 		}

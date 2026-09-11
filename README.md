@@ -40,6 +40,7 @@ A single data item flowing through a stream. Every record carries:
 | `Timestamp` | `time.Time` | Event timestamp (for time-based operations) |
 | `Offset` | `int64` | Source offset (for checkpointing and replay) |
 | `Partition` | `int` | Source partition (for barrier-aligned offset tracking) |
+| `Source` | `string` | Stable source stream identity (Kafka topic) used with partition and offset |
 | `Headers` | `map[string][]byte` | Optional metadata headers |
 
 ### Source

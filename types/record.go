@@ -29,9 +29,15 @@ type Record struct {
 	Offset int64
 
 	// Partition is the source partition this record came from.
-	// Together with Offset it lets the engine track barrier-aligned
+	// Together with Source and Offset it lets the engine track barrier-aligned
 	// per-partition positions in-band, immune to channel buffering.
 	Partition int
+
+	// Source is the stable source-side stream identity for this record. Kafka
+	// sources set it to the topic name. It is engine metadata (not a user
+	// header) so topics with the same partition number remain distinct in
+	// checkpoints.
+	Source string
 
 	// Headers carry optional metadata (e.g. Kafka headers, trace IDs).
 	Headers map[string][]byte
