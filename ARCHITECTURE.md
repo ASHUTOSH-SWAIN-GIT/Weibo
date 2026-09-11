@@ -352,10 +352,17 @@ latest checkpoint on disk?
 then: restore operator state (op-<i> + worker-<idx>) and seek source offsets
 ```
 
-`WasCommitted` drains the marker topic under `read_committed`: it returns *true*
-immediately on seeing the marker (definitive), and only concludes *absent* after
-two consecutive empty polls — never a premature false negative that would replay
-a committed transaction.
+`WasCommitted` snapshots every marker partition's Kafka last-stable offset and
+drains under `read_committed`. It returns *true* immediately on seeing the marker
+and returns *absent* only after every partition reaches that exact stable
+boundary. Broker failures and cancellation remain errors; elapsed time is never
+treated as proof of absence.
+
+The marker topic must be durable, readable by the job principal, and use stable
+key partitioning. Weibo writes the stable transactional ID as the key and scans
+all partitions, so partition expansion is safe. Compaction is recommended;
+retention or manual deletion must not remove the latest marker for a pipeline
+while a prepared checkpoint may still require recovery.
 
 ---
 

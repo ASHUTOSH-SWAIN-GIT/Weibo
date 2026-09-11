@@ -459,7 +459,7 @@ Requirements for the exactly-once configuration:
 
 - **Consumers of the output topic must use `isolation.level=read_committed`** — otherwise they observe records from aborted transactions and all guarantees are void.
 - The `TxnKafkaTransactionalID` must be stable across restarts and unique per pipeline instance (a second instance with the same ID fences the first).
-- The marker topic (`<topic>.checkpoints` by default) must not be deleted — it is how recovery proves whether an unconfirmed transaction committed.
+- The marker topic (`<topic>.checkpoints` by default) must not lose the latest marker while a prepared checkpoint may require recovery. Use compaction, durable replication, stable key partitioning, and grant the job read access; recovery scans every partition to its read-committed last-stable offset.
 - Output visibility latency equals the checkpoint interval: records become readable when their interval's transaction commits.
 - A checkpoint failure fails the pipeline (the aborted transaction's output must be replayed); restart recovers from the last completed checkpoint.
 

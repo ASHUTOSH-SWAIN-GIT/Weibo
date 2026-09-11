@@ -2,23 +2,17 @@ package sink
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"sync"
 	"time"
 
 	"github.com/twmb/franz-go/pkg/kadm"
 	"github.com/twmb/franz-go/pkg/kgo"
+	"github.com/twmb/franz-go/pkg/kmsg"
 
 	"github.com/ASHUTOSH-SWAIN-GIT/weibo/auth"
 	"github.com/ASHUTOSH-SWAIN-GIT/weibo/types"
 )
-
-// markerProbePollTimeout bounds each PollFetches while draining the marker
-// topic in WasCommitted. During recovery the topic is static, so a poll that
-// blocks this long without new records means the visible log is fully
-// consumed. Generous enough to tolerate a slow first fetch.
-const markerProbePollTimeout = 5 * time.Second
 
 // TxnKafkaSink writes records to Kafka inside transactions, one
 // transaction per checkpoint interval, implementing CheckpointedSink
@@ -369,92 +363,141 @@ func (s *TxnKafkaSink) WasCommitted(ctx context.Context, id string) (bool, error
 	if err != nil {
 		return false, fmt.Errorf("txn kafka sink: marker probe: %w", err)
 	}
-	cl, err := kgo.NewClient(append(opts,
-		kgo.ConsumeTopics(s.cfg.markerTopic),
-		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
-		kgo.FetchIsolationLevel(kgo.ReadCommitted()),
-	)...)
+	cl, err := kgo.NewClient(opts...)
 	if err != nil {
 		return false, fmt.Errorf("txn kafka sink: marker probe client: %w", err)
 	}
 	defer cl.Close()
 
-	// Read the whole marker topic up to its current end offsets.
+	// Snapshot the read-committed boundary for every marker partition. Unlike
+	// the high watermark, this last stable offset excludes open transactions,
+	// so reaching it proves that every currently decidable marker was scanned.
 	adm := kadm.NewClient(cl)
-	ends, err := adm.ListEndOffsets(ctx, s.cfg.markerTopic)
+	ends, err := adm.ListCommittedOffsets(ctx, s.cfg.markerTopic)
 	if err != nil {
-		return false, fmt.Errorf("txn kafka sink: marker probe end offsets: %w", err)
+		return false, fmt.Errorf("txn kafka sink: marker probe stable offsets: %w", err)
 	}
-	hasData := false
+	boundaries := make(map[int32]int64)
 	ends.Each(func(lo kadm.ListedOffset) {
-		if lo.Offset > 0 {
-			hasData = true
+		if lo.Err == nil && lo.Partition >= 0 {
+			boundaries[lo.Partition] = lo.Offset
 		}
 	})
-	if !hasData {
-		return false, nil // empty (or missing) marker topic: nothing committed
+	for _, partition := range ends[s.cfg.markerTopic] {
+		if partition.Err != nil {
+			return false, fmt.Errorf("txn kafka sink: marker probe partition %d: %w", partition.Partition, partition.Err)
+		}
+	}
+	if len(boundaries) == 0 {
+		return false, fmt.Errorf("txn kafka sink: marker probe: topic %q has no readable partitions", s.cfg.markerTopic)
+	}
+	starts, err := adm.ListStartOffsets(ctx, s.cfg.markerTopic)
+	if err != nil {
+		return false, fmt.Errorf("txn kafka sink: marker probe start offsets: %w", err)
+	}
+	positions := make(map[int32]int64, len(boundaries))
+	for partition := range boundaries {
+		start, ok := starts.Lookup(s.cfg.markerTopic, partition)
+		if !ok || start.Err != nil {
+			return false, fmt.Errorf("txn kafka sink: marker probe start offset partition %d unavailable", partition)
+		}
+		positions[partition] = start.Offset
+	}
+	metadata, err := adm.Metadata(ctx, s.cfg.markerTopic)
+	if err != nil {
+		return false, fmt.Errorf("txn kafka sink: marker probe metadata: %w", err)
+	}
+	detail, ok := metadata.Topics[s.cfg.markerTopic]
+	if !ok || detail.Err != nil {
+		return false, fmt.Errorf("txn kafka sink: marker probe metadata unavailable for %q", s.cfg.markerTopic)
+	}
+	if allMarkerPartitionsDone(boundaries, positions) {
+		return false, nil
 	}
 
-	// Consume the whole visible marker log. We can't drain on "a data record
-	// reached the end offset": under read_committed the trailing offsets are
-	// often transaction-control markers or aborted-batch records that
-	// EachRecord never surfaces, so the last visible data record sits *below*
-	// the end offset and that condition never fires — the previous code spun
-	// to the ctx deadline.
-	//
-	// WasCommitted runs only during recovery, when the sink is not producing,
-	// so the marker topic is static: a bounded poll that returns no new
-	// records therefore means the visible log is fully consumed (the tail is
-	// non-visible control/aborted records), and we can stop. A generous
-	// per-poll timeout tolerates a slow first fetch, so this never concludes
-	// "not committed" prematurely (which would replay a committed transaction
-	// and duplicate output).
-	// Finding the marker is definitive: return true immediately (common
-	// committed case, terminates fast). Concluding ABSENT is the dangerous
-	// direction — a false negative replays a committed transaction and
-	// duplicates output — so we only conclude false after two CONSECUTIVE
-	// empty polls, tolerating a transient slow first fetch. This assumes the
-	// single-pipeline invariant the docs require: the marker topic is
-	// per-pipeline (unique transactional id), so no other producer's open
-	// transaction holds the read-committed LSO below our marker. The outer
-	// recovery context still bounds the whole probe.
-	emptyPolls := 0
 	for {
-		pollCtx, cancel := context.WithTimeout(ctx, markerProbePollTimeout)
-		fetches := cl.PollFetches(pollCtx)
-		cancel()
-		if err := ctx.Err(); err != nil {
-			return false, err
+		req := kmsg.NewPtrFetchRequest()
+		// v12 addresses topics by name. v13+ requires metadata topic IDs,
+		// which add no value to this one-shot recovery scan.
+		req.Version = 12
+		req.IsolationLevel = 1
+		req.MaxWaitMillis = 500
+		req.MinBytes = 1
+		req.MaxBytes = 50 << 20
+		topic := kmsg.NewFetchRequestTopic()
+		topic.Topic = s.cfg.markerTopic
+		topic.TopicID = [16]byte(detail.ID)
+		for partition, boundary := range boundaries {
+			if positions[partition] >= boundary {
+				continue
+			}
+			part := kmsg.NewFetchRequestTopicPartition()
+			part.Partition, part.FetchOffset, part.PartitionMaxBytes = partition, positions[partition], 1<<20
+			topic.Partitions = append(topic.Partitions, part)
 		}
-		if errs := fetches.Errors(); len(errs) > 0 {
-			for _, fe := range errs {
-				// Our own poll-timeout deadline is the expected end-of-log
-				// signal; any other fetch error is real.
-				if fe.Err != nil && !errors.Is(fe.Err, context.DeadlineExceeded) {
-					return false, fmt.Errorf("txn kafka sink: marker probe fetch: %w", fe.Err)
+		req.Topics = append(req.Topics, topic)
+		found := false
+		progressed := false
+		for _, shard := range cl.RequestSharded(ctx, req) {
+			if shard.Err != nil {
+				return false, fmt.Errorf("txn kafka sink: marker probe fetch: %w", shard.Err)
+			}
+			resp, ok := shard.Resp.(*kmsg.FetchResponse)
+			if !ok {
+				return false, fmt.Errorf("txn kafka sink: marker probe: unexpected fetch response %T", shard.Resp)
+			}
+			for _, responseTopic := range resp.Topics {
+				for i := range responseTopic.Partitions {
+					raw := &responseTopic.Partitions[i]
+					position := positions[raw.Partition]
+					part, next := kgo.ProcessFetchPartition(kgo.ProcessFetchPartitionOpts{Offset: position, IsolationLevel: kgo.ReadCommitted(), Topic: s.cfg.markerTopic, Partition: raw.Partition}, raw, nil, nil)
+					if part.Err != nil {
+						return false, fmt.Errorf("txn kafka sink: marker probe fetch partition %d: %w", raw.Partition, part.Err)
+					}
+					matched, _ := inspectMarkerPartition(part, boundaries[raw.Partition], s.cfg.txnID, id)
+					if matched {
+						found = true
+					}
+					if next > position {
+						positions[raw.Partition], progressed = next, true
+					}
 				}
 			}
 		}
-		advanced := false
-		found := false
-		fetches.EachRecord(func(rec *kgo.Record) {
-			advanced = true
-			if string(rec.Key) == s.cfg.txnID && string(rec.Value) == id {
-				found = true
-			}
-		})
 		if found {
-			return true, nil // committed marker observed — definitive
+			return true, nil
 		}
-		if advanced {
-			emptyPolls = 0
-			continue
+		if allMarkerPartitionsDone(boundaries, positions) {
+			return false, nil
 		}
-		emptyPolls++
-		if emptyPolls >= 2 {
-			return false, nil // visible log drained twice with no marker
+		if !progressed {
+			return false, fmt.Errorf("txn kafka sink: marker probe made no progress before stable boundary")
 		}
 	}
+}
+
+func inspectMarkerPartition(part kgo.FetchPartition, boundary int64, txnID, checkpointID string) (bool, bool) {
+	var lastOffset int64 = -1
+	for _, rec := range part.Records {
+		lastOffset = rec.Offset
+		if string(rec.Key) == txnID && string(rec.Value) == checkpointID {
+			return true, true
+		}
+	}
+	// A visible record at boundary-1 reaches the snapshot directly. If the
+	// tail contains only aborted/control batches, the next sequential fetch is
+	// empty while reporting the same LSO; that also proves the boundary reached.
+	reached := lastOffset+1 >= boundary || (len(part.Records) == 0 && part.LastStableOffset >= boundary)
+	return false, reached
+}
+
+func allMarkerPartitionsDone(boundaries map[int32]int64, positions map[int32]int64) bool {
+	for partition, boundary := range boundaries {
+		if positions[partition] < boundary {
+			return false
+		}
+	}
+	return true
 }
 
 // Describe returns dashboard metadata.

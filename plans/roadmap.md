@@ -56,12 +56,18 @@ state directories with expired checkpoint metadata. YAML exposes
 **Exit criteria:** fault-injection tests for partial files, missing pointers,
 orphan directories, prepared checkpoints, and retention boundaries.
 
-### 3. Replace timeout-based transaction-marker absence detection
+### 3. Replace timeout-based transaction-marker absence detection — ✅ DONE
 
 `TxnKafkaSink.WasCommitted` currently uses two empty five-second polls to infer
 absence. Read marker partitions explicitly and terminate from consumer position
 versus the read-committed boundary. Document marker-topic partitioning,
 compaction, and retention.
+
+**Shipped:** recovery snapshots Kafka's last-stable offset for every marker
+partition, consumes under `read_committed`, and concludes absence only once all
+partitions reach those boundaries. Timeouts are no longer evidence of absence;
+broker failures and cancellation propagate as errors. Unit boundary tests and a
+real-Kafka committed/aborted/absent integration test cover the protocol.
 
 ### 4. Expand the crash-consistency matrix
 

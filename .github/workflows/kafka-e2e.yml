@@ -83,3 +83,8 @@ jobs:
         env:
           KAFKA_BROKERS: localhost:9092
         run: go test -count=1 -run TestKafkaMultiTopicCheckpointRestore ./source
+
+      - name: Test deterministic transaction marker recovery
+        env:
+          KAFKA_BROKERS: localhost:9092
+        run: go test -count=1 -run TestTxnKafkaMarkerProbeIntegration ./sink
