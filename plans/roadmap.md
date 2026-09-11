@@ -36,7 +36,7 @@ positions from the checkpoint before normal reading begins.
 **Exit criteria:** collision unit tests, restart tests, and a real Kafka
 multi-topic exactly-once E2E test.
 
-### 2. Complete filesystem crash durability and retention
+### 2. Complete filesystem crash durability and retention — ✅ DONE
 
 **Finding:** checkpoint/blob files are fsynced before rename, but parent
 directories are not fsynced after renames. `SweepOrphans` and state-dir deletion
@@ -45,6 +45,13 @@ exist but are not wired into normal startup/retention.
 **Change:** fsync parent directories; enforce retention for completed/prepared
 checkpoints; sweep orphans at startup; preserve unresolved prepared
 transactions; recover when latest pointers or files are damaged.
+
+**Shipped:** atomic checkpoint and blob renames now fsync their parent
+directories. File storage performs startup pointer repair and orphan sweeping,
+retains a configurable number of completed recovery points (three by default),
+never garbage-collects prepared commit decisions, and removes matching native
+state directories with expired checkpoint metadata. YAML exposes
+`checkpointing.retainCompleted`; SDK jobs expose `CHECKPOINT_RETENTION`.
 
 **Exit criteria:** fault-injection tests for partial files, missing pointers,
 orphan directories, prepared checkpoints, and retention boundaries.

@@ -56,11 +56,22 @@ func CompileRuntime(workflowName, dataRoot string, rt *workflow.EnvSpec) (*weibo
 		if interval <= 0 {
 			return nil, fmt.Errorf("compiler: checkpoint interval must be greater than zero")
 		}
+		if rt.Checkpointing.RetainCompleted < 0 {
+			return nil, fmt.Errorf("compiler: checkpoint retention must not be negative")
+		}
 		ckptDir := jobDir(rt.Checkpointing.Dir, dataRoot, name, "checkpoints")
 		if err := os.MkdirAll(ckptDir, 0o755); err != nil {
 			return nil, fmt.Errorf("compiler: create checkpoint dir %q: %w", ckptDir, err)
 		}
-		env.WithCheckpointing(interval, checkpoint.NewFileStorage(ckptDir))
+		retain := rt.Checkpointing.RetainCompleted
+		if retain == 0 {
+			retain = checkpoint.DefaultRetainedCheckpoints
+		}
+		storage, err := checkpoint.NewFileStorageWithOptions(ckptDir, checkpoint.FileStorageOptions{RetainCompleted: retain})
+		if err != nil {
+			return nil, fmt.Errorf("compiler: initialize checkpoint storage: %w", err)
+		}
+		env.WithCheckpointing(interval, storage)
 	}
 
 	if rt.State != nil {

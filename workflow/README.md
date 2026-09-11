@@ -47,6 +47,7 @@ Any duration field is a Go duration string: `"30s"`, `"5m"`,
 | `shutdownTimeout` | duration | 30s | `WithShutdownTimeout` |
 | `checkpointing.interval` | duration | — | `WithCheckpointing` |
 | `checkpointing.dir` | string | — | `checkpoint.NewFileStorage` |
+| `checkpointing.retainCompleted` | integer | `3` | Completed recovery points retained; prepared transactions are always kept |
 | `state.backend` | `memory` \| `pebble` | memory | `WithStateBackend` |
 | `state.dir` | string | — | Pebble root dir (required for pebble) |
 

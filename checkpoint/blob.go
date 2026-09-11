@@ -95,7 +95,13 @@ func (b *FileBlobstore) Put(key string, r io.Reader) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmpName, p)
+	if err := os.Rename(tmpName, p); err != nil {
+		return err
+	}
+	if err := syncDir(filepath.Dir(p)); err != nil {
+		return fmt.Errorf("checkpoint: sync blob directory: %w", err)
+	}
+	return nil
 }
 
 func (b *FileBlobstore) Get(key string) (io.ReadCloser, error) {
@@ -156,5 +162,8 @@ func (b *FileBlobstore) Delete(key string) error {
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
-	return err
+	if err != nil {
+		return err
+	}
+	return syncDir(filepath.Dir(p))
 }

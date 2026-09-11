@@ -262,6 +262,9 @@ func (v *validator) envConfig(env *EnvSpec) {
 		if env.Checkpointing.Interval <= 0 {
 			v.add("env.checkpointing.interval", "checkpoint interval must be greater than zero")
 		}
+		if env.Checkpointing.RetainCompleted < 0 {
+			v.add("env.checkpointing.retainCompleted", "must not be negative")
+		}
 		// Dir is optional: the compiler derives a job-specific
 		// directory when it is omitted. If set, it must be creatable.
 		if env.Checkpointing.Dir != "" {

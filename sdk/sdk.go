@@ -18,6 +18,7 @@
 //	PORT                 control port                          (default 8080)
 //	SAVEPOINT_DIR        savepoint blobstore                   (default /savepoints)
 //	CHECKPOINT_INTERVAL  enable durable checkpointing, e.g. 5s (default off)
+//	CHECKPOINT_RETENTION completed recovery points to keep          (default 3)
 //	RESTORE_SAVEPOINT    savepoint label to resume from        (default none)
 //	JOB_NAME             human-readable name for logs
 package sdk
@@ -30,6 +31,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -85,7 +87,21 @@ func runBuild(ctx context.Context, build Builder, getenv func(string) string, st
 			fmt.Fprintf(stderr, "sdk: create state dir: %v\n", err)
 			return 1
 		}
-		env.WithCheckpointing(d, checkpoint.NewFileStorage(checkpointDir))
+		retain := checkpoint.DefaultRetainedCheckpoints
+		if value := getenv("CHECKPOINT_RETENTION"); value != "" {
+			parsed, parseErr := strconv.Atoi(value)
+			if parseErr != nil || parsed < 1 {
+				fmt.Fprintf(stderr, "sdk: invalid CHECKPOINT_RETENTION %q\n", value)
+				return 2
+			}
+			retain = parsed
+		}
+		storage, err := checkpoint.NewFileStorageWithOptions(checkpointDir, checkpoint.FileStorageOptions{RetainCompleted: retain})
+		if err != nil {
+			fmt.Fprintf(stderr, "sdk: initialize checkpoint storage: %v\n", err)
+			return 1
+		}
+		env.WithCheckpointing(d, storage)
 		env.WithStateBackend(state.Pebble(stateDir))
 	}
 

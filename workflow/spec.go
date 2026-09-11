@@ -69,6 +69,10 @@ type CheckpointSpec struct {
 	// Dir is the checkpoint file-storage directory
 	// (checkpoint.NewFileStorage). Optional; derived per-job when omitted.
 	Dir string `yaml:"dir" json:"dir"`
+
+	// RetainCompleted controls completed checkpoint retention. Zero uses the
+	// default; prepared transaction decisions are always preserved.
+	RetainCompleted int `yaml:"retainCompleted,omitempty" json:"retainCompleted,omitempty"`
 }
 
 // StateSpec selects and configures a state backend.
