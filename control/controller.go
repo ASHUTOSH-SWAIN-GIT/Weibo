@@ -267,8 +267,12 @@ func (c *Controller) Cancel(ctx context.Context, jobID string) error {
 	if run == nil || run.Stopped != nil {
 		return nil // nothing live to stop
 	}
-	_ = c.backend.Stop(ctx, run.ContainerID, c.stopTimeout)
-	c.finishRun(run, lifecycle.Running, lifecycle.Cancelled, "user cancel")
+	if err := c.backend.Stop(ctx, run.ContainerID, c.stopTimeout); err != nil {
+		run.Error = err.Error()
+		_ = c.store.UpdateRun(run)
+		return fmt.Errorf("cancel: stop run %s: %w", run.ID, err)
+	}
+	c.finishRun(run, lifecycle.Phase(run.Phase), lifecycle.Cancelled, "user cancel")
 	return nil
 }
 
@@ -293,8 +297,10 @@ func (c *Controller) doRestart(ctx context.Context, jobID, restore string) (*sto
 		return nil, err
 	}
 	if run, _ := c.store.LatestRun(jobID); run != nil && run.Stopped == nil {
-		_ = c.backend.Stop(ctx, run.ContainerID, c.stopTimeout)
-		c.finishRun(run, lifecycle.Running, lifecycle.Cancelled, "restart")
+		if err := c.backend.Stop(ctx, run.ContainerID, c.stopTimeout); err != nil {
+			return job, fmt.Errorf("restart: stop run %s: %w", run.ID, err)
+		}
+		c.finishRun(run, lifecycle.Phase(run.Phase), lifecycle.Cancelled, "restart")
 	}
 	if err := c.store.SetDesired(jobID, store.DesiredRunning); err != nil {
 		return nil, err
@@ -495,6 +501,7 @@ func (c *Controller) finishRun(run *store.Run, from, to lifecycle.Phase, reason 
 	now := time.Now().UTC()
 	run.Phase = string(to)
 	run.Stopped = &now
+	run.RestartAt = nil
 	_ = c.store.UpdateRun(run)
 	c.transition(run.JobID, run.ID, from, to, reason)
 }

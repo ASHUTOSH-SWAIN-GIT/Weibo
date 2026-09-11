@@ -24,6 +24,10 @@ func (c *Controller) Reconcile(ctx context.Context) error {
 		if err != nil {
 			continue // job deleted out from under a run; skip
 		}
+		if lifecycle.Phase(run.Phase) == lifecycle.Restarting {
+			c.maybeRestart(ctx, job, run)
+			continue
+		}
 		st, err := c.backend.Status(ctx, run.ContainerID)
 		if err != nil {
 			c.logf("reconcile: status %s: %v", run.ContainerID, err)
@@ -36,10 +40,28 @@ func (c *Controller) Reconcile(ctx context.Context) error {
 
 func (c *Controller) reconcileRun(ctx context.Context, job *store.Job, run *store.Run, st backend.Status) {
 	switch st.Phase {
+	case backend.PhasePending:
+		if job.Desired == store.DesiredStopped {
+			if err := c.backend.Stop(ctx, run.ContainerID, c.stopTimeout); err != nil {
+				run.Error = err.Error()
+				_ = c.store.UpdateRun(run)
+				return
+			}
+			c.finishRun(run, lifecycle.Starting, lifecycle.Cancelled, "desired stopped")
+			return
+		}
+		if run.Phase != string(lifecycle.Starting) || run.Error != st.Reason {
+			run.Phase, run.Error = string(lifecycle.Starting), st.Reason
+			_ = c.store.UpdateRun(run)
+		}
 	case backend.PhaseRunning:
 		// If the operator asked it to stop, stop it.
 		if job.Desired == store.DesiredStopped {
-			_ = c.backend.Stop(ctx, run.ContainerID, c.stopTimeout)
+			if err := c.backend.Stop(ctx, run.ContainerID, c.stopTimeout); err != nil {
+				run.Error = err.Error()
+				_ = c.store.UpdateRun(run)
+				return
+			}
 			c.finishRun(run, lifecycle.Running, lifecycle.Cancelled, "desired stopped")
 			return
 		}
@@ -61,8 +83,12 @@ func (c *Controller) reconcileRun(ctx context.Context, job *store.Job, run *stor
 			c.finishRun(run, lifecycle.Running, lifecycle.Cancelled, "container gone; desired stopped")
 			return
 		}
-		c.finishRun(run, lifecycle.Running, lifecycle.Failed, "container gone")
-		c.maybeRestart(ctx, job, run)
+		if c.restart.ShouldRestart(lifecycle.Failed, run.Attempt) {
+			c.scheduleRestart(job, run, "container gone")
+			c.maybeRestart(ctx, job, run)
+		} else {
+			c.finishRun(run, lifecycle.Running, lifecycle.Failed, "container gone")
+		}
 	}
 }
 
@@ -81,10 +107,12 @@ func (c *Controller) handleExit(ctx context.Context, job *store.Job, run *store.
 		to = lifecycle.Failed
 		reason = "nonzero exit"
 	}
-	c.finishRun(run, lifecycle.Running, to, reason)
-	if to == lifecycle.Failed {
+	if to == lifecycle.Failed && c.restart.ShouldRestart(lifecycle.Failed, run.Attempt) {
+		c.scheduleRestart(job, run, reason)
 		c.maybeRestart(ctx, job, run)
+		return
 	}
+	c.finishRun(run, lifecycle.Running, to, reason)
 }
 
 // maybeRestart launches a fresh run if the restart policy allows it.
@@ -96,18 +124,22 @@ func (c *Controller) maybeRestart(ctx context.Context, job *store.Job, run *stor
 		c.logf("job %s: not restarting (attempt %d, policy exhausted)", job.ID, run.Attempt)
 		return
 	}
-	// Backoff is best-effort here; a scheduled backoff belongs to the
-	// loop, but a short sleep keeps a crash-looping job from hammering.
-	if d := c.restart.Backoff(run.Attempt); d > 0 {
-		select {
-		case <-ctx.Done():
-			return
-		case <-time.After(d):
-		}
+	if run.RestartAt != nil && time.Now().UTC().Before(*run.RestartAt) {
+		return
 	}
+	c.finishRun(run, lifecycle.Restarting, lifecycle.Failed, "restart backoff elapsed")
 	if err := c.launch(ctx, job, run.Attempt+1, ""); err != nil {
 		c.logf("job %s: restart launch failed: %v", job.ID, err)
 	}
+}
+
+func (c *Controller) scheduleRestart(job *store.Job, run *store.Run, reason string) {
+	at := time.Now().UTC().Add(c.restart.Backoff(run.Attempt))
+	run.Phase = string(lifecycle.Restarting)
+	run.Error = reason
+	run.RestartAt = &at
+	_ = c.store.UpdateRun(run)
+	c.transition(job.ID, run.ID, lifecycle.Running, lifecycle.Restarting, reason)
 }
 
 // RunReconciler runs Reconcile on a ticker until ctx is cancelled. Call it

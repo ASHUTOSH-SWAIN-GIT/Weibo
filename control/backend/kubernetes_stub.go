@@ -11,12 +11,13 @@ import (
 // KubernetesOptions configures the Kubernetes backend. The default binary is
 // built without Kubernetes support to keep Docker-only installs lightweight.
 type KubernetesOptions struct {
-	Kubeconfig       string
-	Namespace        string
-	Image            string
-	PVCSize          string
-	StorageClass     string
-	ImagePullSecrets []string
+	Kubeconfig             string
+	Namespace              string
+	Image                  string
+	PVCSize                string
+	StorageClass           string
+	ImagePullSecrets       []string
+	ControlAddressTemplate string
 }
 
 // Kubernetes is a placeholder when the binary is built without the kubernetes

@@ -63,6 +63,6 @@ type State struct {
 
 // Checkpoint is one completed checkpoint in the job's history.
 type Checkpoint struct {
-	ID        string    `json:"id"`
+	ID          string    `json:"id"`
 	CompletedAt time.Time `json:"completedAt"`
 }

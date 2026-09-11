@@ -11,6 +11,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes/fake"
 )
 
@@ -85,8 +86,18 @@ func TestK8sLaunch_CreatesObjects(t *testing.T) {
 	if len(c.EnvFrom) != 1 || c.EnvFrom[0].SecretRef == nil || c.EnvFrom[0].SecretRef.Name != id {
 		t.Errorf("envFrom secret not wired: %+v", c.EnvFrom)
 	}
-	if c.LivenessProbe == nil || c.LivenessProbe.HTTPGet == nil || c.LivenessProbe.HTTPGet.Path != "/healthz" {
-		t.Errorf("liveness probe not on /healthz: %+v", c.LivenessProbe)
+	if c.LivenessProbe == nil || c.LivenessProbe.HTTPGet == nil || c.LivenessProbe.HTTPGet.Path != "/livez" {
+		t.Errorf("liveness probe not on /livez: %+v", c.LivenessProbe)
+	}
+	if c.ReadinessProbe == nil || c.ReadinessProbe.HTTPGet == nil || c.ReadinessProbe.HTTPGet.Path != "/readyz" {
+		t.Errorf("readiness probe not on /readyz: %+v", c.ReadinessProbe)
+	}
+	if c.SecurityContext == nil || c.SecurityContext.ReadOnlyRootFilesystem == nil || !*c.SecurityContext.ReadOnlyRootFilesystem ||
+		c.SecurityContext.AllowPrivilegeEscalation == nil || *c.SecurityContext.AllowPrivilegeEscalation {
+		t.Errorf("container security context not hardened: %+v", c.SecurityContext)
+	}
+	if job.Spec.Template.Annotations["prometheus.io/scrape"] != "true" {
+		t.Errorf("prometheus discovery annotations missing: %v", job.Spec.Template.Annotations)
 	}
 	if len(c.VolumeMounts) != 1 {
 		t.Errorf("expected only the data mount for SDK jobs, got %d", len(c.VolumeMounts))
@@ -115,18 +126,24 @@ func TestK8sStatus_Phases(t *testing.T) {
 	cases := []struct {
 		name string
 		js   batchv1.JobStatus
+		pod  *corev1.Pod
 		want Phase
 	}{
-		{"active", batchv1.JobStatus{Active: 1}, PhaseRunning},
-		{"succeeded", batchv1.JobStatus{Succeeded: 1}, PhaseExited},
-		{"failed", batchv1.JobStatus{Failed: 1}, PhaseExited},
+		{"active", batchv1.JobStatus{Active: 1}, &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "p", Namespace: "weibo", Labels: map[string]string{"weibo.run": "weibo-x"}}, Status: corev1.PodStatus{Phase: corev1.PodRunning, ContainerStatuses: []corev1.ContainerStatus{{Ready: true, State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{}}}}}}, PhaseRunning},
+		{"pending", batchv1.JobStatus{Active: 1}, &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "p", Namespace: "weibo", Labels: map[string]string{"weibo.run": "weibo-x"}}, Status: corev1.PodStatus{Phase: corev1.PodPending}}, PhasePending},
+		{"succeeded", batchv1.JobStatus{Succeeded: 1}, nil, PhaseExited},
+		{"failed", batchv1.JobStatus{Failed: 1}, nil, PhaseExited},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			cs := fake.NewSimpleClientset(&batchv1.Job{
+			objects := []runtime.Object{&batchv1.Job{
 				ObjectMeta: metav1.ObjectMeta{Name: "weibo-x", Namespace: "weibo"},
 				Status:     c.js,
-			})
+			}}
+			if c.pod != nil {
+				objects = append(objects, c.pod)
+			}
+			cs := fake.NewSimpleClientset(objects...)
 			k := newK8s(cs, KubernetesOptions{Namespace: "weibo"})
 			st, err := k.Status(ctx, "weibo-x")
 			if err != nil {

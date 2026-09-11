@@ -279,6 +279,61 @@ func TestReconcileRestartsOnCrash(t *testing.T) {
 	}
 }
 
+func TestReconcileBackoffDoesNotBlockOtherJobs(t *testing.T) {
+	fake := backend.NewFake()
+	c, _ := newController(t, fake, lifecycle.RestartPolicy{MaxAttempts: 2, BaseBackoff: 250 * time.Millisecond})
+	job1, _ := c.Submit(context.Background(), []byte(validSDKManifest), nil)
+	job2, _ := c.Submit(context.Background(), []byte(validSDKManifest), nil)
+	run1, _ := c.LatestRun(job1.ID)
+	run2, _ := c.LatestRun(job2.ID)
+	fake.SetPhase(run1.ContainerID, backend.PhaseExited, 1)
+
+	started := time.Now()
+	if err := c.Reconcile(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if elapsed := time.Since(started); elapsed >= 100*time.Millisecond {
+		t.Fatalf("Reconcile blocked for restart backoff: %v", elapsed)
+	}
+	if fake.Launched() != 2 {
+		t.Fatalf("restart launched before backoff elapsed: launches=%d", fake.Launched())
+	}
+	pending, _ := c.LatestRun(job1.ID)
+	if pending.Phase != string(lifecycle.Restarting) || pending.RestartAt == nil {
+		t.Fatalf("failed run was not durably scheduled: %+v", pending)
+	}
+	healthy, _ := c.LatestRun(job2.ID)
+	if healthy.ID != run2.ID || healthy.Phase != string(lifecycle.Running) {
+		t.Fatalf("healthy job was not reconciled: %+v", healthy)
+	}
+}
+
+func TestScheduledRestartSurvivesControllerRestart(t *testing.T) {
+	fake := backend.NewFake()
+	st, err := store.OpenSQLite(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	policy := lifecycle.RestartPolicy{MaxAttempts: 2, BaseBackoff: 20 * time.Millisecond}
+	c1 := control.New(control.Options{Store: st, Backend: fake, Restart: policy, StopTimeout: time.Second})
+	job, _ := c1.Submit(context.Background(), []byte(validSDKManifest), nil)
+	run, _ := c1.LatestRun(job.ID)
+	fake.SetPhase(run.ContainerID, backend.PhaseExited, 1)
+	if err := c1.Reconcile(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	time.Sleep(30 * time.Millisecond)
+	c2 := control.New(control.Options{Store: st, Backend: fake, Restart: policy, StopTimeout: time.Second})
+	if err := c2.Reconcile(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if fake.Launched() != 2 {
+		t.Fatalf("scheduled restart was lost across controller restart: launches=%d", fake.Launched())
+	}
+}
+
 // The store is the source of truth: a fresh Controller over the same store
 // re-attaches to a still-running container via Reconcile — no state lost
 // across a controller restart.

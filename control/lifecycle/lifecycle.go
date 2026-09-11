@@ -19,6 +19,7 @@ const (
 	Submitted  Phase = "submitted"
 	Starting   Phase = "starting"
 	Running    Phase = "running"
+	Restarting Phase = "restarting"
 	Cancelling Phase = "cancelling"
 	Cancelled  Phase = "cancelled"
 	Finished   Phase = "finished"
@@ -45,7 +46,8 @@ var valid = map[Phase][]Phase{
 	// desired-stopped reconcile stops the container and marks the run
 	// Cancelled in one step (see Controller.Cancel / reconcileRun),
 	// without a distinct Cancelling dwell.
-	Running:    {Cancelling, Cancelled, Finished, Failed},
+	Running:    {Cancelling, Cancelled, Finished, Failed, Restarting},
+	Restarting: {Cancelled, Failed},
 	Cancelling: {Cancelled, Finished, Failed},
 	// terminal states may only re-enter Starting via an explicit restart,
 	// which creates a NEW run rather than transitioning the old one.

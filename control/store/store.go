@@ -62,6 +62,7 @@ type Run struct {
 	Error       string     `json:"error,omitempty"`
 	Started     time.Time  `json:"startedAt"`
 	Stopped     *time.Time `json:"stoppedAt,omitempty"`
+	RestartAt   *time.Time `json:"restartAt,omitempty"`
 }
 
 // Transition is an append-only lifecycle audit record.

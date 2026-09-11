@@ -4,9 +4,11 @@ package backend
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"strconv"
+	"strings"
 	"time"
 
 	batchv1 "k8s.io/api/batch/v1"
@@ -30,12 +32,13 @@ import (
 // ConfigMap (the workflow), an optional Secret (env), and a ClusterIP
 // Service so the controller can reach the agent's control surface.
 type Kubernetes struct {
-	cs               kubernetes.Interface
-	namespace        string
-	image            string
-	pvcSize          string
-	storageClass     string
-	imagePullSecrets []string
+	cs                     kubernetes.Interface
+	namespace              string
+	image                  string
+	pvcSize                string
+	storageClass           string
+	imagePullSecrets       []string
+	controlAddressTemplate string
 }
 
 // KubernetesOptions configures the backend.
@@ -49,6 +52,9 @@ type KubernetesOptions struct {
 	// namespace, referenced on every job pod so the cluster can pull from
 	// private registries. Weibo references them; it does not create them.
 	ImagePullSecrets []string
+	// ControlAddressTemplate makes the agent reachable from the controller.
+	// Tokens: {service}, {namespace}, {port}. Empty uses cluster-local DNS.
+	ControlAddressTemplate string
 }
 
 // NewKubernetes connects using in-cluster config (when running in a Pod)
@@ -68,12 +74,13 @@ func NewKubernetes(opts KubernetesOptions) (*Kubernetes, error) {
 // newK8s builds the backend from an injected client (used by tests).
 func newK8s(cs kubernetes.Interface, opts KubernetesOptions) *Kubernetes {
 	k := &Kubernetes{
-		cs:               cs,
-		namespace:        orString(opts.Namespace, "default"),
-		image:            opts.Image,
-		pvcSize:          orString(opts.PVCSize, "1Gi"),
-		storageClass:     opts.StorageClass,
-		imagePullSecrets: opts.ImagePullSecrets,
+		cs:                     cs,
+		namespace:              orString(opts.Namespace, "default"),
+		image:                  opts.Image,
+		pvcSize:                orString(opts.PVCSize, "1Gi"),
+		storageClass:           opts.StorageClass,
+		imagePullSecrets:       opts.ImagePullSecrets,
+		controlAddressTemplate: opts.ControlAddressTemplate,
 	}
 	return k
 }
@@ -130,7 +137,56 @@ func (k *Kubernetes) Capacity(ctx context.Context, cfg CapacityConfig) (Capacity
 			snap.UsedSlots++
 		}
 	}
-	if cfg.MaxJobs > 0 {
+	// Namespace ResourceQuota is authoritative when available. Derive slots
+	// from remaining requested CPU/memory and the configured per-job defaults.
+	if quotas, err := k.cs.CoreV1().ResourceQuotas(k.namespace).List(ctx, metav1.ListOptions{}); err == nil {
+		for _, q := range quotas.Items {
+			cpuHard, cpuOK := q.Status.Hard[corev1.ResourceRequestsCPU]
+			memHard, memOK := q.Status.Hard[corev1.ResourceRequestsMemory]
+			if !cpuOK && !memOK {
+				continue
+			}
+			snap.Unsupported, snap.Reason, snap.Source = false, "", "resource_quota"
+			if cpuOK {
+				used := q.Status.Used[corev1.ResourceRequestsCPU]
+				snap.CPUTotalMilli, snap.CPUReservedMilli = cpuHard.MilliValue(), used.MilliValue()
+				snap.CPUAvailableMilli = max(0, snap.CPUTotalMilli-snap.CPUReservedMilli)
+			}
+			if memOK {
+				used := q.Status.Used[corev1.ResourceRequestsMemory]
+				snap.MemoryTotalBytes, snap.MemoryReservedBytes = memHard.Value(), used.Value()
+				snap.MemoryAvailableBytes = max(0, snap.MemoryTotalBytes-snap.MemoryReservedBytes)
+			}
+			break
+		}
+	}
+	if q, err := resource.ParseQuantity(cfg.DefaultJobCPU); err == nil {
+		snap.DefaultJobCPUMilli = q.MilliValue()
+	}
+	if q, err := resource.ParseQuantity(cfg.DefaultJobMemory); err == nil {
+		snap.DefaultJobMemoryBytes = q.Value()
+	}
+	if !snap.Unsupported {
+		slots := -1
+		if snap.DefaultJobCPUMilli > 0 && snap.CPUTotalMilli > 0 {
+			slots = int(snap.CPUAvailableMilli / snap.DefaultJobCPUMilli)
+		}
+		if snap.DefaultJobMemoryBytes > 0 && snap.MemoryTotalBytes > 0 {
+			m := int(snap.MemoryAvailableBytes / snap.DefaultJobMemoryBytes)
+			if slots < 0 || m < slots {
+				slots = m
+			}
+		}
+		if slots >= 0 {
+			available := slots
+			if cfg.MaxJobs > 0 && available > cfg.MaxJobs-snap.UsedSlots {
+				available = max(0, cfg.MaxJobs-snap.UsedSlots)
+			}
+			total := snap.UsedSlots + available
+			snap.AvailableSlots, snap.TotalSlots = &available, &total
+		}
+	}
+	if cfg.MaxJobs > 0 && snap.Unsupported {
 		available := cfg.MaxJobs - snap.UsedSlots
 		if available < 0 {
 			available = 0
@@ -190,7 +246,7 @@ func (k *Kubernetes) Launch(ctx context.Context, spec LaunchSpec) (string, error
 			StringData: spec.Env,
 		}
 		if _, err := k.cs.CoreV1().Secrets(k.namespace).Create(ctx, sec, metav1.CreateOptions{}); err != nil {
-			k.cleanup(ctx, run)
+			_ = k.cleanup(ctx, run)
 			return "", fmt.Errorf("k8s: create secret: %w", err)
 		}
 		secretName = run
@@ -198,13 +254,13 @@ func (k *Kubernetes) Launch(ctx context.Context, spec LaunchSpec) (string, error
 
 	job := k.buildJob(run, jobID, pvc, cmName, secretName, image, port, spec.RestoreSavepoint, spec.PullPolicy, spec.Resources)
 	if _, err := k.cs.BatchV1().Jobs(k.namespace).Create(ctx, job, metav1.CreateOptions{}); err != nil {
-		k.cleanup(ctx, run)
+		_ = k.cleanup(ctx, run)
 		return "", fmt.Errorf("k8s: create job: %w", err)
 	}
 
 	svc := k.buildService(run, jobID, port)
 	if _, err := k.cs.CoreV1().Services(k.namespace).Create(ctx, svc, metav1.CreateOptions{}); err != nil {
-		k.cleanup(ctx, run)
+		_ = k.cleanup(ctx, run)
 		return "", fmt.Errorf("k8s: create service: %w", err)
 	}
 	return run, nil
@@ -228,12 +284,14 @@ func (k *Kubernetes) buildJob(run, jobID, pvc, cmName, secretName, image string,
 			LocalObjectReference: corev1.LocalObjectReference{Name: secretName},
 		}}}
 	}
-	probe := &corev1.Probe{
+	liveness := &corev1.Probe{
 		ProbeHandler: corev1.ProbeHandler{HTTPGet: &corev1.HTTPGetAction{
-			Path: "/healthz", Port: intstr.FromInt(port),
+			Path: "/livez", Port: intstr.FromInt(port),
 		}},
 		InitialDelaySeconds: 3, PeriodSeconds: 5, FailureThreshold: 6,
 	}
+	readiness := liveness.DeepCopy()
+	readiness.HTTPGet.Path = "/readyz"
 
 	// Every job mounts its data PVC; YAML jobs also mount the workflow
 	// ConfigMap (SDK jobs have the pipeline compiled into the image).
@@ -258,7 +316,9 @@ func (k *Kubernetes) buildJob(run, jobID, pvc, cmName, secretName, image string,
 		Spec: batchv1.JobSpec{
 			BackoffLimit: int32Ptr(0), // no k8s retries; weibo reconciler restarts
 			Template: corev1.PodTemplateSpec{
-				ObjectMeta: metav1.ObjectMeta{Labels: labels(jobID, run)},
+				ObjectMeta: metav1.ObjectMeta{Labels: labels(jobID, run), Annotations: map[string]string{
+					"prometheus.io/scrape": "true", "prometheus.io/path": "/metrics", "prometheus.io/port": strconv.Itoa(port),
+				}},
 				Spec: corev1.PodSpec{
 					RestartPolicy:                 corev1.RestartPolicyNever,
 					TerminationGracePeriodSeconds: int64Ptr(45), // room to drain + final checkpoint
@@ -279,9 +339,14 @@ func (k *Kubernetes) buildJob(run, jobID, pvc, cmName, secretName, image string,
 						EnvFrom:         envFrom,
 						Ports:           []corev1.ContainerPort{{ContainerPort: int32(port)}},
 						VolumeMounts:    mounts,
-						LivenessProbe:   probe,
-						ReadinessProbe:  probe,
-						Resources:       k8sResources(resources),
+						LivenessProbe:   liveness,
+						ReadinessProbe:  readiness,
+						SecurityContext: &corev1.SecurityContext{
+							AllowPrivilegeEscalation: boolPtr(false), ReadOnlyRootFilesystem: boolPtr(true),
+							Capabilities:   &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
+							SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
+						},
+						Resources: k8sResources(resources),
 					}},
 					Volumes: volumes,
 				},
@@ -345,15 +410,56 @@ func (k *Kubernetes) Status(ctx context.Context, id string) (Status, error) {
 	case job.Status.Failed > 0:
 		st.Phase = PhaseExited
 		st.ExitCode = k.podExitCode(ctx, id)
+	case job.Status.Active > 0:
+		st.Phase, st.Reason = k.podRuntimeStatus(ctx, id)
 	default:
-		// Active, or pending/starting: treat as running.
-		st.Phase = PhaseRunning
+		st.Phase = PhasePending
+		st.Reason = k.podPendingReason(ctx, id)
 	}
 	// The control surface is reachable in-cluster via the Service DNS.
 	if svc, err := k.cs.CoreV1().Services(k.namespace).Get(ctx, id, metav1.GetOptions{}); err == nil && len(svc.Spec.Ports) > 0 {
-		st.Address = fmt.Sprintf("%s.%s.svc.cluster.local:%d", id, k.namespace, svc.Spec.Ports[0].Port)
+		port := strconv.Itoa(int(svc.Spec.Ports[0].Port))
+		tmpl := k.controlAddressTemplate
+		if tmpl == "" {
+			tmpl = "{service}.{namespace}.svc.cluster.local:{port}"
+		}
+		st.Address = strings.NewReplacer("{service}", id, "{namespace}", k.namespace, "{port}", port).Replace(tmpl)
 	}
 	return st, nil
+}
+
+func (k *Kubernetes) podRuntimeStatus(ctx context.Context, run string) (Phase, string) {
+	pods, err := k.cs.CoreV1().Pods(k.namespace).List(ctx, metav1.ListOptions{LabelSelector: "weibo.run=" + run})
+	if err != nil || len(pods.Items) == 0 {
+		return PhasePending, "waiting for pod"
+	}
+	for _, p := range pods.Items {
+		for _, cs := range p.Status.ContainerStatuses {
+			if cs.State.Running != nil && cs.Ready {
+				return PhaseRunning, ""
+			}
+		}
+	}
+	return PhasePending, k.podPendingReason(ctx, run)
+}
+
+func (k *Kubernetes) podPendingReason(ctx context.Context, run string) string {
+	pods, err := k.cs.CoreV1().Pods(k.namespace).List(ctx, metav1.ListOptions{LabelSelector: "weibo.run=" + run})
+	if err != nil || len(pods.Items) == 0 {
+		return "waiting for pod"
+	}
+	p := pods.Items[0]
+	for _, c := range p.Status.Conditions {
+		if c.Status == corev1.ConditionFalse && c.Reason != "" {
+			return c.Reason + ": " + c.Message
+		}
+	}
+	for _, cs := range p.Status.ContainerStatuses {
+		if cs.State.Waiting != nil {
+			return cs.State.Waiting.Reason + ": " + cs.State.Waiting.Message
+		}
+	}
+	return string(p.Status.Phase)
 }
 
 // podExitCode returns a failed pod's container exit code, or 1 if unknown.
@@ -373,12 +479,54 @@ func (k *Kubernetes) podExitCode(ctx context.Context, run string) int {
 }
 
 func (k *Kubernetes) Stop(ctx context.Context, id string, timeout time.Duration) error {
-	prop := metav1.DeletePropagationBackground
-	err := k.cs.BatchV1().Jobs(k.namespace).Delete(ctx, id, metav1.DeleteOptions{PropagationPolicy: &prop})
+	if timeout <= 0 {
+		timeout = 30 * time.Second
+	}
+	stopCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	seconds := int64(timeout.Round(time.Second) / time.Second)
+	if seconds < 1 {
+		seconds = 1
+	}
+	prop := metav1.DeletePropagationForeground
+	pods, err := k.cs.CoreV1().Pods(k.namespace).List(stopCtx, metav1.ListOptions{LabelSelector: "weibo.run=" + id})
+	if err != nil {
+		return fmt.Errorf("k8s: list pods for stop %s: %w", id, err)
+	}
+	for _, pod := range pods.Items {
+		if err := k.cs.CoreV1().Pods(k.namespace).Delete(stopCtx, pod.Name, metav1.DeleteOptions{GracePeriodSeconds: &seconds}); err != nil && !apierrors.IsNotFound(err) {
+			return fmt.Errorf("k8s: stop pod %s: %w", pod.Name, err)
+		}
+	}
+	err = k.cs.BatchV1().Jobs(k.namespace).Delete(stopCtx, id, metav1.DeleteOptions{
+		PropagationPolicy: &prop, GracePeriodSeconds: &seconds,
+	})
 	if apierrors.IsNotFound(err) {
 		return nil
 	}
-	return err
+	if err != nil {
+		return fmt.Errorf("k8s: stop job %s: %w", id, err)
+	}
+	ticker := time.NewTicker(200 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		_, jobErr := k.cs.BatchV1().Jobs(k.namespace).Get(stopCtx, id, metav1.GetOptions{})
+		pods, podErr := k.cs.CoreV1().Pods(k.namespace).List(stopCtx, metav1.ListOptions{LabelSelector: "weibo.run=" + id})
+		if apierrors.IsNotFound(jobErr) && podErr == nil && len(pods.Items) == 0 {
+			return nil
+		}
+		if jobErr != nil && !apierrors.IsNotFound(jobErr) {
+			return fmt.Errorf("k8s: wait for job %s termination: %w", id, jobErr)
+		}
+		if podErr != nil {
+			return fmt.Errorf("k8s: wait for pods of %s: %w", id, podErr)
+		}
+		select {
+		case <-stopCtx.Done():
+			return fmt.Errorf("k8s: job %s did not terminate within %s: %w", id, timeout, stopCtx.Err())
+		case <-ticker.C:
+		}
+	}
 }
 
 func (k *Kubernetes) Logs(ctx context.Context, id string, tail int) (string, error) {
@@ -405,18 +553,25 @@ func (k *Kubernetes) Logs(ctx context.Context, id string, tail int) (string, err
 }
 
 func (k *Kubernetes) Remove(ctx context.Context, id string) error {
-	k.cleanup(ctx, id)
-	return nil
+	return k.cleanup(ctx, id)
 }
 
 // cleanup best-effort deletes a run's Job, Service, ConfigMap, and Secret
 // (the per-job PVC is kept so state survives).
-func (k *Kubernetes) cleanup(ctx context.Context, run string) {
+func (k *Kubernetes) cleanup(ctx context.Context, run string) error {
 	prop := metav1.DeletePropagationBackground
-	_ = k.cs.BatchV1().Jobs(k.namespace).Delete(ctx, run, metav1.DeleteOptions{PropagationPolicy: &prop})
-	_ = k.cs.CoreV1().Services(k.namespace).Delete(ctx, run, metav1.DeleteOptions{})
-	_ = k.cs.CoreV1().ConfigMaps(k.namespace).Delete(ctx, run, metav1.DeleteOptions{})
-	_ = k.cs.CoreV1().Secrets(k.namespace).Delete(ctx, run, metav1.DeleteOptions{})
+	var errs []error
+	for kind, err := range map[string]error{
+		"job":       k.cs.BatchV1().Jobs(k.namespace).Delete(ctx, run, metav1.DeleteOptions{PropagationPolicy: &prop}),
+		"service":   k.cs.CoreV1().Services(k.namespace).Delete(ctx, run, metav1.DeleteOptions{}),
+		"configmap": k.cs.CoreV1().ConfigMaps(k.namespace).Delete(ctx, run, metav1.DeleteOptions{}),
+		"secret":    k.cs.CoreV1().Secrets(k.namespace).Delete(ctx, run, metav1.DeleteOptions{}),
+	} {
+		if err != nil && !apierrors.IsNotFound(err) {
+			errs = append(errs, fmt.Errorf("delete %s: %w", kind, err))
+		}
+	}
+	return errors.Join(errs...)
 }
 
 func (k *Kubernetes) meta(name, jobID, run string) metav1.ObjectMeta {

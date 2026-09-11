@@ -90,6 +90,7 @@ func runDashboard(args []string) int {
 	pullSecrets := fs.String("image-pull-secrets", "", "comma-separated k8s imagePullSecret names for private registries (kubernetes backend)")
 	pvcSize := fs.String("pvc-size", "1Gi", "per-job PVC size (kubernetes backend)")
 	storageClass := fs.String("storage-class", "", "PVC storage class; empty = cluster default (kubernetes backend)")
+	controlAddress := fs.String("k8s-control-address-template", "", "agent address template with {service}, {namespace}, {port}; empty = cluster DNS")
 	maxJobs := fs.Int("max-jobs", 0, "maximum concurrent jobs; 0 = resource-limited only")
 	defaultJobCPU := fs.String("default-job-cpu", "1", "default CPU reserved per job for capacity math")
 	defaultJobMemory := fs.String("default-job-memory", "1Gi", "default memory reserved per job for capacity math")
@@ -103,7 +104,7 @@ func runDashboard(args []string) int {
 
 	// Build and preflight the selected backend — a clear message beats a
 	// launch-time failure later.
-	be, rc := makeBackend(ctx, *backendKind, *image, *namespace, *kubeconfig, splitCSV(*pullSecrets), *pvcSize, *storageClass)
+	be, rc := makeBackend(ctx, *backendKind, *image, *namespace, *kubeconfig, splitCSV(*pullSecrets), *pvcSize, *storageClass, *controlAddress)
 	if be == nil {
 		return rc
 	}
@@ -155,7 +156,7 @@ func runDashboard(args []string) int {
 
 // makeBackend constructs and preflights the chosen container backend. On
 // failure it prints a hint and returns (nil, exitCode).
-func makeBackend(ctx context.Context, kind, image, namespace, kubeconfig string, pullSecrets []string, pvcSize, storageClass string) (backend.ContainerBackend, int) {
+func makeBackend(ctx context.Context, kind, image, namespace, kubeconfig string, pullSecrets []string, pvcSize, storageClass, controlAddress string) (backend.ContainerBackend, int) {
 	switch kind {
 	case "docker":
 		d, err := backend.NewDocker(image)
@@ -178,6 +179,7 @@ func makeBackend(ctx context.Context, kind, image, namespace, kubeconfig string,
 			Kubeconfig: kubeconfig, Namespace: namespace, Image: image,
 			ImagePullSecrets: pullSecrets,
 			PVCSize:          pvcSize, StorageClass: storageClass,
+			ControlAddressTemplate: controlAddress,
 		})
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "weibo: kubernetes: %v\n", err)

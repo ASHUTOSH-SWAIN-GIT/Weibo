@@ -108,13 +108,18 @@ lateness bound, since late records may reopen a window that already fired.
    requested graceful shutdown. Covered by source-, stage-, sink-, and
    end-to-end propagation regression tests, including `-race`.
 
-10. **Reconciler blocks the whole loop on backoff** — `control/reconcile.go:99`.
-    `maybeRestart` sleeps synchronously in the single-threaded reconcile loop, so
-    one crash-looping job stalls every other job. Fix: record a
-    "restart-not-before" timestamp and skip until it passes.
+10. ~~**Reconciler blocks the whole loop on backoff.**~~ **Fixed.** Failed runs
+    enter a non-terminal `restarting` phase with a persisted `restartAt`
+    deadline. Reconcile skips them until due instead of sleeping, so other jobs
+    continue progressing. The deadline survives controller restarts through the
+    SQLite store. Covered by multi-job and controller-restart regression tests.
 
-11. **K8s backend `Stop` ignores the timeout** — `control/backend/kubernetes.go`
-    (~line 313). No graceful-termination wait; set `GracePeriodSeconds` and poll.
+11. ~~**K8s backend `Stop` ignores the timeout.**~~ **Fixed.** Stop now sends
+    the requested grace period, uses foreground deletion, waits for confirmed
+    Job termination, and returns timeout/cancellation/API failures. Controller
+    cancel, restart, and reconciliation no longer record a clean cancellation
+    when stop fails. Kubernetes also distinguishes pending from running and
+    surfaces pod scheduling/image-pull reasons.
 
 ---
 
@@ -179,7 +184,7 @@ The production test showed these gaps directly.
 - ~~**Sprint 1 (correctness):** Tier 1, then Tier 2 #6–#7.~~ Done — Tier 1 is
   fixed (with #5 mitigated by a poll timeout rather than the high-water-offset
   rework), and Tier 2 is fully closed.
-- **Sprint 2 (hardening + ops) — current:** Tier 3 #10–#11, plus Tier 4 #12–#13 while
+- **Sprint 2 (hardening + ops) — current:** Tier 4 #12–#13 while
   the testing context is fresh.
 - **Sprint 3+ (features):** Tier 5, starting with allowed-lateness (#16), which
   the windowing work in Sprint 1 sets up.
@@ -187,5 +192,5 @@ The production test showed these gaps directly.
 
 ~~The single highest-leverage item is **#1 (multi-partition checkpoint
 offsets)**~~ — shipped. With Tiers 1 and 2 closed, the highest-leverage
-remaining item is **#10 (non-blocking reconciliation backoff)**: one
-crash-looping job must not stall lifecycle management for every other job.
+remaining item is **#12 (standard health and metrics surface)** so standalone
+jobs and controller-managed jobs expose the same operational contract.

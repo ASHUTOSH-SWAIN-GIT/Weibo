@@ -91,6 +91,7 @@ func (f *Fake) Capacity(ctx context.Context, cfg CapacityConfig) (CapacitySnapsh
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	used := 0
+	starting := 0
 	exited := 0
 	containers := make([]ContainerStats, 0, len(f.containers))
 	for id, c := range f.containers {
@@ -104,6 +105,9 @@ func (f *Fake) Capacity(ctx context.Context, cfg CapacityConfig) (CapacitySnapsh
 		})
 		switch c.status.Phase {
 		case PhaseRunning:
+			used++
+		case PhasePending:
+			starting++
 			used++
 		case PhaseExited, PhaseGone:
 			exited++
@@ -127,7 +131,8 @@ func (f *Fake) Capacity(ctx context.Context, cfg CapacityConfig) (CapacitySnapsh
 		UsedSlots:             used,
 		AvailableSlots:        &available,
 		MaxJobs:               cfg.MaxJobs,
-		RunningContainers:     used,
+		RunningContainers:     used - starting,
+		StartingContainers:    starting,
 		ExitedContainers:      exited,
 		DefaultJobCPUMilli:    1000,
 		DefaultJobMemoryBytes: 1 << 30,

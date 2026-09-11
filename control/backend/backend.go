@@ -14,6 +14,8 @@ import (
 type Phase string
 
 const (
+	// PhasePending: the workload exists but its process is not running yet.
+	PhasePending Phase = "pending"
 	// PhaseRunning: the container process is up.
 	PhaseRunning Phase = "running"
 	// PhaseExited: the container process has stopped (see ExitCode).
@@ -157,6 +159,7 @@ const (
 type Status struct {
 	Phase    Phase
 	ExitCode int    // meaningful when Phase == PhaseExited
+	Reason   string // backend-native explanation for pending/failure states
 	HostPort int    // reachable host port mapped to ControlPort, 0 if none
 	Address  string // host:port for the control surface, empty if unreachable
 }

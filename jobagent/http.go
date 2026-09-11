@@ -22,6 +22,17 @@ import (
 //	POST /savepoint  stop-with-savepoint (?label=<name>)
 func (a *Agent) Handler() http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /livez", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]string{"status": "alive"})
+	})
+	mux.HandleFunc("GET /readyz", func(w http.ResponseWriter, r *http.Request) {
+		st := a.State()
+		if st.Phase != PhaseRunning {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]any{"status": "not-ready", "phase": st.Phase})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"status": "ready", "phase": st.Phase})
+	})
 
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{
