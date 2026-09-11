@@ -109,14 +109,13 @@ func (op *ProcessOperator) handleFailure(r types.Record, err error) {
 
 	case ProcFailureDLQ:
 		if op.DLQ == nil {
-			fmt.Printf("weibo/operator: DLQ is nil for Process %q, dropping record\n", op.Label)
-			return
+			panic(fmt.Sprintf("weibo/operator: DLQ is nil for Process %q: %v", op.Label, err))
 		}
 		ctx := context.Background()
 		// Attach error info to headers for the DLQ consumer.
 		r = r.WithHeader("_error", []byte(err.Error()))
 		if werr := op.DLQ.Write(ctx, r); werr != nil {
-			fmt.Printf("weibo/operator: DLQ write failed for Process %q: %v\n", op.Label, werr)
+			panic(fmt.Sprintf("weibo/operator: DLQ write failed for Process %q: %v", op.Label, werr))
 		}
 
 	case ProcFailureFail:

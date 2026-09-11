@@ -18,9 +18,16 @@ func (s *captureSink) Write(_ context.Context, r types.Record) error {
 	return nil
 }
 
+type failingCaptureSink struct{ err error }
+
+func (s failingCaptureSink) Write(context.Context, types.Record) error { return s.err }
+
 func TestDeliveryCoordinator_NoDeserializerPassesThrough(t *testing.T) {
 	d := &deliveryCoordinator{}
-	rec := d.toRecord(kafka.Message{Value: []byte("hi")})
+	rec, err := d.toRecord(context.Background(), kafka.Message{Value: []byte("hi")})
+	if err != nil {
+		t.Fatalf("toRecord: %v", err)
+	}
 	if rec == nil {
 		t.Fatal("toRecord: got nil, want record")
 	}
@@ -35,7 +42,10 @@ func TestDeliveryCoordinator_DeserializeSuccessSetsParsed(t *testing.T) {
 			return string(data) + "!", nil
 		}),
 	}
-	rec := d.toRecord(kafka.Message{Value: []byte("ok")})
+	rec, err := d.toRecord(context.Background(), kafka.Message{Value: []byte("ok")})
+	if err != nil {
+		t.Fatalf("toRecord: %v", err)
+	}
 	if rec == nil || rec.Parsed != "ok!" {
 		t.Fatalf("toRecord: got %+v, want Parsed=ok!", rec)
 	}
@@ -48,21 +58,21 @@ func TestDeliveryCoordinator_FailurePolicies(t *testing.T) {
 
 	// Drop: record discarded, no DLQ.
 	drop := &deliveryCoordinator{deserializer: deser, deserFailPolicy: DeserFailureDrop}
-	if rec := drop.toRecord(kafka.Message{Value: []byte("x")}); rec != nil {
+	if rec, err := drop.toRecord(context.Background(), kafka.Message{Value: []byte("x")}); rec != nil || err != nil {
 		t.Errorf("Drop: got %+v, want nil", rec)
 	}
 
-	// Fail: record discarded (current behaviour drops; caller handles error).
+	// Fail: the deserializer error is returned to stop the source and pipeline.
 	fail := &deliveryCoordinator{deserializer: deser, deserFailPolicy: DeserFailureFail}
-	if rec := fail.toRecord(kafka.Message{Value: []byte("x")}); rec != nil {
-		t.Errorf("Fail: got %+v, want nil", rec)
+	if rec, err := fail.toRecord(context.Background(), kafka.Message{Topic: "in", Partition: 2, Offset: 7, Value: []byte("x")}); rec != nil || err == nil {
+		t.Errorf("Fail: got record=%+v err=%v, want nil record and error", rec, err)
 	}
 
 	// DLQ: record discarded from stream but forwarded to the DLQ sink with
 	// the error attached as a header.
 	sink := &captureSink{}
 	dlq := &deliveryCoordinator{deserializer: deser, deserFailPolicy: DeserFailureDLQ, deserDLQ: sink}
-	if rec := dlq.toRecord(kafka.Message{Value: []byte("x")}); rec != nil {
+	if rec, err := dlq.toRecord(context.Background(), kafka.Message{Value: []byte("x")}); rec != nil || err != nil {
 		t.Errorf("DLQ: got %+v, want nil", rec)
 	}
 	if len(sink.records) != 1 {
@@ -70,6 +80,14 @@ func TestDeliveryCoordinator_FailurePolicies(t *testing.T) {
 	}
 	if string(sink.records[0].Headers["_deser_error"]) != "boom" {
 		t.Errorf("DLQ header: got %q, want boom", sink.records[0].Headers["_deser_error"])
+	}
+
+	badDLQ := &deliveryCoordinator{
+		deserializer: deser, deserFailPolicy: DeserFailureDLQ,
+		deserDLQ: failingCaptureSink{err: errors.New("dlq unavailable")},
+	}
+	if _, err := badDLQ.toRecord(context.Background(), kafka.Message{Value: []byte("x")}); err == nil {
+		t.Fatal("DLQ write failure: got nil, want pipeline-fatal error")
 	}
 }
 

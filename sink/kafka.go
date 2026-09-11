@@ -128,15 +128,20 @@ func (k *KafkaSink) Write(ctx context.Context, in <-chan types.Record) error {
 	defer k.writer.Close()
 
 	bw := &batchWriter[kafkaBatchEntry]{
-		batchSize: k.cfg.batchSize,
-		// No periodic flush: kafka-go's own BatchTimeout governs when a
-		// partial batch leaves the writer.
-		flushInterval: 0,
+		batchSize:     k.cfg.batchSize,
+		flushInterval: k.cfg.batchTimeout,
 		// The writer is safe for concurrent use, so a slow broker round
 		// trip doesn't stall accumulation of the next batch.
 		async: true,
-		convert: func(r types.Record) (kafkaBatchEntry, bool) {
-			return kafkaBatchEntry{msg: k.recordToKafka(r), record: r}, true
+		convertWithError: func(ctx context.Context, r types.Record) (kafkaBatchEntry, bool, error) {
+			msg, err := k.recordToKafka(r)
+			if err == nil {
+				return kafkaBatchEntry{msg: msg, record: r}, true, nil
+			}
+			if ferr := applyFailurePolicy(ctx, k.cfg.failurePolicy, k.cfg.dlq, r); ferr != nil {
+				return kafkaBatchEntry{}, false, fmt.Errorf("kafka sink: serialize: %w (failure policy: %w)", err, ferr)
+			}
+			return kafkaBatchEntry{}, false, nil
 		},
 		flush: k.flushBatch,
 	}
@@ -154,7 +159,7 @@ func (k *KafkaSink) flushBatch(ctx context.Context, entries []kafkaBatchEntry) e
 	if err := k.writeWithRetry(ctx, msgs); err != nil {
 		for _, e := range entries {
 			if ferr := applyFailurePolicy(ctx, k.cfg.failurePolicy, k.cfg.dlq, e.record); ferr != nil {
-				return ferr
+				return fmt.Errorf("kafka sink: write: %w (failure policy: %w)", err, ferr)
 			}
 		}
 	}
@@ -186,16 +191,15 @@ func (k *KafkaSink) writeWithRetry(ctx context.Context, msgs []kafka.Message) er
 // recordToKafka converts a weibo.Record to a kafka.Message.
 // If a serializer is configured, it runs on the record to produce the
 // message value; otherwise Record.Value is used directly.
-func (k *KafkaSink) recordToKafka(r types.Record) kafka.Message {
+func (k *KafkaSink) recordToKafka(r types.Record) (kafka.Message, error) {
 	var value []byte = r.Value
 
 	if k.cfg.serializer != nil {
 		out, err := k.cfg.serializer.Serialize(r)
 		if err != nil {
-			fmt.Printf("weibo/sink: serialize error: %v\n", err)
-		} else {
-			value = out
+			return kafka.Message{}, err
 		}
+		value = out
 	}
 
 	var ts time.Time
@@ -213,7 +217,7 @@ func (k *KafkaSink) recordToKafka(r types.Record) kafka.Message {
 		Value:   value,
 		Time:    ts,
 		Headers: headers,
-	}
+	}, nil
 }
 
 // RecordToKafka converts a weibo.Record to a kafka.Message.

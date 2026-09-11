@@ -99,11 +99,14 @@ lateness bound, since late records may reopen a window that already fired.
 
 ## Tier 3 — Robustness & failure handling
 
-9. **Failure policies not honored.** `DeserFailureFail` drops instead of failing
-   (`source/kafka.go:284`); source errors are logged then swallowed so `Execute`
-   can report success after a fatal source error (`pipeline/stage.go:58`); a
-   serializer error logs then writes the raw record (`sink/kafka.go:253`); the
-   batch timeout doesn't flush partial batches (`sink/kafka.go:197`).
+9. ~~**Failure policies not honored.**~~ **Fixed.** Fatal deserialization and
+   source errors now propagate through the source stage and `Execute`; failed
+   deserialization/Process DLQ writes are fatal instead of silently dropping;
+   Kafka serialization failures follow the configured sink policy and never
+   fall back to publishing raw bytes; partial Kafka batches flush on the
+   configured timeout. Final sink-flush errors also remain fatal during a
+   requested graceful shutdown. Covered by source-, stage-, sink-, and
+   end-to-end propagation regression tests, including `-race`.
 
 10. **Reconciler blocks the whole loop on backoff** — `control/reconcile.go:99`.
     `maybeRestart` sleeps synchronously in the single-threaded reconcile loop, so
@@ -176,7 +179,7 @@ The production test showed these gaps directly.
 - ~~**Sprint 1 (correctness):** Tier 1, then Tier 2 #6–#7.~~ Done — Tier 1 is
   fixed (with #5 mitigated by a poll timeout rather than the high-water-offset
   rework), and Tier 2 is fully closed.
-- **Sprint 2 (hardening + ops) — current:** Tier 3, plus Tier 4 #12–#13 while
+- **Sprint 2 (hardening + ops) — current:** Tier 3 #10–#11, plus Tier 4 #12–#13 while
   the testing context is fresh.
 - **Sprint 3+ (features):** Tier 5, starting with allowed-lateness (#16), which
   the windowing work in Sprint 1 sets up.
@@ -184,6 +187,5 @@ The production test showed these gaps directly.
 
 ~~The single highest-leverage item is **#1 (multi-partition checkpoint
 offsets)**~~ — shipped. With Tiers 1 and 2 closed, the highest-leverage
-remaining item is **#9 (failure policies not honored)**: a pipeline that
-silently drops records or reports success after a fatal source error
-undermines the same guarantees Tier 1 just secured.
+remaining item is **#10 (non-blocking reconciliation backoff)**: one
+crash-looping job must not stall lifecycle management for every other job.

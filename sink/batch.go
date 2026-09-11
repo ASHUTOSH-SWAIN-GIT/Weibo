@@ -56,6 +56,11 @@ type batchWriter[T any] struct {
 	// record entirely — e.g. a Postgres mapper that declines a row.
 	convert func(types.Record) (T, bool)
 
+	// convertWithError is the error-aware form used by sinks whose encoding can
+	// fail before a record enters a batch. When set, it takes precedence over
+	// convert and lets that failure stop the sink immediately.
+	convertWithError func(context.Context, types.Record) (T, bool, error)
+
 	// flush writes one batch. It is called with a non-empty slice, and
 	// never concurrently with itself unless async is set.
 	flush func(ctx context.Context, batch []T) error
@@ -86,15 +91,27 @@ func (b *batchWriter[T]) run(ctx context.Context, in <-chan types.Record) error 
 	)
 
 	// add buffers a record and reports whether the batch is now full.
-	add := func(r types.Record) bool {
-		item, ok := b.convert(r)
+	add := func(addCtx context.Context, r types.Record) (bool, error) {
+		var (
+			item T
+			ok   bool
+			err  error
+		)
+		if b.convertWithError != nil {
+			item, ok, err = b.convertWithError(addCtx, r)
+		} else {
+			item, ok = b.convert(r)
+		}
+		if err != nil {
+			return false, err
+		}
 		if !ok {
-			return false
+			return false, nil
 		}
 		mu.Lock()
 		defer mu.Unlock()
 		batch = append(batch, item)
-		return len(batch) >= batchSize
+		return len(batch) >= batchSize, nil
 	}
 
 	// doFlush hands the buffered entries to b.flush. In async mode it
@@ -137,18 +154,20 @@ func (b *batchWriter[T]) run(ctx context.Context, in <-chan types.Record) error 
 
 	// drain keeps reading records after cancellation so the final flush
 	// covers everything the pipeline already handed over.
-	drain := func() {
+	drain := func(drainCtx context.Context) error {
 		deadline := time.NewTimer(shutdownTimeout)
 		defer deadline.Stop()
 		for {
 			select {
 			case r, ok := <-in:
 				if !ok {
-					return
+					return nil
 				}
-				add(r)
+				if _, err := add(drainCtx, r); err != nil {
+					return err
+				}
 			case <-deadline.C:
-				return
+				return nil
 			}
 		}
 	}
@@ -170,7 +189,11 @@ func (b *batchWriter[T]) run(ctx context.Context, in <-chan types.Record) error 
 			// The cancelled ctx can't carry the final write, so the
 			// drain-and-flush runs on a fresh bounded context.
 			shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
-			drain()
+			if err := drain(shutdownCtx); err != nil {
+				wg.Wait()
+				cancel()
+				return err
+			}
 			err := doFlush(shutdownCtx)
 			wg.Wait()
 			cancel()
@@ -191,7 +214,12 @@ func (b *batchWriter[T]) run(ctx context.Context, in <-chan types.Record) error 
 				}
 				return asyncErr()
 			}
-			if add(r) {
+			full, err := add(ctx, r)
+			if err != nil {
+				wg.Wait()
+				return err
+			}
+			if full {
 				if err := doFlush(ctx); err != nil {
 					return err
 				}

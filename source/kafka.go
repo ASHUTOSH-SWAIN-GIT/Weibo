@@ -159,7 +159,10 @@ func (k *KafkaSource) runSerial(ctx context.Context, out chan<- types.Record) er
 			return err
 		}
 		k.offsets.track(msg)
-		record := k.delivery.toRecord(msg)
+		record, err := k.delivery.toRecord(ctx, msg)
+		if err != nil {
+			return err
+		}
 		if record == nil {
 			continue
 		}
@@ -205,7 +208,10 @@ func (k *KafkaSource) readerHandle(out chan<- types.Record) partitionLoop {
 				return err
 			}
 			k.offsets.track(msg)
-			record := k.delivery.toRecord(msg)
+			record, err := k.delivery.toRecord(ctx, msg)
+			if err != nil {
+				return err
+			}
 			if record == nil {
 				continue
 			}

@@ -24,12 +24,13 @@ type deliveryCoordinator struct {
 }
 
 // toRecord converts a Kafka message into a *types.Record, running the
-// deserializer when configured. It returns nil when the record should be
-// dropped (deserialization failed under any policy).
-func (d *deliveryCoordinator) toRecord(msg kafka.Message) *types.Record {
+// deserializer when configured. A nil record with a nil error means the
+// configured policy intentionally consumed the failure (drop or successful
+// DLQ). A non-nil error is pipeline-fatal.
+func (d *deliveryCoordinator) toRecord(ctx context.Context, msg kafka.Message) (*types.Record, error) {
 	record := KafkaToRecord(msg)
 	if d.deserializer == nil {
-		return &record
+		return &record, nil
 	}
 
 	parsed, err := d.deserializer.Deserialize(record.Value, record.Headers)
@@ -37,22 +38,23 @@ func (d *deliveryCoordinator) toRecord(msg kafka.Message) *types.Record {
 		d.metrics.recordDeserFailure()
 		switch d.deserFailPolicy {
 		case DeserFailureDLQ:
-			if d.deserDLQ != nil {
-				failRecord := record.WithHeader("_deser_error", []byte(err.Error()))
-				if werr := d.deserDLQ.Write(context.Background(), failRecord); werr != nil {
-					fmt.Printf("weibo/source: deser DLQ write error: %v\n", werr)
-				}
+			if d.deserDLQ == nil {
+				return nil, fmt.Errorf("weibo/source: deserialization DLQ is nil: %w", err)
+			}
+			failRecord := record.WithHeader("_deser_error", []byte(err.Error()))
+			if werr := d.deserDLQ.Write(ctx, failRecord); werr != nil {
+				return nil, fmt.Errorf("weibo/source: deserialization DLQ write failed: %w", werr)
 			}
 		case DeserFailureFail:
-			return nil // handled by caller via error
+			return nil, fmt.Errorf("weibo/source: deserialize record topic=%q partition=%d offset=%d: %w", msg.Topic, msg.Partition, msg.Offset, err)
 		default:
 			// DeserFailureDrop
 		}
-		return nil
+		return nil, nil
 	}
 
 	record.Parsed = parsed
-	return &record
+	return &record, nil
 }
 
 // emit sends a record to the output channel, blocking until there is room

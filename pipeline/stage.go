@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -45,30 +46,32 @@ type SourceStage struct {
 func (s *SourceStage) Name() string { return "source" }
 
 // Run starts the source and forwards its records to the output edge.
-// Source errors are reported via metrics/log but do not fail the
-// pipeline (parity with previous behavior — the stream simply ends).
+// A source or drain failure is pipeline-fatal unless it is the expected
+// cancellation used to initiate graceful shutdown.
 func (s *SourceStage) Run(runCtx, hardCtx context.Context, _ <-chan types.Record, out chan<- types.Record) error {
 	defer close(out)
 	sm := newStageMetrics(s.Name(), "source")
 	defer sm.setWorkers(1)()
 
 	raw := make(chan types.Record, internalBuf)
+	sourceDone := make(chan error, 1)
 	go func() {
 		defer close(raw)
-		if err := s.Source.Run(runCtx, raw); err != nil {
+		err := s.Source.Run(runCtx, raw)
+		if err != nil {
 			if runCtx.Err() == nil {
 				metrics.SourceErrorsTotal.Inc()
 			}
-			fmt.Printf("weibo: source error: %v\n", err)
 		}
 		// Flush pending offset commits before downstream drains.
 		if d, ok := s.Source.(source.Drainable); ok {
 			flushCtx, cancel := context.WithTimeout(context.Background(), s.DrainTimeout)
 			defer cancel()
-			if err := d.Drain(flushCtx); err != nil {
-				fmt.Printf("weibo: source drain error: %v\n", err)
+			if drainErr := d.Drain(flushCtx); drainErr != nil && err == nil {
+				err = fmt.Errorf("source drain: %w", drainErr)
 			}
 		}
+		sourceDone <- err
 	}()
 
 	for {
@@ -81,6 +84,13 @@ func (s *SourceStage) Run(runCtx, hardCtx context.Context, _ <-chan types.Record
 			return err
 		}
 		if !ok {
+			err := <-sourceDone
+			if err != nil && runCtx.Err() != nil && errors.Is(err, context.Canceled) {
+				return nil
+			}
+			if err != nil {
+				return fmt.Errorf("source: %w", err)
+			}
 			return nil
 		}
 		metrics.RecordsReadTotal.Inc()

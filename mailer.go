@@ -444,12 +444,9 @@ func (env *StreamExecutionEnv) Execute(ctx context.Context) error {
 		}
 	}
 
-	for i, err := range errs {
+	for _, err := range errs {
 		if err == nil || errors.Is(err, context.Canceled) {
 			continue
-		}
-		if i == nStages-1 && ctx.Err() != nil {
-			continue // sink error during graceful shutdown
 		}
 		return err
 	}
