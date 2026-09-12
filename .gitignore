@@ -19,8 +19,6 @@ profile.cov
 
 # Dependency directories (remove the comment below to include it)
 # vendor/
-node_modules/
-.cache/
 
 # Go workspace file
 go.work
@@ -35,6 +33,9 @@ go.work.sum
 
 # Playwright MCP artifacts
 .playwright-mcp/
+
+# Local tool/cache artifacts
+.cache/
 
 # Screenshots
 screenshots/

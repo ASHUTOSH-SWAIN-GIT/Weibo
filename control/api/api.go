@@ -107,8 +107,9 @@ func (s *Server) cluster(w http.ResponseWriter, r *http.Request) {
 // submitRequest is the JSON envelope for POST /jobs. A raw (non-JSON)
 // body is treated as the workflow document itself, with no env.
 type submitRequest struct {
-	Workflow string            `json:"workflow"`
-	Env      map[string]string `json:"env,omitempty"`
+	Workflow string                     `json:"workflow"`
+	Env      map[string]string          `json:"env,omitempty"`
+	EnvRefs  map[string]store.SecretRef `json:"envRefs,omitempty"`
 }
 
 // jobDetail is the GET /jobs/{id} response.
@@ -124,25 +125,25 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 
 // readWorkflow extracts a workflow doc (+ optional env) from a request:
 // a JSON envelope {"workflow","env"} or a raw workflow body.
-func readWorkflow(r *http.Request) (doc []byte, env map[string]string, err error) {
+func readWorkflow(r *http.Request) (doc []byte, env map[string]string, refs map[string]store.SecretRef, err error) {
 	body, err := io.ReadAll(io.LimitReader(r.Body, 4<<20)) // 4 MiB cap
 	if err != nil {
-		return nil, nil, fmt.Errorf("read body: %w", err)
+		return nil, nil, nil, fmt.Errorf("read body: %w", err)
 	}
 	if isJSON(r) {
 		var req submitRequest
 		if err := json.Unmarshal(body, &req); err != nil {
-			return nil, nil, fmt.Errorf("invalid JSON: %w", err)
+			return nil, nil, nil, fmt.Errorf("invalid JSON: %w", err)
 		}
-		return []byte(req.Workflow), req.Env, nil
+		return []byte(req.Workflow), req.Env, req.EnvRefs, nil
 	}
-	return body, nil, nil
+	return body, nil, nil, nil
 }
 
 // validate is the dry-run preview: compile without launching, return the
 // name, delivery guarantee, and graph the submit would produce.
 func (s *Server) validate(w http.ResponseWriter, r *http.Request) {
-	doc, env, err := readWorkflow(r)
+	doc, env, _, err := readWorkflow(r)
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
@@ -162,7 +163,7 @@ func (s *Server) validate(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) submit(w http.ResponseWriter, r *http.Request) {
-	doc, env, err := readWorkflow(r)
+	doc, env, refs, err := readWorkflow(r)
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
@@ -172,7 +173,7 @@ func (s *Server) submit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	job, err := s.ctrl.Submit(r.Context(), doc, env)
+	job, err := s.ctrl.SubmitWithSecretRefs(r.Context(), doc, env, refs)
 	if err != nil {
 		// A validation failure is a client error; a launch failure after a
 		// valid spec is a server/infra error but the job is recorded.

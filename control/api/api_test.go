@@ -208,6 +208,23 @@ func TestSubmitJSONEnvelopeWithEnv(t *testing.T) {
 	}
 }
 
+func TestSubmitJSONEnvelopeWithEnvRefs(t *testing.T) {
+	t.Setenv("API_KEY", "from-env-ref")
+	srv := newAPI(t)
+	body, _ := json.Marshal(map[string]any{
+		"workflow": sdkJob,
+		"envRefs":  map[string]store.SecretRef{"API_KEY": {Provider: "env", Name: "API_KEY"}},
+	})
+	resp, err := http.Post(srv.URL+"/jobs", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("submit json envRefs: got %d", resp.StatusCode)
+	}
+}
+
 func TestSubmitInvalidSDKRejected(t *testing.T) {
 	srv := newAPI(t)
 	resp, err := http.Post(srv.URL+"/jobs", "application/yaml", strings.NewReader("kind: sdk\nname: missing-image\n"))

@@ -20,6 +20,12 @@ func TestTerminalAndTransitions(t *testing.T) {
 	if !lifecycle.CanTransition(lifecycle.Starting, lifecycle.Restarting) {
 		t.Error("starting→restarting should be legal for launch retry backoff")
 	}
+	if !lifecycle.CanTransition(lifecycle.Starting, lifecycle.Blocked) {
+		t.Error("starting→blocked should be legal for missing durable secrets")
+	}
+	if !lifecycle.CanTransition(lifecycle.Blocked, lifecycle.Failed) {
+		t.Error("blocked→failed should be legal before relaunch retry")
+	}
 	if lifecycle.CanTransition(lifecycle.Finished, lifecycle.Running) {
 		t.Error("finished→running must not be legal (restart makes a new run)")
 	}

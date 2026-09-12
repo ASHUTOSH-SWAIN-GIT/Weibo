@@ -124,7 +124,7 @@ Notes for the Kubernetes backend:
 
 | Method + path                 | Purpose |
 | ----------------------------- | ------- |
-| `POST /jobs`                  | Submit a workflow. Body: raw YAML, or JSON `{"workflow": "...", "env": {...}}` to pass secrets. Validated (dry-run compile) before launch. |
+| `POST /jobs`                  | Submit a workflow. Body: raw YAML, or JSON `{"workflow": "...", "env": {...}, "envRefs": {...}}` to pass launch env and durable secret refs. Validated (dry-run compile) before launch. |
 | `GET  /jobs`                  | List jobs. |
 | `GET  /jobs/{id}`             | Job detail: job + latest run + transition log. |
 | `POST /jobs/{id}/cancel`      | Graceful stop; desired state → stopped. |
@@ -185,10 +185,11 @@ Two safeguards keep exactly-once intact when a job restarts:
   re-reads active runs and re-attaches to their containers — a controller crash
   never loses track of a running job.
 - **Secrets are never persisted.** The workflow doc is stored with its `${VAR}`
-  placeholders intact; resolved values are passed to the container and held in
-  process memory only. A job that needs secrets cannot be *relaunched* after a
-  controller restart without re-supplying them (real secret management is a
-  later concern); already-running containers are unaffected.
+  placeholders intact. Resolved values are passed to the container and held in
+  process memory only; durable recovery stores only references such as
+  `{"provider":"env","name":"API_KEY"}`. If a reference cannot resolve during a
+  restart/relaunch, the run enters `blocked` instead of launching with missing
+  env, and the reconciler retries once the reference becomes resolvable.
 - **Reconciler** enforces desired state, applies the restart policy to crashed
   containers (bounded attempts + backoff), and marks clean exits Finished.
 - Submit-time validation compiles the workflow in a throwaway data dir, so a

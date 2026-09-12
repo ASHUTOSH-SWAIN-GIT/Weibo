@@ -51,6 +51,7 @@ func OpenSQLite(path string) (*SQLite, error) {
 var migrations = []string{
 	`ALTER TABLE jobs ADD COLUMN kind TEXT NOT NULL DEFAULT 'yaml'`,
 	`ALTER TABLE jobs ADD COLUMN image TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE jobs ADD COLUMN secret_refs TEXT NOT NULL DEFAULT '{}'`,
 	`ALTER TABLE runs ADD COLUMN restart_at TEXT`,
 	`CREATE UNIQUE INDEX IF NOT EXISTS idx_runs_one_active_per_job ON runs(job_id) WHERE stopped_at IS NULL`,
 }
@@ -61,6 +62,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     name          TEXT NOT NULL,
     kind          TEXT NOT NULL DEFAULT 'yaml',
     image         TEXT NOT NULL DEFAULT '',
+    secret_refs   TEXT NOT NULL DEFAULT '{}',
     spec          TEXT NOT NULL,
     delivery      TEXT NOT NULL,
     graph         TEXT NOT NULL,
@@ -108,24 +110,28 @@ func (s *SQLite) CreateJob(j *Job) error {
 	if kind == "" {
 		kind = KindYAML
 	}
+	secretRefs, err := json.Marshal(j.Secrets)
+	if err != nil {
+		return err
+	}
 	_, err = s.db.Exec(
-		`INSERT INTO jobs (id,name,kind,image,spec,delivery,graph,desired_state,created_at,updated_at)
-		 VALUES (?,?,?,?,?,?,?,?,?,?)`,
-		j.ID, j.Name, kind, j.Image, j.Spec, string(j.Delivery), string(graph),
+		`INSERT INTO jobs (id,name,kind,image,secret_refs,spec,delivery,graph,desired_state,created_at,updated_at)
+		 VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+		j.ID, j.Name, kind, j.Image, string(secretRefs), j.Spec, string(j.Delivery), string(graph),
 		string(j.Desired), j.Created.Format(rfc), j.Updated.Format(rfc))
 	return err
 }
 
 func (s *SQLite) GetJob(id string) (*Job, error) {
 	row := s.db.QueryRow(
-		`SELECT id,name,kind,image,spec,delivery,graph,desired_state,created_at,updated_at
+		`SELECT id,name,kind,image,secret_refs,spec,delivery,graph,desired_state,created_at,updated_at
 		 FROM jobs WHERE id=?`, id)
 	return scanJob(row)
 }
 
 func (s *SQLite) ListJobs() ([]*Job, error) {
 	rows, err := s.db.Query(
-		`SELECT id,name,kind,image,spec,delivery,graph,desired_state,created_at,updated_at
+		`SELECT id,name,kind,image,secret_refs,spec,delivery,graph,desired_state,created_at,updated_at
 		 FROM jobs ORDER BY created_at DESC`)
 	if err != nil {
 		return nil, err
@@ -325,14 +331,19 @@ type execer interface {
 
 func scanJob(sc scanner) (*Job, error) {
 	var j Job
-	var delivery, graph, created, updated, desired string
-	if err := sc.Scan(&j.ID, &j.Name, &j.Kind, &j.Image, &j.Spec, &delivery, &graph, &desired, &created, &updated); err != nil {
+	var delivery, graph, created, updated, desired, secretRefs string
+	if err := sc.Scan(&j.ID, &j.Name, &j.Kind, &j.Image, &secretRefs, &j.Spec, &delivery, &graph, &desired, &created, &updated); err != nil {
 		return nil, err
 	}
 	j.Delivery = compiler.DeliveryGuarantee(delivery)
 	j.Desired = DesiredState(desired)
 	if err := json.Unmarshal([]byte(graph), &j.Graph); err != nil {
 		return nil, err
+	}
+	if secretRefs != "" {
+		if err := json.Unmarshal([]byte(secretRefs), &j.Secrets); err != nil {
+			return nil, err
+		}
 	}
 	j.Created, _ = time.Parse(rfc, created)
 	j.Updated, _ = time.Parse(rfc, updated)

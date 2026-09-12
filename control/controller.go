@@ -36,6 +36,7 @@ type Options struct {
 	Image       string                  // runner image tag
 	ControlPort int                     // container control port (default 8080)
 	Restart     lifecycle.RestartPolicy // default: lifecycle.DefaultRestartPolicy()
+	Secrets     SecretProvider          // default: environment-backed references
 	StopTimeout time.Duration           // graceful stop wait (default 30s)
 	Capacity    backend.CapacityConfig
 	NewID       func() string        // override for deterministic tests
@@ -49,6 +50,7 @@ type Controller struct {
 	image       string
 	port        int
 	restart     lifecycle.RestartPolicy
+	secretStore SecretProvider
 	stopTimeout time.Duration
 	capacity    backend.CapacityConfig
 	newID       func() string
@@ -70,6 +72,7 @@ func New(opts Options) *Controller {
 		image:       opts.Image,
 		port:        opts.ControlPort,
 		restart:     opts.Restart,
+		secretStore: opts.Secrets,
 		stopTimeout: opts.StopTimeout,
 		capacity:    opts.Capacity,
 		newID:       opts.NewID,
@@ -83,6 +86,9 @@ func New(opts Options) *Controller {
 	}
 	if c.restart == (lifecycle.RestartPolicy{}) {
 		c.restart = lifecycle.DefaultRestartPolicy()
+	}
+	if c.secretStore == nil {
+		c.secretStore = envSecretProvider{}
 	}
 	if c.stopTimeout == 0 {
 		c.stopTimeout = 30 * time.Second
@@ -108,13 +114,26 @@ func New(opts Options) *Controller {
 // never persisted. A validation failure rejects the job before any
 // container starts.
 func (c *Controller) Submit(ctx context.Context, doc []byte, env map[string]string) (*store.Job, error) {
+	return c.SubmitWithSecretRefs(ctx, doc, env, nil)
+}
+
+// SubmitWithSecretRefs validates a workflow document, records durable secret
+// references, and launches its first container. env contains resolved values
+// for the current launch; refs contains durable references for future launches.
+func (c *Controller) SubmitWithSecretRefs(ctx context.Context, doc []byte, env map[string]string, refs map[string]store.SecretRef) (*store.Job, error) {
+	refs = mergeSecretRefs(secretRefsFromEnv(env), refs)
+
 	// Auto-detect the kind: a manifest with `kind: sdk` is a prebuilt Go
 	// pipeline image; anything else is a declarative YAML workflow.
 	if m, ok := parseSDKManifest(doc); ok {
-		return c.submitSDK(ctx, doc, m, env)
+		return c.submitSDK(ctx, doc, m, env, refs)
 	}
 
-	name, delivery, graph, err := c.validate(doc, env)
+	validationEnv, err := c.resolveEnvRefs(env, refs)
+	if err != nil {
+		return nil, fmt.Errorf("submit: resolve secret refs: %w", err)
+	}
+	name, delivery, graph, err := c.validate(doc, validationEnv)
 	if err != nil {
 		return nil, fmt.Errorf("submit: invalid workflow: %w", err)
 	}
@@ -124,6 +143,7 @@ func (c *Controller) Submit(ctx context.Context, doc []byte, env map[string]stri
 		ID:       c.newID(),
 		Name:     name,
 		Kind:     store.KindYAML,
+		Secrets:  refs,
 		Spec:     string(doc),
 		Delivery: delivery,
 		Graph:    graph,
@@ -220,7 +240,7 @@ func mergeEnv(base, override map[string]string) map[string]string {
 // submitSDK records and launches a prebuilt SDK job image. There is no
 // workflow to compile; the pipeline lives in the image. The topology is
 // discovered at runtime from the agent's /describe.
-func (c *Controller) submitSDK(ctx context.Context, doc []byte, m sdkManifest, env map[string]string) (*store.Job, error) {
+func (c *Controller) submitSDK(ctx context.Context, doc []byte, m sdkManifest, env map[string]string, refs map[string]store.SecretRef) (*store.Job, error) {
 	if m.Name == "" {
 		return nil, fmt.Errorf("submit: sdk manifest missing 'name'")
 	}
@@ -239,6 +259,7 @@ func (c *Controller) submitSDK(ctx context.Context, doc []byte, m sdkManifest, e
 		Name:    m.Name,
 		Kind:    store.KindSDK,
 		Image:   m.Image,
+		Secrets: refs,
 		Spec:    string(doc),
 		Desired: store.DesiredRunning,
 		Created: now,
@@ -477,7 +498,13 @@ func (c *Controller) launchLocked(ctx context.Context, job *store.Job, attempt i
 	// injected.
 	img := c.image
 	var doc []byte
-	env := c.launchEnv(job.ID)
+	env, err := c.launchEnv(job)
+	if err != nil {
+		if updateErr := c.blockRun(job, run, lifecycle.Starting, err.Error()); updateErr != nil {
+			return fmt.Errorf("resolve launch secrets (%v); additionally failed to record blocked run: %w", err, updateErr)
+		}
+		return err
+	}
 	var resources *backend.ResourceLimits
 	if job.Kind == store.KindSDK {
 		img = job.Image
@@ -485,7 +512,7 @@ func (c *Controller) launchLocked(ctx context.Context, job *store.Job, attempt i
 		// not stored as separate columns, so they survive a controller
 		// restart via job.Spec alone (no schema migration).
 		if m, ok := parseSDKManifest([]byte(job.Spec)); ok {
-			env = mergeEnv(m.Env, env) // API secret env wins over manifest env
+			env = mergeEnv(m.Env, env) // API/provided secret env wins over manifest env
 			resources = m.Resources.toLimits()
 		}
 	} else {
@@ -547,6 +574,13 @@ func (c *Controller) finishRun(run *store.Run, from, to lifecycle.Phase, reason 
 	return c.store.UpdateRunWithTransition(run, transitionRecord(run.JobID, run.ID, from, to, reason))
 }
 
+func (c *Controller) blockRun(job *store.Job, run *store.Run, from lifecycle.Phase, reason string) error {
+	run.Phase = string(lifecycle.Blocked)
+	run.Error = reason
+	run.RestartAt = nil
+	return c.store.UpdateRunWithTransition(run, transitionRecord(job.ID, run.ID, from, lifecycle.Blocked, reason))
+}
+
 func (c *Controller) transition(jobID, runID string, from, to lifecycle.Phase, reason string) error {
 	return c.store.AppendTransition(transitionRecord(jobID, runID, from, to, reason))
 }
@@ -592,10 +626,20 @@ func (c *Controller) getSecrets(jobID string) map[string]string {
 // WEIBO_JOB_ID. Authors can pin a stable transactional id across
 // restarts by referencing it (e.g. transactionalID: ${WEIBO_JOB_ID}),
 // which — with single-live-run fencing — keeps exactly-once safe.
-func (c *Controller) launchEnv(jobID string) map[string]string {
-	env := map[string]string{"WEIBO_JOB_ID": jobID}
-	maps.Copy(env, c.getSecrets(jobID))
-	return env
+func (c *Controller) launchEnv(job *store.Job) (map[string]string, error) {
+	env := map[string]string{"WEIBO_JOB_ID": job.ID}
+	maps.Copy(env, c.getSecrets(job.ID))
+	for key, ref := range job.Secrets {
+		if _, ok := env[key]; ok {
+			continue
+		}
+		value, err := c.secretStore.ResolveSecret(ref)
+		if err != nil {
+			return nil, err
+		}
+		env[key] = value
+	}
+	return env, nil
 }
 
 func randomID() string {

@@ -20,6 +20,7 @@ const (
 	Starting   Phase = "starting"
 	Running    Phase = "running"
 	Restarting Phase = "restarting"
+	Blocked    Phase = "blocked"
 	Cancelling Phase = "cancelling"
 	Cancelled  Phase = "cancelled"
 	Finished   Phase = "finished"
@@ -41,13 +42,14 @@ func (p Phase) Terminal() bool {
 // input, so callers may log rather than hard-fail.
 var valid = map[Phase][]Phase{
 	Submitted: {Starting, Failed, Cancelled},
-	Starting:  {Running, Failed, Restarting, Cancelling},
+	Starting:  {Running, Failed, Restarting, Blocked, Cancelling},
 	// Running may terminate directly in Cancelled: a user cancel or a
 	// desired-stopped reconcile stops the container and marks the run
 	// Cancelled in one step (see Controller.Cancel / reconcileRun),
 	// without a distinct Cancelling dwell.
 	Running:    {Cancelling, Cancelled, Finished, Failed, Restarting},
 	Restarting: {Cancelled, Failed},
+	Blocked:    {Failed, Cancelled, Restarting},
 	Cancelling: {Cancelled, Finished, Failed},
 	// terminal states may only re-enter Starting via an explicit restart,
 	// which creates a NEW run rather than transitioning the old one.

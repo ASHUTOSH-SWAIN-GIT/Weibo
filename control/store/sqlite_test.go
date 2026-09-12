@@ -63,6 +63,7 @@ func TestJobRoundTrip(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 	j := &store.Job{
 		ID: "job-1", Name: "wordcount", Spec: "name: wordcount",
+		Secrets:  map[string]store.SecretRef{"API_KEY": {Provider: "env", Name: "API_KEY"}},
 		Delivery: compiler.AtLeastOnce,
 		Graph:    compiler.PipelineGraph{Source: "generator", Sink: "stdout", Operators: []compiler.GraphNode{{ID: "count", Type: "reduce"}}},
 		Desired:  store.DesiredRunning, Created: now, Updated: now,
@@ -77,6 +78,9 @@ func TestJobRoundTrip(t *testing.T) {
 	}
 	if got.Name != "wordcount" || got.Delivery != compiler.AtLeastOnce {
 		t.Errorf("job mismatch: %+v", got)
+	}
+	if got.Secrets["API_KEY"].Provider != "env" || got.Secrets["API_KEY"].Name != "API_KEY" {
+		t.Fatalf("secret refs not round-tripped: %+v", got.Secrets)
 	}
 	if len(got.Graph.Operators) != 1 || got.Graph.Operators[0].ID != "count" {
 		t.Errorf("graph not round-tripped: %+v", got.Graph)

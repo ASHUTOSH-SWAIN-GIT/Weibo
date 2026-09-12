@@ -4,8 +4,8 @@
 // its view from here, so a crash never loses track of a running job.
 //
 // Secrets are never stored. A job's spec is persisted with its ${VAR}
-// placeholders intact; resolved secret values live only in process memory
-// (see the controller) and in the launched container's environment.
+// placeholders intact; durable recovery stores only secret references
+// (provider/name), never resolved values.
 package store
 
 import (
@@ -37,11 +37,20 @@ type Job struct {
 	// Image is the container image to run. Empty for yaml jobs (the
 	// controller's generic runner image is used); set for sdk jobs.
 	Image    string                     `json:"image,omitempty"`
+	Secrets  map[string]SecretRef       `json:"secrets,omitempty"`
 	Delivery compiler.DeliveryGuarantee `json:"delivery"`
 	Graph    compiler.PipelineGraph     `json:"graph"`
 	Desired  DesiredState               `json:"desiredState"`
 	Created  time.Time                  `json:"createdAt"`
 	Updated  time.Time                  `json:"updatedAt"`
+}
+
+// SecretRef is a durable pointer to a secret value. Name is provider-specific
+// and must not contain the secret's resolved value.
+type SecretRef struct {
+	Provider string `json:"provider"`
+	Name     string `json:"name"`
+	Key      string `json:"key,omitempty"`
 }
 
 // KindSDK / KindYAML are the Job.Kind values.

@@ -172,6 +172,93 @@ func TestSecretsPassedbutNotPersisted(t *testing.T) {
 	if strings.Contains(stored.Spec, "s3cr3t") {
 		t.Error("secret leaked into persisted job spec")
 	}
+	if got := stored.Secrets["API_KEY"]; got.Provider != "env" || got.Name != "API_KEY" {
+		t.Fatalf("secret ref not persisted: %+v", stored.Secrets)
+	}
+	if strings.Contains(stored.Secrets["API_KEY"].Name, "s3cr3t") {
+		t.Error("resolved secret leaked into persisted refs")
+	}
+}
+
+func TestSecretRefsBlockRelaunchAfterControllerRestartUntilResolvable(t *testing.T) {
+	fake := backend.NewFake()
+	st := openStore(t)
+	c1 := control.New(control.Options{Store: st, Backend: fake, Image: "img", StopTimeout: time.Second})
+	job, err := c1.Submit(context.Background(), []byte(validSDKManifest), map[string]string{"API_KEY": "submit-only"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := c1.LatestRun(job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fake.LastEnv(first.ContainerID)["API_KEY"] != "submit-only" {
+		t.Fatalf("initial launch did not use submit env: %v", fake.LastEnv(first.ContainerID))
+	}
+
+	c2 := control.New(control.Options{Store: st, Backend: fake, Image: "img", StopTimeout: time.Second})
+	_, err = c2.Restart(context.Background(), job.ID)
+	if err == nil {
+		t.Fatal("expected restart to block when durable secret ref cannot resolve")
+	}
+	blocked, err := c2.LatestRun(job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if blocked.Phase != string(lifecycle.Blocked) || blocked.ContainerID != "" || blocked.Stopped != nil {
+		t.Fatalf("missing secret should leave an active blocked run: %+v", blocked)
+	}
+	if strings.Contains(blocked.Error, "submit-only") {
+		t.Fatalf("blocked error leaked secret value: %q", blocked.Error)
+	}
+
+	t.Setenv("API_KEY", "from-provider")
+	if err := c2.Reconcile(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	recovered, err := c2.LatestRun(job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recovered.Phase != string(lifecycle.Running) || recovered.ContainerID == "" {
+		t.Fatalf("resolved secret ref did not relaunch job: %+v", recovered)
+	}
+	if fake.LastEnv(recovered.ContainerID)["API_KEY"] != "from-provider" {
+		t.Fatalf("relaunch did not use provider secret: %v", fake.LastEnv(recovered.ContainerID))
+	}
+}
+
+func TestSubmitSDKWithUnresolvedSecretRefsBlocksThenRecovers(t *testing.T) {
+	fake := backend.NewFake()
+	c, _ := newController(t, fake, lifecycle.RestartPolicy{MaxAttempts: 2, BaseBackoff: 0})
+	job, err := c.SubmitWithSecretRefs(context.Background(), []byte(validSDKManifest), nil, map[string]store.SecretRef{
+		"API_KEY": {Provider: "env", Name: "API_KEY"},
+	})
+	if err == nil {
+		t.Fatal("expected launch to block on missing secret ref")
+	}
+	if job == nil {
+		t.Fatal("job should be persisted before blocked launch is reported")
+	}
+	blocked, err := c.LatestRun(job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if blocked.Phase != string(lifecycle.Blocked) || fake.Launched() != 0 {
+		t.Fatalf("missing secret ref should block without launch: run=%+v launches=%d", blocked, fake.Launched())
+	}
+
+	t.Setenv("API_KEY", "resolved")
+	if err := c.Reconcile(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	run, err := c.LatestRun(job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.Phase != string(lifecycle.Running) || fake.LastEnv(run.ContainerID)["API_KEY"] != "resolved" {
+		t.Fatalf("resolved secret ref did not launch with env: run=%+v env=%v", run, fake.LastEnv(run.ContainerID))
+	}
 }
 
 func TestCancelStopsJob(t *testing.T) {

@@ -35,6 +35,14 @@ func (c *Controller) Reconcile(ctx context.Context) error {
 			unlock()
 			continue // job deleted out from under a run; skip
 		}
+		if lifecycle.Phase(run.Phase) == lifecycle.Blocked {
+			err := c.maybeUnblock(ctx, job, run)
+			unlock()
+			if err != nil {
+				return err
+			}
+			continue
+		}
 		if lifecycle.Phase(run.Phase) == lifecycle.Restarting {
 			err := c.maybeRestart(ctx, job, run)
 			unlock()
@@ -64,6 +72,23 @@ func (c *Controller) Reconcile(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+func (c *Controller) maybeUnblock(ctx context.Context, job *store.Job, run *store.Run) error {
+	if job.Desired != store.DesiredRunning {
+		return nil
+	}
+	if _, err := c.launchEnv(job); err != nil {
+		if run.Error != err.Error() {
+			run.Error = err.Error()
+			return c.store.UpdateRun(run)
+		}
+		return nil
+	}
+	if err := c.finishRun(run, lifecycle.Blocked, lifecycle.Failed, "secret references resolved; retrying launch"); err != nil {
+		return err
+	}
+	return c.launchLocked(ctx, job, run.Attempt+1, "")
 }
 
 func (c *Controller) reattachUnrecordedBackendRun(ctx context.Context, job *store.Job, run *store.Run) error {
