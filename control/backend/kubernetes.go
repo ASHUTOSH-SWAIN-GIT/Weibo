@@ -126,16 +126,29 @@ func (k *Kubernetes) Capacity(ctx context.Context, cfg CapacityConfig) (Capacity
 		return snap, nil
 	}
 	for _, j := range jobs.Items {
+		jobID := j.Labels["weibo.job"]
+		state := "starting"
 		switch {
 		case j.Status.Active > 0:
 			snap.RunningContainers += int(j.Status.Active)
 			snap.UsedSlots += int(j.Status.Active)
+			state = "running"
 		case j.Status.Succeeded > 0 || j.Status.Failed > 0:
 			snap.ExitedContainers++
+			state = "exited"
 		default:
 			snap.StartingContainers++
 			snap.UsedSlots++
 		}
+		snap.Containers = append(snap.Containers, ContainerStats{
+			ID:        j.Name,
+			Name:      j.Name,
+			JobID:     jobID,
+			Managed:   jobID != "",
+			Image:     firstContainerImage(j.Spec.Template.Spec.Containers),
+			State:     state,
+			StartedAt: j.CreationTimestamp.Unix(),
+		})
 	}
 	// Namespace ResourceQuota is authoritative when available. Derive slots
 	// from remaining requested CPU/memory and the configured per-job defaults.
@@ -588,7 +601,14 @@ func labels(jobID, run string) map[string]string {
 
 func int32Ptr(v int32) *int32 { return &v }
 func int64Ptr(v int64) *int64 { return &v }
-func boolPtr(v bool) *bool    { return &v }
+
+func firstContainerImage(containers []corev1.Container) string {
+	if len(containers) == 0 {
+		return ""
+	}
+	return containers[0].Image
+}
+func boolPtr(v bool) *bool { return &v }
 
 // k8sPullPolicy maps a LaunchSpec.PullPolicy to a Kubernetes pull policy.
 // Empty (or unknown) → "" so the cluster applies its own default (Always for

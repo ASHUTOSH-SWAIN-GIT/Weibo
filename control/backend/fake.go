@@ -100,7 +100,7 @@ func (f *Fake) Capacity(ctx context.Context, cfg CapacityConfig) (CapacitySnapsh
 		}
 		state := string(c.status.Phase)
 		containers = append(containers, ContainerStats{
-			ID: shortID(id), Name: "weibo-" + c.spec.JobID, JobID: c.spec.JobID,
+			ID: id, Name: "weibo-" + c.spec.JobID, JobID: c.spec.JobID,
 			Managed: true, Image: c.spec.Image, State: state, StartedAt: c.launched.Unix(),
 		})
 		switch c.status.Phase {

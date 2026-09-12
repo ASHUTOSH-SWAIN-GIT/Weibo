@@ -2,7 +2,9 @@ package control_test
 
 import (
 	"context"
+	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -222,6 +224,147 @@ func TestSingleLiveRunGuard(t *testing.T) {
 	if active != 1 {
 		t.Fatalf("expected exactly 1 active run, got %d", active)
 	}
+}
+
+func TestConcurrentRestartsKeepOneActiveRun(t *testing.T) {
+	fake := backend.NewFake()
+	c, st := newController(t, fake, lifecycle.DefaultRestartPolicy())
+	job, err := c.Submit(context.Background(), []byte(validSDKManifest), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var wg sync.WaitGroup
+	errs := make(chan error, 8)
+	for range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := c.Restart(context.Background(), job.ID)
+			errs <- err
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("Restart: %v", err)
+		}
+	}
+
+	active := 0
+	runs, err := st.ListRuns(job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range runs {
+		if r.Stopped == nil {
+			active++
+		}
+	}
+	if active != 1 {
+		t.Fatalf("expected exactly 1 active run after concurrent restarts, got %d", active)
+	}
+}
+
+func TestLaunchRemovesBackendResourceWhenPersistingContainerFails(t *testing.T) {
+	fake := backend.NewFake()
+	base := openStore(t)
+	st := &failUpdateRunWithTransitionStore{Store: base, err: errors.New("store unavailable")}
+	c := control.New(control.Options{
+		Store:       st,
+		Backend:     fake,
+		Image:       "unused-default-image:test",
+		StopTimeout: time.Second,
+	})
+
+	job, err := c.Submit(context.Background(), []byte(validSDKManifest), nil)
+	if err == nil {
+		t.Fatal("expected submit to fail when launched run cannot be persisted")
+	}
+	if job == nil {
+		t.Fatal("job should be returned even when launch persistence fails")
+	}
+	if fake.Launched() != 1 {
+		t.Fatalf("expected backend launch before injected store failure, got %d", fake.Launched())
+	}
+	capacity, err := fake.Capacity(context.Background(), backend.CapacityConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if capacity.RunningContainers != 0 {
+		t.Fatalf("launched container was not removed after persistence failure: %+v", capacity)
+	}
+	run, err := base.LatestRun(job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run == nil || run.Phase != string(lifecycle.Starting) || run.ContainerID != "" {
+		t.Fatalf("expected only the pre-launch starting run to remain, got %+v", run)
+	}
+}
+
+func TestReconcileReattachesUnrecordedBackendRun(t *testing.T) {
+	fake := backend.NewFake()
+	st := openStore(t)
+	now := time.Now().UTC()
+	job := &store.Job{
+		ID:      "job-reattach",
+		Name:    "orders-sdk",
+		Kind:    store.KindSDK,
+		Image:   "my-registry/orders-sdk:v1",
+		Spec:    validSDKManifest,
+		Desired: store.DesiredRunning,
+		Created: now,
+		Updated: now,
+	}
+	if err := st.CreateJob(job); err != nil {
+		t.Fatal(err)
+	}
+	run := &store.Run{ID: "run-reattach", JobID: job.ID, Phase: string(lifecycle.Starting), Attempt: 1, Started: now}
+	if err := st.CreateRun(run); err != nil {
+		t.Fatal(err)
+	}
+	containerID, err := fake.Launch(context.Background(), backend.LaunchSpec{JobID: job.ID, Name: job.Name, Image: job.Image, ControlPort: 8080})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	c := control.New(control.Options{
+		Store:       st,
+		Backend:     fake,
+		Image:       "unused-default-image:test",
+		StopTimeout: time.Second,
+	})
+	if err := c.Reconcile(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	got, err := st.GetRun(run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ContainerID != containerID || got.Phase != string(lifecycle.Running) || got.HostPort == 0 {
+		t.Fatalf("run was not reattached: %+v", got)
+	}
+}
+
+func openStore(t *testing.T) *store.SQLite {
+	t.Helper()
+	st, err := store.OpenSQLite(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	return st
+}
+
+type failUpdateRunWithTransitionStore struct {
+	store.Store
+	err error
+}
+
+func (s *failUpdateRunWithTransitionStore) UpdateRunWithTransition(*store.Run, *store.Transition) error {
+	return s.err
 }
 
 func TestRestartLaunchesNewRun(t *testing.T) {

@@ -52,6 +52,7 @@ var migrations = []string{
 	`ALTER TABLE jobs ADD COLUMN kind TEXT NOT NULL DEFAULT 'yaml'`,
 	`ALTER TABLE jobs ADD COLUMN image TEXT NOT NULL DEFAULT ''`,
 	`ALTER TABLE runs ADD COLUMN restart_at TEXT`,
+	`CREATE UNIQUE INDEX IF NOT EXISTS idx_runs_one_active_per_job ON runs(job_id) WHERE stopped_at IS NULL`,
 }
 
 const schema = `
@@ -81,6 +82,7 @@ CREATE TABLE IF NOT EXISTS runs (
 );
 CREATE INDEX IF NOT EXISTS idx_runs_job ON runs(job_id);
 CREATE INDEX IF NOT EXISTS idx_runs_active ON runs(stopped_at);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_runs_one_active_per_job ON runs(job_id) WHERE stopped_at IS NULL;
 CREATE TABLE IF NOT EXISTS transitions (
     id      INTEGER PRIMARY KEY AUTOINCREMENT,
     job_id  TEXT NOT NULL,
@@ -172,7 +174,31 @@ func (s *SQLite) DeleteJob(id string) error {
 func (s *SQLite) CreateRun(r *Run) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	_, err := s.db.Exec(
+	return insertRun(s.db, r)
+}
+
+func (s *SQLite) CreateRunWithTransition(r *Run, t *Transition) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	if err := insertRun(tx, r); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	if t != nil {
+		if err := appendTransition(tx, t); err != nil {
+			_ = tx.Rollback()
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+func insertRun(db execer, r *Run) error {
+	_, err := db.Exec(
 		`INSERT INTO runs (id,job_id,container_id,host_port,phase,attempt,error,started_at,stopped_at,restart_at)
 		 VALUES (?,?,?,?,?,?,?,?,?,?)`,
 		r.ID, r.JobID, r.ContainerID, r.HostPort, r.Phase, r.Attempt, r.Error,
@@ -183,7 +209,31 @@ func (s *SQLite) CreateRun(r *Run) error {
 func (s *SQLite) UpdateRun(r *Run) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	res, err := s.db.Exec(
+	return updateRun(s.db, r)
+}
+
+func (s *SQLite) UpdateRunWithTransition(r *Run, t *Transition) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	if err := updateRun(tx, r); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	if t != nil {
+		if err := appendTransition(tx, t); err != nil {
+			_ = tx.Rollback()
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+func updateRun(db execer, r *Run) error {
+	res, err := db.Exec(
 		`UPDATE runs SET container_id=?, host_port=?, phase=?, attempt=?, error=?, stopped_at=?, restart_at=?
 		 WHERE id=?`,
 		r.ContainerID, r.HostPort, r.Phase, r.Attempt, r.Error, nullTime(r.Stopped), nullTime(r.RestartAt), r.ID)
@@ -226,7 +276,11 @@ func (s *SQLite) ActiveRuns() ([]*Run, error) {
 func (s *SQLite) AppendTransition(t *Transition) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	_, err := s.db.Exec(
+	return appendTransition(s.db, t)
+}
+
+func appendTransition(db execer, t *Transition) error {
+	_, err := db.Exec(
 		`INSERT INTO transitions (job_id,run_id,from_p,to_p,reason,at) VALUES (?,?,?,?,?,?)`,
 		t.JobID, t.RunID, t.From, t.To, t.Reason, t.At.Format(rfc))
 	return err
@@ -263,6 +317,10 @@ const runCols = `SELECT id,job_id,container_id,host_port,phase,attempt,error,sta
 
 type scanner interface {
 	Scan(dest ...any) error
+}
+
+type execer interface {
+	Exec(query string, args ...any) (sql.Result, error)
 }
 
 func scanJob(sc scanner) (*Job, error) {

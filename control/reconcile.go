@@ -20,50 +20,131 @@ func (c *Controller) Reconcile(ctx context.Context) error {
 		return err
 	}
 	for _, run := range active {
+		unlock := c.lockJob(run.JobID)
+		current, err := c.store.GetRun(run.ID)
+		if err != nil || current.Stopped != nil {
+			unlock()
+			if err != nil {
+				return err
+			}
+			continue
+		}
+		run = current
 		job, err := c.store.GetJob(run.JobID)
 		if err != nil {
+			unlock()
 			continue // job deleted out from under a run; skip
 		}
+		if run.ContainerID == "" {
+			err := c.reattachUnrecordedBackendRun(ctx, job, run)
+			unlock()
+			if err != nil {
+				return err
+			}
+			continue
+		}
 		if lifecycle.Phase(run.Phase) == lifecycle.Restarting {
-			c.maybeRestart(ctx, job, run)
+			err := c.maybeRestart(ctx, job, run)
+			unlock()
+			if err != nil {
+				return err
+			}
 			continue
 		}
 		st, err := c.backend.Status(ctx, run.ContainerID)
 		if err != nil {
 			c.logf("reconcile: status %s: %v", run.ContainerID, err)
+			unlock()
 			continue
 		}
-		c.reconcileRun(ctx, job, run, st)
+		err = c.reconcileRun(ctx, job, run, st)
+		unlock()
+		if err != nil {
+			return err
+		}
 	}
 	return nil
 }
 
-func (c *Controller) reconcileRun(ctx context.Context, job *store.Job, run *store.Run, st backend.Status) {
+func (c *Controller) reattachUnrecordedBackendRun(ctx context.Context, job *store.Job, run *store.Run) error {
+	container, ok, err := c.findManagedContainer(ctx, job.ID)
+	if err != nil || !ok {
+		return err
+	}
+	st, err := c.backend.Status(ctx, container.ID)
+	if err != nil {
+		return err
+	}
+	if st.Phase == backend.PhaseGone {
+		return nil
+	}
+	run.ContainerID = container.ID
+	if st.HostPort != 0 {
+		run.HostPort = st.HostPort
+	}
+	switch st.Phase {
+	case backend.PhaseRunning:
+		from := lifecycle.Phase(run.Phase)
+		run.Phase = string(lifecycle.Running)
+		return c.store.UpdateRunWithTransition(run, transitionRecord(job.ID, run.ID, from, lifecycle.Running, "reattached backend resource"))
+	case backend.PhasePending:
+		run.Phase = string(lifecycle.Starting)
+		run.Error = st.Reason
+	default:
+		return c.reconcileRun(ctx, job, run, st)
+	}
+	return c.store.UpdateRun(run)
+}
+
+func (c *Controller) findManagedContainer(ctx context.Context, jobID string) (backend.ContainerStats, bool, error) {
+	snap, err := c.backend.Capacity(ctx, c.capacity)
+	if err != nil {
+		return backend.ContainerStats{}, false, err
+	}
+	var best backend.ContainerStats
+	found := false
+	for _, container := range snap.Containers {
+		if !container.Managed || container.JobID != jobID || container.ID == "" {
+			continue
+		}
+		if !found || container.StartedAt > best.StartedAt {
+			best = container
+			found = true
+		}
+	}
+	return best, found, nil
+}
+
+func (c *Controller) reconcileRun(ctx context.Context, job *store.Job, run *store.Run, st backend.Status) error {
 	switch st.Phase {
 	case backend.PhasePending:
 		if job.Desired == store.DesiredStopped {
 			if err := c.backend.Stop(ctx, run.ContainerID, c.stopTimeout); err != nil {
 				run.Error = err.Error()
-				_ = c.store.UpdateRun(run)
-				return
+				if updateErr := c.store.UpdateRun(run); updateErr != nil {
+					return updateErr
+				}
+				return nil
 			}
-			c.finishRun(run, lifecycle.Starting, lifecycle.Cancelled, "desired stopped")
-			return
+			return c.finishRun(run, lifecycle.Starting, lifecycle.Cancelled, "desired stopped")
 		}
 		if run.Phase != string(lifecycle.Starting) || run.Error != st.Reason {
 			run.Phase, run.Error = string(lifecycle.Starting), st.Reason
-			_ = c.store.UpdateRun(run)
+			if err := c.store.UpdateRun(run); err != nil {
+				return err
+			}
 		}
 	case backend.PhaseRunning:
 		// If the operator asked it to stop, stop it.
 		if job.Desired == store.DesiredStopped {
 			if err := c.backend.Stop(ctx, run.ContainerID, c.stopTimeout); err != nil {
 				run.Error = err.Error()
-				_ = c.store.UpdateRun(run)
-				return
+				if updateErr := c.store.UpdateRun(run); updateErr != nil {
+					return updateErr
+				}
+				return nil
 			}
-			c.finishRun(run, lifecycle.Running, lifecycle.Cancelled, "desired stopped")
-			return
+			return c.finishRun(run, lifecycle.Running, lifecycle.Cancelled, "desired stopped")
 		}
 		// Keep the live host port fresh (e.g. after a controller restart).
 		if run.Phase != string(lifecycle.Running) || (st.HostPort != 0 && run.HostPort != st.HostPort) {
@@ -71,30 +152,34 @@ func (c *Controller) reconcileRun(ctx context.Context, job *store.Job, run *stor
 			if st.HostPort != 0 {
 				run.HostPort = st.HostPort
 			}
-			_ = c.store.UpdateRun(run)
+			if err := c.store.UpdateRun(run); err != nil {
+				return err
+			}
 		}
 
 	case backend.PhaseExited:
-		c.handleExit(ctx, job, run, st.ExitCode)
+		return c.handleExit(ctx, job, run, st.ExitCode)
 
 	case backend.PhaseGone:
 		// The container vanished (e.g. host reboot removed it).
 		if job.Desired == store.DesiredStopped {
-			c.finishRun(run, lifecycle.Running, lifecycle.Cancelled, "container gone; desired stopped")
-			return
+			return c.finishRun(run, lifecycle.Running, lifecycle.Cancelled, "container gone; desired stopped")
 		}
 		if c.restart.ShouldRestart(lifecycle.Failed, run.Attempt) {
-			c.scheduleRestart(job, run, "container gone")
-			c.maybeRestart(ctx, job, run)
+			if err := c.scheduleRestart(job, run, "container gone"); err != nil {
+				return err
+			}
+			return c.maybeRestart(ctx, job, run)
 		} else {
-			c.finishRun(run, lifecycle.Running, lifecycle.Failed, "container gone")
+			return c.finishRun(run, lifecycle.Running, lifecycle.Failed, "container gone")
 		}
 	}
+	return nil
 }
 
 // handleExit records a stopped container's terminal phase and applies the
 // restart policy when the job should still be running.
-func (c *Controller) handleExit(ctx context.Context, job *store.Job, run *store.Run, exitCode int) {
+func (c *Controller) handleExit(ctx context.Context, job *store.Job, run *store.Run, exitCode int) error {
 	var to lifecycle.Phase
 	reason := "container exited"
 	switch {
@@ -108,38 +193,42 @@ func (c *Controller) handleExit(ctx context.Context, job *store.Job, run *store.
 		reason = "nonzero exit"
 	}
 	if to == lifecycle.Failed && c.restart.ShouldRestart(lifecycle.Failed, run.Attempt) {
-		c.scheduleRestart(job, run, reason)
-		c.maybeRestart(ctx, job, run)
-		return
+		if err := c.scheduleRestart(job, run, reason); err != nil {
+			return err
+		}
+		return c.maybeRestart(ctx, job, run)
 	}
-	c.finishRun(run, lifecycle.Running, to, reason)
+	return c.finishRun(run, lifecycle.Running, to, reason)
 }
 
 // maybeRestart launches a fresh run if the restart policy allows it.
-func (c *Controller) maybeRestart(ctx context.Context, job *store.Job, run *store.Run) {
+func (c *Controller) maybeRestart(ctx context.Context, job *store.Job, run *store.Run) error {
 	if job.Desired != store.DesiredRunning {
-		return
+		return nil
 	}
 	if !c.restart.ShouldRestart(lifecycle.Failed, run.Attempt) {
 		c.logf("job %s: not restarting (attempt %d, policy exhausted)", job.ID, run.Attempt)
-		return
+		return nil
 	}
 	if run.RestartAt != nil && time.Now().UTC().Before(*run.RestartAt) {
-		return
+		return nil
 	}
-	c.finishRun(run, lifecycle.Restarting, lifecycle.Failed, "restart backoff elapsed")
-	if err := c.launch(ctx, job, run.Attempt+1, ""); err != nil {
+	if err := c.finishRun(run, lifecycle.Restarting, lifecycle.Failed, "restart backoff elapsed"); err != nil {
+		return err
+	}
+	if err := c.launchLocked(ctx, job, run.Attempt+1, ""); err != nil {
 		c.logf("job %s: restart launch failed: %v", job.ID, err)
+		return err
 	}
+	return nil
 }
 
-func (c *Controller) scheduleRestart(job *store.Job, run *store.Run, reason string) {
+func (c *Controller) scheduleRestart(job *store.Job, run *store.Run, reason string) error {
 	at := time.Now().UTC().Add(c.restart.Backoff(run.Attempt))
 	run.Phase = string(lifecycle.Restarting)
 	run.Error = reason
 	run.RestartAt = &at
-	_ = c.store.UpdateRun(run)
-	c.transition(job.ID, run.ID, lifecycle.Running, lifecycle.Restarting, reason)
+	return c.store.UpdateRunWithTransition(run, transitionRecord(job.ID, run.ID, lifecycle.Running, lifecycle.Restarting, reason))
 }
 
 // RunReconciler runs Reconcile on a ticker until ctx is cancelled. Call it

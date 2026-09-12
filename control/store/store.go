@@ -86,7 +86,9 @@ type Store interface {
 	DeleteJob(id string) error
 
 	CreateRun(r *Run) error
+	CreateRunWithTransition(r *Run, t *Transition) error
 	UpdateRun(r *Run) error
+	UpdateRunWithTransition(r *Run, t *Transition) error
 	GetRun(id string) (*Run, error)
 	// LatestRun returns the most recent run for a job, or (nil, nil) if
 	// the job has never been launched.

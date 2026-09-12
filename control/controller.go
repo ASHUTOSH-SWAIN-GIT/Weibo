@@ -57,6 +57,9 @@ type Controller struct {
 
 	mu      sync.Mutex
 	secrets map[string]map[string]string // jobID → env; process-memory only, never persisted
+
+	jobLocksMu sync.Mutex
+	jobLocks   map[string]*sync.Mutex
 }
 
 // New builds a Controller, applying defaults.
@@ -73,6 +76,7 @@ func New(opts Options) *Controller {
 		logf:        opts.Logf,
 		httpc:       &http.Client{Timeout: 10 * time.Second},
 		secrets:     map[string]map[string]string{},
+		jobLocks:    map[string]*sync.Mutex{},
 	}
 	if c.port == 0 {
 		c.port = 8080
@@ -131,7 +135,9 @@ func (c *Controller) Submit(ctx context.Context, doc []byte, env map[string]stri
 		return nil, err
 	}
 	c.setSecrets(job.ID, env)
-	c.transition(job.ID, "", "", lifecycle.Submitted, "submitted")
+	if err := c.transition(job.ID, "", "", lifecycle.Submitted, "submitted"); err != nil {
+		return job, fmt.Errorf("submit: transition: %w", err)
+	}
 
 	if err := c.launch(ctx, job, 1, ""); err != nil {
 		// The job is recorded; the reconciler will not retry a launch
@@ -242,7 +248,9 @@ func (c *Controller) submitSDK(ctx context.Context, doc []byte, m sdkManifest, e
 		return nil, err
 	}
 	c.setSecrets(job.ID, env)
-	c.transition(job.ID, "", "", lifecycle.Submitted, "submitted (sdk)")
+	if err := c.transition(job.ID, "", "", lifecycle.Submitted, "submitted (sdk)"); err != nil {
+		return job, fmt.Errorf("submit: transition: %w", err)
+	}
 
 	if err := c.launch(ctx, job, 1, ""); err != nil {
 		return job, fmt.Errorf("submit: launch: %w", err)
@@ -257,6 +265,8 @@ func (c *Controller) Cancel(ctx context.Context, jobID string) error {
 	if _, err := c.store.GetJob(jobID); err != nil {
 		return err
 	}
+	unlock := c.lockJob(jobID)
+	defer unlock()
 	if err := c.store.SetDesired(jobID, store.DesiredStopped); err != nil {
 		return err
 	}
@@ -269,11 +279,12 @@ func (c *Controller) Cancel(ctx context.Context, jobID string) error {
 	}
 	if err := c.backend.Stop(ctx, run.ContainerID, c.stopTimeout); err != nil {
 		run.Error = err.Error()
-		_ = c.store.UpdateRun(run)
+		if updateErr := c.store.UpdateRun(run); updateErr != nil {
+			return fmt.Errorf("cancel: record stop error for run %s: %w", run.ID, updateErr)
+		}
 		return fmt.Errorf("cancel: stop run %s: %w", run.ID, err)
 	}
-	c.finishRun(run, lifecycle.Phase(run.Phase), lifecycle.Cancelled, "user cancel")
-	return nil
+	return c.finishRun(run, lifecycle.Phase(run.Phase), lifecycle.Cancelled, "user cancel")
 }
 
 // Restart stops any live run and launches a fresh one, resetting the
@@ -296,16 +307,24 @@ func (c *Controller) doRestart(ctx context.Context, jobID, restore string) (*sto
 	if err != nil {
 		return nil, err
 	}
-	if run, _ := c.store.LatestRun(jobID); run != nil && run.Stopped == nil {
+	unlock := c.lockJob(jobID)
+	defer unlock()
+	run, err := c.store.LatestRun(jobID)
+	if err != nil {
+		return nil, err
+	}
+	if run != nil && run.Stopped == nil {
 		if err := c.backend.Stop(ctx, run.ContainerID, c.stopTimeout); err != nil {
 			return job, fmt.Errorf("restart: stop run %s: %w", run.ID, err)
 		}
-		c.finishRun(run, lifecycle.Phase(run.Phase), lifecycle.Cancelled, "restart")
+		if err := c.finishRun(run, lifecycle.Phase(run.Phase), lifecycle.Cancelled, "restart"); err != nil {
+			return job, fmt.Errorf("restart: finish run %s: %w", run.ID, err)
+		}
 	}
 	if err := c.store.SetDesired(jobID, store.DesiredRunning); err != nil {
 		return nil, err
 	}
-	if err := c.launch(ctx, job, 1, restore); err != nil {
+	if err := c.launchLocked(ctx, job, 1, restore); err != nil {
 		return job, fmt.Errorf("restart: launch: %w", err)
 	}
 	return job, nil
@@ -339,8 +358,7 @@ func (c *Controller) Savepoint(ctx context.Context, jobID, label string) error {
 	if err := c.store.SetDesired(jobID, store.DesiredStopped); err != nil {
 		return err
 	}
-	c.transition(jobID, "", lifecycle.Running, lifecycle.Cancelling, "savepoint: "+label)
-	return nil
+	return c.transition(jobID, "", lifecycle.Running, lifecycle.Cancelling, "savepoint: "+label)
 }
 
 // Validate compiles a workflow without launching it — the dry-run preview
@@ -425,10 +443,20 @@ func (c *Controller) validate(doc []byte, env map[string]string) (string, compil
 // launch starts a container for the job and records the run. restore, if
 // non-empty, names a savepoint the new run seeds from.
 func (c *Controller) launch(ctx context.Context, job *store.Job, attempt int, restore string) error {
+	unlock := c.lockJob(job.ID)
+	defer unlock()
+	return c.launchLocked(ctx, job, attempt, restore)
+}
+
+func (c *Controller) launchLocked(ctx context.Context, job *store.Job, attempt int, restore string) error {
 	// Single-live-run fencing: never run two containers for one job at
 	// once — two live transactional producers with the same id would
 	// break exactly-once. Callers stop the prior run before relaunching.
-	if prev, _ := c.store.LatestRun(job.ID); prev != nil && prev.Stopped == nil {
+	prev, err := c.store.LatestRun(job.ID)
+	if err != nil {
+		return err
+	}
+	if prev != nil && prev.Stopped == nil {
 		return fmt.Errorf("job %s already has an active run %s", job.ID, prev.ID)
 	}
 
@@ -439,6 +467,9 @@ func (c *Controller) launch(ctx context.Context, job *store.Job, attempt int, re
 		Phase:   string(lifecycle.Starting),
 		Attempt: attempt,
 		Started: now,
+	}
+	if err := c.store.CreateRunWithTransition(run, transitionRecord(job.ID, run.ID, lifecycle.Submitted, lifecycle.Starting, "launch requested")); err != nil {
+		return err
 	}
 
 	// SDK jobs run their own prebuilt image with the pipeline compiled in;
@@ -475,11 +506,13 @@ func (c *Controller) launch(ctx context.Context, job *store.Job, attempt int, re
 		PullPolicy: backend.PullIfNotPresent,
 	})
 	if err != nil {
+		stopped := time.Now().UTC()
 		run.Phase = string(lifecycle.Failed)
 		run.Error = err.Error()
-		run.Stopped = &now
-		_ = c.store.CreateRun(run)
-		c.transition(job.ID, run.ID, lifecycle.Starting, lifecycle.Failed, err.Error())
+		run.Stopped = &stopped
+		if updateErr := c.store.UpdateRunWithTransition(run, transitionRecord(job.ID, run.ID, lifecycle.Starting, lifecycle.Failed, err.Error())); updateErr != nil {
+			return fmt.Errorf("launch failed (%v); additionally failed to record run failure: %w", err, updateErr)
+		}
 		return err
 	}
 
@@ -488,30 +521,48 @@ func (c *Controller) launch(ctx context.Context, job *store.Job, attempt int, re
 	if st, err := c.backend.Status(ctx, id); err == nil {
 		run.HostPort = st.HostPort
 	}
-	if err := c.store.CreateRun(run); err != nil {
-		return err
+	if err := c.store.UpdateRunWithTransition(run, transitionRecord(job.ID, run.ID, lifecycle.Starting, lifecycle.Running, "launched")); err != nil {
+		removeErr := c.backend.Remove(ctx, id)
+		if removeErr != nil {
+			return fmt.Errorf("record launched run: %w; additionally failed to remove orphaned container %s: %v", err, id, removeErr)
+		}
+		return fmt.Errorf("record launched run: %w", err)
 	}
-	c.transition(job.ID, run.ID, lifecycle.Submitted, lifecycle.Running, "launched")
 	c.logf("job %s: launched run %s (container %s, attempt %d)", job.ID, run.ID, id, attempt)
 	return nil
 }
 
 // finishRun marks a run terminal in the store and logs the transition.
-func (c *Controller) finishRun(run *store.Run, from, to lifecycle.Phase, reason string) {
+func (c *Controller) finishRun(run *store.Run, from, to lifecycle.Phase, reason string) error {
 	now := time.Now().UTC()
 	run.Phase = string(to)
 	run.Stopped = &now
 	run.RestartAt = nil
-	_ = c.store.UpdateRun(run)
-	c.transition(run.JobID, run.ID, from, to, reason)
+	return c.store.UpdateRunWithTransition(run, transitionRecord(run.JobID, run.ID, from, to, reason))
 }
 
-func (c *Controller) transition(jobID, runID string, from, to lifecycle.Phase, reason string) {
-	_ = c.store.AppendTransition(&store.Transition{
+func (c *Controller) transition(jobID, runID string, from, to lifecycle.Phase, reason string) error {
+	return c.store.AppendTransition(transitionRecord(jobID, runID, from, to, reason))
+}
+
+func transitionRecord(jobID, runID string, from, to lifecycle.Phase, reason string) *store.Transition {
+	return &store.Transition{
 		JobID: jobID, RunID: runID,
 		From: string(from), To: string(to),
 		Reason: reason, At: time.Now().UTC(),
-	})
+	}
+}
+
+func (c *Controller) lockJob(jobID string) func() {
+	c.jobLocksMu.Lock()
+	l, ok := c.jobLocks[jobID]
+	if !ok {
+		l = &sync.Mutex{}
+		c.jobLocks[jobID] = l
+	}
+	c.jobLocksMu.Unlock()
+	l.Lock()
+	return l.Unlock
 }
 
 func (c *Controller) setSecrets(jobID string, env map[string]string) {

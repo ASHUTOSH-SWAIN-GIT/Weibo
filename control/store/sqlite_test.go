@@ -137,6 +137,33 @@ func TestRunsAndActive(t *testing.T) {
 	}
 }
 
+func TestOnlyOneActiveRunPerJob(t *testing.T) {
+	s := open(t)
+	j := &store.Job{ID: "j", Name: "n", Spec: "x", Desired: store.DesiredRunning, Created: time.Now(), Updated: time.Now()}
+	if err := s.CreateJob(j); err != nil {
+		t.Fatal(err)
+	}
+
+	r1 := &store.Run{ID: "r1", JobID: "j", ContainerID: "c1", Phase: "running", Attempt: 1, Started: time.Now()}
+	if err := s.CreateRun(r1); err != nil {
+		t.Fatal(err)
+	}
+	r2 := &store.Run{ID: "r2", JobID: "j", ContainerID: "c2", Phase: "starting", Attempt: 2, Started: time.Now().Add(time.Second)}
+	if err := s.CreateRun(r2); err == nil {
+		t.Fatal("expected second active run for same job to fail")
+	}
+
+	stopped := time.Now()
+	r1.Phase = "finished"
+	r1.Stopped = &stopped
+	if err := s.UpdateRun(r1); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CreateRun(r2); err != nil {
+		t.Fatalf("CreateRun after stopping prior active run: %v", err)
+	}
+}
+
 func TestTransitions(t *testing.T) {
 	s := open(t)
 	j := &store.Job{ID: "j", Name: "n", Spec: "x", Desired: store.DesiredRunning, Created: time.Now(), Updated: time.Now()}
