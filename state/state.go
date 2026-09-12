@@ -94,3 +94,9 @@ type Checkpointable interface {
 	CheckpointTo(dir string) error
 	RestoreFrom(dir string) error
 }
+
+// Resettable marks a disposable working backend that can be cleared before a
+// fresh start or when the selected checkpoint has no state for its owner.
+type Resettable interface {
+	Reset() error
+}

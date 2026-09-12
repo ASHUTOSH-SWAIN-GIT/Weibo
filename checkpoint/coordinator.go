@@ -13,6 +13,9 @@ import (
 type Step string
 
 const (
+	StepBarrierInjected  Step = "barrier-injected"  // aligned source positions captured
+	StepStateSnapshotted Step = "state-snapshotted" // operator state captured at the barrier
+	StepSinkPrepared     Step = "sink-prepared"     // sink output staged and flushed
 	StepPersistPrepared  Step = "persist-prepared"  // checkpoint file written with status=prepared
 	StepSinkCommitted    Step = "sink-committed"    // sink transaction committed (EndTxn)
 	StepPersistCompleted Step = "persist-completed" // status promoted to completed
@@ -138,8 +141,9 @@ func (c *Coordinator) Fatal() <-chan error {
 // checkpoint at the moment its barrier entered the stream.
 func (c *Coordinator) OnBarrierInjected(id string, offsets []byte) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	c.ensure(id).offsets = offsets
+	c.mu.Unlock()
+	c.step(context.Background(), StepBarrierInjected, id)
 }
 
 // OnStateSnapshot records operator/worker state captured when the
@@ -147,10 +151,11 @@ func (c *Coordinator) OnBarrierInjected(id string, offsets []byte) {
 // (hard-link) state directory references for Checkpointable backends.
 func (c *Coordinator) OnStateSnapshot(id string, state map[string][]byte, stateDirs map[string]string) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	p := c.ensure(id)
 	p.state = state
 	p.stateDirs = stateDirs
+	c.mu.Unlock()
+	c.step(context.Background(), StepStateSnapshotted, id)
 }
 
 // OnSinkPrepared is called by the sink (via its notifier) once all
@@ -163,6 +168,11 @@ func (c *Coordinator) OnSinkPrepared(id string, sinkErr error) {
 	p := c.ensure(id)
 	p.prepared = true
 	p.sinkErr = sinkErr
+	c.mu.Unlock()
+	if !c.step(context.Background(), StepSinkPrepared, id) {
+		return
+	}
+	c.mu.Lock()
 	halted := c.halted
 	if !halted {
 		// Register the send while holding the lock, in the same critical

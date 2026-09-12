@@ -129,6 +129,30 @@ func (p *PebbleBackend) RestoreFrom(dir string) error {
 	return nil
 }
 
+// Reset discards all uncheckpointed working state and reopens an empty DB.
+func (p *PebbleBackend) Reset() error {
+	p.life.Lock()
+	defer p.life.Unlock()
+	if p.db != nil && !p.closed {
+		if err := p.db.Close(); err != nil {
+			return fmt.Errorf("state/pebble: close before reset: %w", err)
+		}
+		p.closed = true
+	}
+	if err := os.RemoveAll(p.dir); err != nil {
+		return fmt.Errorf("state/pebble: wipe before reset: %w", err)
+	}
+	if err := os.MkdirAll(p.dir, 0o755); err != nil {
+		return fmt.Errorf("state/pebble: mkdir after reset: %w", err)
+	}
+	db, err := pebble.Open(p.dir, pebbleOptions())
+	if err != nil {
+		return fmt.Errorf("state/pebble: reopen after reset: %w", err)
+	}
+	p.db, p.seqs, p.closed = db, make(map[seqKey]uint64), false
+	return nil
+}
+
 // ---- StateBackend ----------------------------------------------------------
 
 func (p *PebbleBackend) ValueState(name string) ValueState {

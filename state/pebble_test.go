@@ -74,6 +74,25 @@ func TestPebbleBackend_ValueState_SnapshotRestore(t *testing.T) {
 	}
 }
 
+func TestPebbleBackend_ResetDiscardsWorkingState(t *testing.T) {
+	backend, err := state.OpenPebble(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer backend.Close()
+	value := backend.ValueState("reduce")
+	value.SetKey("key")
+	value.Set([]byte("uncheckpointed"))
+	if err := backend.Reset(); err != nil {
+		t.Fatal(err)
+	}
+	value = backend.ValueState("reduce")
+	value.SetKey("key")
+	if got := value.Get(); got != nil {
+		t.Fatalf("working state survived reset: %q", got)
+	}
+}
+
 func TestPebbleBackend_ListState_Basic(t *testing.T) {
 	dir := t.TempDir()
 	factory := state.Pebble(dir)

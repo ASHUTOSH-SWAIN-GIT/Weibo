@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -28,6 +30,7 @@ type fakeTxnSink struct {
 	pending    map[string][]types.Record // prepared, awaiting commit/abort
 	visible    []types.Record            // committed (read_committed view)
 	markers    map[string]bool           // committed checkpoint markers
+	probeErr   error
 	aborted    map[string]bool
 	waiters    map[string]chan struct{}
 	onPrepared func(id string, err error)
@@ -111,6 +114,9 @@ func (s *fakeTxnSink) signal(id string) {
 func (s *fakeTxnSink) WasCommitted(ctx context.Context, id string) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.probeErr != nil {
+		return false, s.probeErr
+	}
 	return s.markers[id], nil
 }
 
@@ -124,6 +130,16 @@ func (s *fakeTxnSink) visibleIDs() map[string]int {
 	out := map[string]int{}
 	for _, r := range s.visible {
 		out[strconv.Itoa(r.Partition)+"/"+strconv.FormatInt(r.Offset, 10)]++
+	}
+	return out
+}
+
+func (s *fakeTxnSink) visibleKeyOffsetIDs() map[string]int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := map[string]int{}
+	for _, r := range s.visible {
+		out[string(r.Key)+"/"+strconv.FormatInt(r.Offset, 10)]++
 	}
 	return out
 }
@@ -148,7 +164,11 @@ const (
 )
 
 func eoParts3() [][]types.Record {
-	parts := make([][]types.Record, eoParts)
+	return eoPartsN(eoParts)
+}
+
+func eoPartsN(partitionCount int) [][]types.Record {
+	parts := make([][]types.Record, partitionCount)
 	for p := range parts {
 		for i := 0; i < eoPerPart; i++ {
 			parts[p] = append(parts[p], types.NewRecord(
@@ -163,9 +183,17 @@ func eoParts3() [][]types.Record {
 // coordinator halts (simulated crash) at the haltOccurrence-th time
 // that step completes, and the run is cancelled shortly after.
 func runEO(t *testing.T, sk *fakeTxnSink, storage checkpoint.Storage, haltStep checkpoint.Step, haltOccurrence int, sf state.BackendFactory) error {
+	return runEOWithParts(t, sk, storage, haltStep, haltOccurrence, sf, eoParts)
+}
+
+func runEOWithParts(t *testing.T, sk *fakeTxnSink, storage checkpoint.Storage, haltStep checkpoint.Step, haltOccurrence int, sf state.BackendFactory, partitionCount int) error {
+	return runEOScenario(t, sk, storage, haltStep, haltOccurrence, sf, partitionCount, false)
+}
+
+func runEOScenario(t *testing.T, sk *fakeTxnSink, storage checkpoint.Storage, haltStep checkpoint.Step, haltOccurrence int, sf state.BackendFactory, partitionCount int, stateful bool) error {
 	t.Helper()
 
-	src := newReplaySource(eoParts3())
+	src := newReplaySource(eoPartsN(partitionCount))
 	src.emitDelay = 500 * time.Microsecond
 
 	env := weibo.NewEnv().
@@ -198,17 +226,24 @@ func runEO(t *testing.T, sk *fakeTxnSink, storage checkpoint.Storage, haltStep c
 		})
 	}
 
-	env.FromSource(src).
-		Map(func(r types.Record) types.Record { return r }, "pass").
-		ToSink(sk)
+	stream := env.FromSource(src)
+	if stateful {
+		stream.KeyBy(func(r types.Record) []byte { return r.Key }).WithPartitions(4).Reduce(countReduceFn).ToSink(sk)
+	} else {
+		stream.Map(func(r types.Record) types.Record { return r }, "pass").ToSink(sk)
+	}
 
 	return env.Execute(ctx)
 }
 
 func assertExactlyOnce(t *testing.T, sk *fakeTxnSink) {
+	assertExactlyOnceParts(t, sk, eoParts)
+}
+
+func assertExactlyOnceParts(t *testing.T, sk *fakeTxnSink, partitionCount int) {
 	t.Helper()
 	seen := sk.visibleIDs()
-	for p := 0; p < eoParts; p++ {
+	for p := 0; p < partitionCount; p++ {
 		for i := 0; i < eoPerPart; i++ {
 			id := strconv.Itoa(p) + "/" + strconv.Itoa(i)
 			switch seen[id] {
@@ -224,6 +259,31 @@ func assertExactlyOnce(t *testing.T, sk *fakeTxnSink) {
 	for id, n := range seen {
 		t.Errorf("unexpected record %s visible %d times", id, n)
 	}
+}
+
+func assertStatefulExactlyOnceParts(t *testing.T, sk *fakeTxnSink, partitionCount int) {
+	t.Helper()
+	seen := sk.visibleKeyOffsetIDs()
+	for p := 0; p < partitionCount; p++ {
+		for i := 0; i < eoPerPart; i++ {
+			id := "key-" + strconv.Itoa(p) + "/" + strconv.Itoa(i)
+			if seen[id] != 1 {
+				t.Errorf("stateful record %s visible %d times, want once", id, seen[id])
+			}
+			delete(seen, id)
+		}
+	}
+	for id, count := range seen {
+		t.Errorf("unexpected stateful record %s visible %d times", id, count)
+	}
+}
+
+func freshBackend(t *testing.T, name string) state.BackendFactory {
+	t.Helper()
+	if name == "Pebble" {
+		return state.Pebble(t.TempDir())
+	}
+	return state.InMemory()
 }
 
 // ---------------------------------------------------------------------------
@@ -292,6 +352,9 @@ func TestExactlyOnce_CrashWithNoCompletedCheckpoint(t *testing.T) {
 // verify no loss and no duplication each time.
 func TestExactlyOnce_CrashSweepAllProtocolSteps(t *testing.T) {
 	steps := []checkpoint.Step{
+		checkpoint.StepBarrierInjected,
+		checkpoint.StepStateSnapshotted,
+		checkpoint.StepSinkPrepared,
 		checkpoint.StepPersistPrepared,
 		checkpoint.StepSinkCommitted,
 		checkpoint.StepPersistCompleted,
@@ -299,18 +362,51 @@ func TestExactlyOnce_CrashSweepAllProtocolSteps(t *testing.T) {
 	}
 	for _, bk := range stateBackends(t) {
 		t.Run(bk.Name, func(t *testing.T) {
-			for _, step := range steps {
-				t.Run(string(step), func(t *testing.T) {
-					sk := newFakeTxnSink()
-					storage := checkpoint.NewFileStorage(t.TempDir())
-					runEO(t, sk, storage, step, 2, bk.Factory)
-					if err := runEO(t, sk, storage, "", 0, bk.Factory); err != nil {
-						t.Fatalf("recovery run failed: %v", err)
+			for _, partitionCount := range []int{1, 3} {
+				t.Run(fmt.Sprintf("%d-partitions", partitionCount), func(t *testing.T) {
+					for _, step := range steps {
+						t.Run(string(step), func(t *testing.T) {
+							sk := newFakeTxnSink()
+							storage := checkpoint.NewFileStorage(t.TempDir())
+							factory := freshBackend(t, bk.Name)
+							runEOScenario(t, sk, storage, step, 2, factory, partitionCount, true)
+							if err := runEOScenario(t, sk, storage, "", 0, factory, partitionCount, true); err != nil {
+								t.Fatalf("recovery run failed: %v", err)
+							}
+							assertStatefulExactlyOnceParts(t, sk, partitionCount)
+							last := sk.visibleLastByKey()
+							for p := 0; p < partitionCount; p++ {
+								key := "key-" + strconv.Itoa(p)
+								value := last[key]
+								if len(value) != 8 {
+									t.Errorf("key %s missing final state", key)
+									continue
+								}
+								if got := binary.BigEndian.Uint64(value); got != eoPerPart {
+									t.Errorf("key %s restored count %d, want %d", key, got, eoPerPart)
+								}
+							}
+						})
 					}
-					assertExactlyOnce(t, sk)
 				})
 			}
 		})
+	}
+}
+
+func TestExactlyOnce_UnknownCommitOutcomeStopsRecovery(t *testing.T) {
+	storage := checkpoint.NewFileStorage(t.TempDir())
+	if err := storage.Save(&checkpoint.CheckpointData{ID: "uncertain", Timestamp: time.Now(), Status: checkpoint.StatusPrepared}); err != nil {
+		t.Fatal(err)
+	}
+	sk := newFakeTxnSink()
+	sk.probeErr = errors.New("broker unavailable")
+	err := runEOWithParts(t, sk, storage, "", 0, state.InMemory(), 1)
+	if err == nil || !strings.Contains(err.Error(), "cannot resolve prepared checkpoint") {
+		t.Fatalf("expected uncertain recovery error, got %v", err)
+	}
+	if storageData, _ := storage.Load(); storageData == nil || storageData.Status != checkpoint.StatusPrepared {
+		t.Fatal("uncertain prepared checkpoint was modified")
 	}
 }
 

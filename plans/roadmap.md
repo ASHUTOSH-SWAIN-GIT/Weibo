@@ -69,11 +69,20 @@ partitions reach those boundaries. Timeouts are no longer evidence of absence;
 broker failures and cancellation propagate as errors. Unit boundary tests and a
 real-Kafka committed/aborted/absent integration test cover the protocol.
 
-### 4. Expand the crash-consistency matrix
+### 4. Expand the crash-consistency matrix — ✅ DONE
 
 Cover failures around barrier injection, operator snapshot, prepared-file
 persistence, sink commit, completed promotion, and advisory offset commit.
 Run it with memory/Pebble state and single-/multi-partition Kafka.
+
+**Shipped:** the test hook now exposes barrier capture, completed operator
+snapshot, and sink preparation in addition to every durable coordinator step.
+The matrix crashes and recovers a keyed pipeline at all seven boundaries with
+one and three source partitions against both memory and Pebble backends,
+asserting one visible output per input and exact restored counts. Unknown marker
+outcomes refuse recovery. The matrix also found and fixed stale Pebble working
+state: startup now resets state not represented by the selected checkpoint and
+propagates reset/restore failures instead of processing inconsistent state.
 
 ---
 

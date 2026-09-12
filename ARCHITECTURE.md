@@ -364,6 +364,14 @@ all partitions, so partition expansion is safe. Compaction is recommended;
 retention or manual deletion must not remove the latest marker for a pipeline
 while a prepared checkpoint may still require recovery.
 
+Crash tests halt the protocol after each observable boundary: aligned barrier
+capture, operator snapshot, sink preparation, prepared persistence, sink
+commit, completed promotion, and advisory offset commit. Every boundary is
+verified with one and multiple source partitions and with memory and Pebble
+state. Pebble's live database is disposable: startup restores it from the
+selected checkpoint, or resets it when starting fresh, so uncheckpointed WAL
+state can never move ahead of restored source offsets.
+
 ---
 
 ## Package map

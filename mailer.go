@@ -317,7 +317,13 @@ func (env *StreamExecutionEnv) Execute(ctx context.Context) error {
 	// their operators at plan time, so every clone exists before any
 	// stage starts processing.
 	if savedCheckpoint != nil {
-		env.restoreWorkersFromCheckpoint(savedCheckpoint)
+		if err := env.restoreWorkersFromCheckpoint(savedCheckpoint); err != nil {
+			return fmt.Errorf("weibo: restore operator state: %w", err)
+		}
+	} else {
+		if err := env.resetWorkingState(); err != nil {
+			return fmt.Errorf("weibo: reset working state: %w", err)
+		}
 	}
 
 	// Coordinator lifecycle (exactly-once mode only).
@@ -881,9 +887,9 @@ func (env *StreamExecutionEnv) restoreSourceOffset(data *checkpoint.CheckpointDa
 // restoreWorkersFromCheckpoint restores per-worker operator state for
 // operator instances created by keyed stages. Called after the plan is
 // built (which creates the worker clones) and before stages start.
-func (env *StreamExecutionEnv) restoreWorkersFromCheckpoint(data *checkpoint.CheckpointData) {
+func (env *StreamExecutionEnv) restoreWorkersFromCheckpoint(data *checkpoint.CheckpointData) error {
 	if data == nil {
-		return
+		return nil
 	}
 
 	// Top-level operators are snapshotted under "op-<i>" in collectSnapshots
@@ -893,20 +899,25 @@ func (env *StreamExecutionEnv) restoreWorkersFromCheckpoint(data *checkpoint.Che
 	// pipelines they are unused templates and the restore is a harmless
 	// no-op (no matching snapshot / empty state).
 	for i, op := range env.operators {
-		env.restoreOperatorState(data, fmt.Sprintf("op-%d", i), op)
+		if err := env.restoreOperatorState(data, fmt.Sprintf("op-%d", i), op); err != nil {
+			return err
+		}
 	}
 
 	env.workerMu.Lock()
 	defer env.workerMu.Unlock()
 	for i, op := range env.workerOps {
-		env.restoreOperatorState(data, fmt.Sprintf("worker-%d", i), op)
+		if err := env.restoreOperatorState(data, fmt.Sprintf("worker-%d", i), op); err != nil {
+			return err
+		}
 	}
+	return nil
 }
 
 // restoreOperatorState restores a single operator's state from a checkpoint
 // under the given owner key, using native (Pebble hard-link) restore when
 // available and falling back to inline snapshot bytes otherwise.
-func (env *StreamExecutionEnv) restoreOperatorState(data *checkpoint.CheckpointData, key string, op operator.Operator) {
+func (env *StreamExecutionEnv) restoreOperatorState(data *checkpoint.CheckpointData, key string, op operator.Operator) error {
 	// Native checkpoint restore (Pebble hard-links). Any operator that
 	// exposes a checkpointable backend uses this path — not only Reduce.
 	// A Pebble-backed Window/WindowReduce snapshots natively (a state_ref
@@ -920,9 +931,9 @@ func (env *StreamExecutionEnv) restoreOperatorState(data *checkpoint.CheckpointD
 			if cp, ok := b.Backend().(state.Checkpointable); ok {
 				absPath := filepath.Join(env.checkpointStorage.StateDir(data.ID), stateDir)
 				if err := cp.RestoreFrom(absPath); err != nil {
-					fmt.Printf("weibo: restore %s from native state failed: %v\n", key, err)
+					return fmt.Errorf("restore %s from native state: %w", key, err)
 				}
-				return
+				return nil
 			}
 		}
 	}
@@ -931,8 +942,41 @@ func (env *StreamExecutionEnv) restoreOperatorState(data *checkpoint.CheckpointD
 	if snap, ok := op.(operator.Snapshotable); ok {
 		if stateData, exists := data.Operators[key]; exists && len(stateData) > 0 {
 			if err := snap.Restore(stateData); err != nil {
-				fmt.Printf("weibo: restore %s failed: %v\n", key, err)
+				return fmt.Errorf("restore %s: %w", key, err)
 			}
+			return nil
 		}
 	}
+	return env.resetOperatorState(key, op)
+}
+
+func (env *StreamExecutionEnv) resetWorkingState() error {
+	for i, op := range env.operators {
+		if err := env.resetOperatorState(fmt.Sprintf("op-%d", i), op); err != nil {
+			return err
+		}
+	}
+	env.workerMu.Lock()
+	defer env.workerMu.Unlock()
+	for i, op := range env.workerOps {
+		if err := env.resetOperatorState(fmt.Sprintf("worker-%d", i), op); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (env *StreamExecutionEnv) resetOperatorState(key string, op operator.Operator) error {
+	backendOwner, ok := op.(interface{ Backend() state.StateBackend })
+	if !ok {
+		return nil
+	}
+	reset, ok := backendOwner.Backend().(state.Resettable)
+	if !ok {
+		return nil
+	}
+	if err := reset.Reset(); err != nil {
+		return fmt.Errorf("reset uncheckpointed state %s: %w", key, err)
+	}
+	return nil
 }
