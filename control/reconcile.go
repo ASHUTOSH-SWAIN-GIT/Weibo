@@ -35,16 +35,16 @@ func (c *Controller) Reconcile(ctx context.Context) error {
 			unlock()
 			continue // job deleted out from under a run; skip
 		}
-		if run.ContainerID == "" {
-			err := c.reattachUnrecordedBackendRun(ctx, job, run)
+		if lifecycle.Phase(run.Phase) == lifecycle.Restarting {
+			err := c.maybeRestart(ctx, job, run)
 			unlock()
 			if err != nil {
 				return err
 			}
 			continue
 		}
-		if lifecycle.Phase(run.Phase) == lifecycle.Restarting {
-			err := c.maybeRestart(ctx, job, run)
+		if run.ContainerID == "" {
+			err := c.reattachUnrecordedBackendRun(ctx, job, run)
 			unlock()
 			if err != nil {
 				return err
@@ -224,11 +224,15 @@ func (c *Controller) maybeRestart(ctx context.Context, job *store.Job, run *stor
 }
 
 func (c *Controller) scheduleRestart(job *store.Job, run *store.Run, reason string) error {
+	return c.scheduleRestartFrom(job, run, lifecycle.Running, reason)
+}
+
+func (c *Controller) scheduleRestartFrom(job *store.Job, run *store.Run, from lifecycle.Phase, reason string) error {
 	at := time.Now().UTC().Add(c.restart.Backoff(run.Attempt))
 	run.Phase = string(lifecycle.Restarting)
 	run.Error = reason
 	run.RestartAt = &at
-	return c.store.UpdateRunWithTransition(run, transitionRecord(job.ID, run.ID, lifecycle.Running, lifecycle.Restarting, reason))
+	return c.store.UpdateRunWithTransition(run, transitionRecord(job.ID, run.ID, from, lifecycle.Restarting, reason))
 }
 
 // RunReconciler runs Reconcile on a ticker until ctx is cancelled. Call it

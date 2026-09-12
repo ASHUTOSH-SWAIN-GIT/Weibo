@@ -422,6 +422,83 @@ func TestReconcileRestartsOnCrash(t *testing.T) {
 	}
 }
 
+func TestInitialLaunchFailureRetriesOnReconcile(t *testing.T) {
+	fake := backend.NewFake()
+	fake.LaunchErr = backend.TransientLaunchErrorf("temporary backend unavailable")
+	c, _ := newController(t, fake, lifecycle.RestartPolicy{MaxAttempts: 2, BaseBackoff: 0})
+
+	job, err := c.Submit(context.Background(), []byte(validSDKManifest), nil)
+	if err == nil {
+		t.Fatal("expected submit to report the launch failure")
+	}
+	run, err := c.LatestRun(job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.Phase != string(lifecycle.Restarting) || run.RestartAt == nil || run.Stopped != nil {
+		t.Fatalf("initial launch failure was not scheduled for retry: %+v", run)
+	}
+	if fake.Launched() != 0 {
+		t.Fatalf("failed launch should not create a container, got %d", fake.Launched())
+	}
+
+	if err := c.Reconcile(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	retried, err := c.LatestRun(job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if retried.Phase != string(lifecycle.Running) || retried.Attempt != 2 || retried.ContainerID == "" {
+		t.Fatalf("scheduled launch retry did not start a new run: %+v", retried)
+	}
+	if fake.Launched() != 1 {
+		t.Fatalf("expected one successful backend launch, got %d", fake.Launched())
+	}
+}
+
+func TestInitialPermanentLaunchFailureDoesNotRetry(t *testing.T) {
+	fake := backend.NewFake()
+	fake.LaunchErr = backend.PermanentLaunchErrorf("pull access denied for image")
+	c, _ := newController(t, fake, lifecycle.RestartPolicy{MaxAttempts: 2, BaseBackoff: 0})
+
+	job, err := c.Submit(context.Background(), []byte(validSDKManifest), nil)
+	if err == nil {
+		t.Fatal("expected submit to report the launch failure")
+	}
+	run, err := c.LatestRun(job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.Phase != string(lifecycle.Failed) || run.RestartAt != nil || run.Stopped == nil {
+		t.Fatalf("permanent launch failure should be terminal: %+v", run)
+	}
+	if err := c.Reconcile(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if fake.Launched() != 0 {
+		t.Fatalf("permanent launch failure should not retry, got %d launches", fake.Launched())
+	}
+}
+
+func TestInitialLaunchFailureExhaustsRetryPolicy(t *testing.T) {
+	fake := backend.NewFake()
+	fake.LaunchErr = backend.TransientLaunchErrorf("temporary backend unavailable")
+	c, _ := newController(t, fake, lifecycle.RestartPolicy{MaxAttempts: 1, BaseBackoff: 0})
+
+	job, err := c.Submit(context.Background(), []byte(validSDKManifest), nil)
+	if err == nil {
+		t.Fatal("expected submit to report the launch failure")
+	}
+	run, err := c.LatestRun(job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.Phase != string(lifecycle.Failed) || run.RestartAt != nil || run.Stopped == nil {
+		t.Fatalf("exhausted launch failure should be terminal: %+v", run)
+	}
+}
+
 func TestReconcileBackoffDoesNotBlockOtherJobs(t *testing.T) {
 	fake := backend.NewFake()
 	c, _ := newController(t, fake, lifecycle.RestartPolicy{MaxAttempts: 2, BaseBackoff: 250 * time.Millisecond})

@@ -41,7 +41,7 @@ func (p Phase) Terminal() bool {
 // input, so callers may log rather than hard-fail.
 var valid = map[Phase][]Phase{
 	Submitted: {Starting, Failed, Cancelled},
-	Starting:  {Running, Failed, Cancelling},
+	Starting:  {Running, Failed, Restarting, Cancelling},
 	// Running may terminate directly in Cancelled: a user cancel or a
 	// desired-stopped reconcile stops the container and marks the run
 	// Cancelled in one step (see Controller.Cancel / reconcileRun),

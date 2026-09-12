@@ -1,0 +1,11 @@
+{
+  "name": "weibo",
+  "private": true,
+  "scripts": {
+    "prepare": "husky",
+    "precommit:ci": "./scripts/pre-commit-ci.sh"
+  },
+  "devDependencies": {
+    "husky": "^9.1.7"
+  }
+}

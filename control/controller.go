@@ -506,12 +506,18 @@ func (c *Controller) launchLocked(ctx context.Context, job *store.Job, attempt i
 		PullPolicy: backend.PullIfNotPresent,
 	})
 	if err != nil {
-		stopped := time.Now().UTC()
-		run.Phase = string(lifecycle.Failed)
 		run.Error = err.Error()
-		run.Stopped = &stopped
-		if updateErr := c.store.UpdateRunWithTransition(run, transitionRecord(job.ID, run.ID, lifecycle.Starting, lifecycle.Failed, err.Error())); updateErr != nil {
-			return fmt.Errorf("launch failed (%v); additionally failed to record run failure: %w", err, updateErr)
+		if retryableLaunchFailure(err) && c.restart.ShouldRestart(lifecycle.Failed, run.Attempt) {
+			if updateErr := c.scheduleRestartFrom(job, run, lifecycle.Starting, err.Error()); updateErr != nil {
+				return fmt.Errorf("launch failed (%v); additionally failed to schedule retry: %w", err, updateErr)
+			}
+		} else {
+			stopped := time.Now().UTC()
+			run.Phase = string(lifecycle.Failed)
+			run.Stopped = &stopped
+			if updateErr := c.store.UpdateRunWithTransition(run, transitionRecord(job.ID, run.ID, lifecycle.Starting, lifecycle.Failed, err.Error())); updateErr != nil {
+				return fmt.Errorf("launch failed (%v); additionally failed to record run failure: %w", err, updateErr)
+			}
 		}
 		return err
 	}
