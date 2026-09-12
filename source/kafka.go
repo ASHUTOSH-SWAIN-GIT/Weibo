@@ -8,7 +8,10 @@ import (
 	"time"
 
 	"github.com/segmentio/kafka-go"
+	"github.com/twmb/franz-go/pkg/kadm"
+	"github.com/twmb/franz-go/pkg/kgo"
 
+	weiboauth "github.com/ASHUTOSH-SWAIN-GIT/weibo/auth"
 	"github.com/ASHUTOSH-SWAIN-GIT/weibo/types"
 )
 
@@ -333,17 +336,10 @@ func (k *KafkaSource) legacyCheckpointTopic() string {
 	return ""
 }
 
-func (k *KafkaSource) configuredTopics() []string {
-	if k.cfg.topic != "" {
-		return []string{k.cfg.topic}
-	}
-	return append([]string(nil), k.cfg.topics...)
-}
-
 // applyRestoredGroupOffsets makes checkpoint state authoritative over broker
-// commits before the Reader joins for normal consumption. kafka-go's Reader
-// cannot SetOffset in group mode, so a short-lived group generation resets the
-// complete topic+partition map at the coordinator.
+// commits before the Reader joins for normal consumption. A generation-less
+// OffsetCommit is the Kafka protocol's deterministic reset path for an idle
+// group; it avoids briefly joining and leaving a group before the real reader.
 func (k *KafkaSource) applyRestoredGroupOffsets(ctx context.Context) error {
 	positions := k.offsets.restoredPositions()
 	if len(positions) == 0 {
@@ -356,32 +352,31 @@ func (k *KafkaSource) applyRestoredGroupOffsets(ctx context.Context) error {
 		return k.readers.primary().SetOffset(positions[0].Offset)
 	}
 
-	cfg := kafka.ConsumerGroupConfig{
-		ID:          k.cfg.groupID,
-		Brokers:     k.cfg.brokers,
-		Topics:      k.configuredTopics(),
-		StartOffset: k.cfg.offsetSpec.toKafka(),
-	}
-	if k.cfg.sasl != nil || k.cfg.tls != nil {
-		cfg.Dialer = buildDialer(k.cfg.sasl, k.cfg.tls)
-	}
-	group, err := kafka.NewConsumerGroup(cfg)
-	if err != nil {
-		return err
-	}
-	defer group.Close()
-	generation, err := group.Next(ctx)
-	if err != nil {
-		return err
-	}
-	offsets := make(map[string]map[int]int64)
+	commits := make(kadm.Offsets)
 	for _, position := range positions {
-		if offsets[position.Source] == nil {
-			offsets[position.Source] = make(map[int]int64)
-		}
-		offsets[position.Source][position.Partition] = position.Offset
+		commits.AddOffset(position.Source, int32(position.Partition), position.Offset, -1)
 	}
-	return generation.CommitOffsets(offsets)
+	opts := []kgo.Opt{kgo.SeedBrokers(k.cfg.brokers...)}
+	if k.cfg.sasl != nil {
+		mechanism, err := weiboauth.BuildKgoSASL(*k.cfg.sasl)
+		if err != nil {
+			return err
+		}
+		opts = append(opts, kgo.SASL(mechanism))
+	}
+	if k.cfg.tls != nil {
+		tlsConfig, err := weiboauth.BuildTLSConfig(*k.cfg.tls)
+		if err != nil {
+			return err
+		}
+		opts = append(opts, kgo.DialTLSConfig(tlsConfig))
+	}
+	client, err := kgo.NewClient(opts...)
+	if err != nil {
+		return err
+	}
+	defer client.Close()
+	return kadm.NewClient(client).CommitAllOffsets(ctx, k.cfg.groupID, commits)
 }
 
 // KafkaToRecord converts a kafka.Message to a weibo.Record.

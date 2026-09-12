@@ -46,10 +46,16 @@ func TestKafkaMultiTopicCheckpointRestore(t *testing.T) {
 			_ = cleanup.Close()
 		}
 	})
+	waitForTopicLeader(t, brokers[0], topicA)
+	waitForTopicLeader(t, brokers[0], topicB)
 
 	write := func(topic string, values ...string) {
 		t.Helper()
-		writer := &kafka.Writer{Addr: kafka.TCP(brokers...), Topic: topic, RequiredAcks: kafka.RequireAll}
+		// Use a fresh transport so negative metadata cached while the topic was
+		// being created cannot leak into this producer.
+		transport := &kafka.Transport{MetadataTTL: 100 * time.Millisecond}
+		defer transport.CloseIdleConnections()
+		writer := &kafka.Writer{Addr: kafka.TCP(brokers...), Topic: topic, RequiredAcks: kafka.RequireAll, Transport: transport}
 		defer writer.Close()
 		messages := make([]kafka.Message, len(values))
 		for i, value := range values {
@@ -98,6 +104,24 @@ func TestKafkaMultiTopicCheckpointRestore(t *testing.T) {
 	if strings.Join(got2, ",") != "a2,b2" {
 		t.Fatalf("records after restore = %v; checkpoint positions were not applied", got2)
 	}
+}
+
+func waitForTopicLeader(t *testing.T, broker, topic string) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	var lastErr error
+	for time.Now().Before(deadline) {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		conn, err := kafka.DialLeader(ctx, "tcp", broker, topic, 0)
+		cancel()
+		if err == nil {
+			_ = conn.Close()
+			return
+		}
+		lastErr = err
+		time.Sleep(100 * time.Millisecond)
+	}
+	t.Fatalf("topic %s leader did not become ready: %v", topic, lastErr)
 }
 
 func consumeN(t *testing.T, src *KafkaSource, count int) []string {

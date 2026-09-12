@@ -1,6 +1,8 @@
 package source
 
 import (
+	"sync"
+
 	"github.com/segmentio/kafka-go"
 )
 
@@ -8,6 +10,8 @@ import (
 // single-topic) mode. Parallel per-partition readers are owned by the
 // partitionManager instead, which needs a dynamic reader set.
 type readerSupervisor struct {
+	mu           sync.Mutex
+	cfg          kafkaSourceConfig
 	readers      []*kafka.Reader
 	partitionIDs []int
 }
@@ -16,6 +20,10 @@ type readerSupervisor struct {
 // (or single-topic) mode. Partition id is -1 to mark "not a specific
 // partition", matching the previous behaviour.
 func newSerialReaderSupervisor(cfg kafkaSourceConfig) *readerSupervisor {
+	return &readerSupervisor{cfg: cfg, partitionIDs: []int{-1}}
+}
+
+func buildSerialReader(cfg kafkaSourceConfig) *kafka.Reader {
 	rc := kafka.ReaderConfig{
 		Brokers:     cfg.brokers,
 		GroupID:     cfg.groupID,
@@ -31,20 +39,24 @@ func newSerialReaderSupervisor(cfg kafkaSourceConfig) *readerSupervisor {
 	if cfg.sasl != nil || cfg.tls != nil {
 		rc.Dialer = buildDialer(cfg.sasl, cfg.tls)
 	}
-	return &readerSupervisor{
-		readers:      []*kafka.Reader{kafka.NewReader(rc)},
-		partitionIDs: []int{-1},
-	}
+	return kafka.NewReader(rc)
 }
 
 // primary returns the single reader, used by serial-mode fetch, commit and
 // drain paths.
 func (s *readerSupervisor) primary() *kafka.Reader {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.readers) == 0 {
+		s.readers = []*kafka.Reader{buildSerialReader(s.cfg)}
+	}
 	return s.readers[0]
 }
 
 // closeAll closes every reader. Safe to call once during shutdown.
 func (s *readerSupervisor) closeAll() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	for _, r := range s.readers {
 		r.Close()
 	}
