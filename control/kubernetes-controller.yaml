@@ -1,0 +1,248 @@
+# Weibo controller install manifest.
+#
+# Apply in a dedicated namespace:
+#
+#   kubectl create namespace weibo
+#   kubectl -n weibo create secret generic weibo-controller-token \
+#     --from-literal=token="$(openssl rand -hex 32)" \
+#     --dry-run=client -o yaml | kubectl apply -f -
+#   kubectl -n weibo apply -f control/kubernetes-controller.yaml
+#
+# SQLite is mounted on one PVC, so keep replicas=1 until Weibo grows leader
+# election plus shared/HA controller storage.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: weibo-controller
+  labels:
+    app.kubernetes.io/name: weibo-controller
+    app.kubernetes.io/part-of: weibo
+    app.kubernetes.io/managed-by: weibo
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: weibo-controller
+  labels:
+    app.kubernetes.io/name: weibo-controller
+    app.kubernetes.io/part-of: weibo
+    app.kubernetes.io/managed-by: weibo
+rules:
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["get", "list", "watch", "create", "delete"]
+  - apiGroups: [""]
+    resources: ["pods", "services", "configmaps", "secrets", "persistentvolumeclaims"]
+    verbs: ["get", "list", "watch", "create", "delete"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+  - apiGroups: [""]
+    resources: ["resourcequotas"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: weibo-controller
+  labels:
+    app.kubernetes.io/name: weibo-controller
+    app.kubernetes.io/part-of: weibo
+    app.kubernetes.io/managed-by: weibo
+subjects:
+  - kind: ServiceAccount
+    name: weibo-controller
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: weibo-controller
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: weibo-controller-config
+  labels:
+    app.kubernetes.io/name: weibo-controller
+    app.kubernetes.io/part-of: weibo
+    app.kubernetes.io/managed-by: weibo
+data:
+  # The image launched for declarative workflow jobs. It must be pullable by
+  # the cluster. For kind, load it with: kind load docker-image weibo-runner:dev
+  WEIBO_RUNNER_IMAGE: weibo-runner:dev
+  WEIBO_LOG_LEVEL: info
+  WEIBO_LOG_FORMAT: json
+  WEIBO_GRAFANA_URL: ""
+  OTEL_EXPORTER_OTLP_ENDPOINT: ""
+  OTEL_SERVICE_NAME: weibo-controller
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: weibo-controller-data
+  labels:
+    app.kubernetes.io/name: weibo-controller
+    app.kubernetes.io/part-of: weibo
+    app.kubernetes.io/managed-by: weibo
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: weibo-controller
+  labels:
+    app.kubernetes.io/name: weibo-controller
+    app.kubernetes.io/part-of: weibo
+    app.kubernetes.io/managed-by: weibo
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: weibo-controller
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: weibo-controller
+        app.kubernetes.io/part-of: weibo
+        app.kubernetes.io/managed-by: weibo
+    spec:
+      serviceAccountName: weibo-controller
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        fsGroupChangePolicy: OnRootMismatch
+      containers:
+        - name: controller
+          # Build/publish a control image containing the `weibo` binary from
+          # control/cmd/weibo, then replace this reference.
+          image: ghcr.io/ashutosh-swain-git/weibo-control:latest
+          imagePullPolicy: IfNotPresent
+          args:
+            - dashboard
+            - -no-open
+            - -addr=:9000
+            - -backend=kubernetes
+            - -namespace=$(POD_NAMESPACE)
+            - -image=$(WEIBO_RUNNER_IMAGE)
+            - -db=/var/lib/weibo/control.db
+            - -log-level=$(WEIBO_LOG_LEVEL)
+            - -log-format=$(WEIBO_LOG_FORMAT)
+            - -grafana-url=$(WEIBO_GRAFANA_URL)
+            - -otel-endpoint=$(OTEL_EXPORTER_OTLP_ENDPOINT)
+            - -otel-service-name=$(OTEL_SERVICE_NAME)
+          env:
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: WEIBO_RUNNER_IMAGE
+              valueFrom:
+                configMapKeyRef:
+                  name: weibo-controller-config
+                  key: WEIBO_RUNNER_IMAGE
+            - name: WEIBO_LOG_LEVEL
+              valueFrom:
+                configMapKeyRef:
+                  name: weibo-controller-config
+                  key: WEIBO_LOG_LEVEL
+            - name: WEIBO_LOG_FORMAT
+              valueFrom:
+                configMapKeyRef:
+                  name: weibo-controller-config
+                  key: WEIBO_LOG_FORMAT
+            - name: WEIBO_GRAFANA_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: weibo-controller-config
+                  key: WEIBO_GRAFANA_URL
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              valueFrom:
+                configMapKeyRef:
+                  name: weibo-controller-config
+                  key: OTEL_EXPORTER_OTLP_ENDPOINT
+            - name: OTEL_SERVICE_NAME
+              valueFrom:
+                configMapKeyRef:
+                  name: weibo-controller-config
+                  key: OTEL_SERVICE_NAME
+            - name: WEIBO_AUTH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: weibo-controller-token
+                  key: token
+                  optional: true
+          ports:
+            - name: http
+              containerPort: 9000
+          livenessProbe:
+            httpGet:
+              path: /livez
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            failureThreshold: 2
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/weibo
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: weibo-controller-data
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: weibo-controller
+  labels:
+    app.kubernetes.io/name: weibo-controller
+    app.kubernetes.io/part-of: weibo
+    app.kubernetes.io/managed-by: weibo
+spec:
+  selector:
+    app.kubernetes.io/name: weibo-controller
+  ports:
+    - name: http
+      port: 9000
+      targetPort: http
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: weibo-controller
+  labels:
+    app.kubernetes.io/name: weibo-controller
+    app.kubernetes.io/part-of: weibo
+    app.kubernetes.io/managed-by: weibo
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: weibo-controller

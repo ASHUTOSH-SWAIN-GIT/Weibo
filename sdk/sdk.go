@@ -21,6 +21,9 @@
 //	CHECKPOINT_RETENTION completed recovery points to keep          (default 3)
 //	RESTORE_SAVEPOINT    savepoint label to resume from        (default none)
 //	JOB_NAME             human-readable name for logs
+// weibo-runner additionally honors LOG_LEVEL, LOG_FORMAT,
+// OTEL_EXPORTER_OTLP_ENDPOINT, and OTEL_SERVICE_NAME for its own
+// logger/tracer; plain SDK mains pass Logger/Tracer via ServeOptions.
 package sdk
 
 import (
@@ -28,6 +31,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -38,6 +42,7 @@ import (
 	"github.com/ASHUTOSH-SWAIN-GIT/weibo"
 	"github.com/ASHUTOSH-SWAIN-GIT/weibo/checkpoint"
 	"github.com/ASHUTOSH-SWAIN-GIT/weibo/jobagent"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/observability/trace"
 	"github.com/ASHUTOSH-SWAIN-GIT/weibo/state"
 )
 
@@ -126,6 +131,11 @@ type ServeOptions struct {
 	SavepointDir     string // savepoint blobstore; default /savepoints
 	RestoreSavepoint string // savepoint label to seed from, or ""
 	Stdout, Stderr   io.Writer
+	// Logger sets structured logging for the engine and agent (nil keeps
+	// their defaults). Tracer enables the agent's job-run span and
+	// engine checkpoint spans (nil is no-op).
+	Logger *slog.Logger
+	Tracer trace.Tracer
 }
 
 // Serve supervises a configured env under a jobagent: it restores a
@@ -152,7 +162,19 @@ func Serve(ctx context.Context, env *weibo.StreamExecutionEnv, opts ServeOptions
 		fmt.Fprintf(stdout, "sdk: restored from savepoint %q (checkpoint %s)\n", opts.RestoreSavepoint, id)
 	}
 
+	if opts.Logger != nil {
+		env.WithLogger(opts.Logger)
+	}
+	if opts.Tracer != nil {
+		env.WithTracer(opts.Tracer)
+	}
 	agent := jobagent.New(env)
+	if opts.Logger != nil {
+		agent.SetLogger(opts.Logger)
+	}
+	if opts.Tracer != nil {
+		agent.SetTracer(opts.Tracer)
+	}
 
 	// Serve the control surface alongside the job; its own context tears
 	// it down when the job finishes on its own, not only on SIGTERM.

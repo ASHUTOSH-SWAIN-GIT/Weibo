@@ -1,20 +1,71 @@
 package jobagent_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/ASHUTOSH-SWAIN-GIT/weibo"
 	"github.com/ASHUTOSH-SWAIN-GIT/weibo/checkpoint"
 	"github.com/ASHUTOSH-SWAIN-GIT/weibo/jobagent"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/observability/trace"
 	"github.com/ASHUTOSH-SWAIN-GIT/weibo/sink"
 	"github.com/ASHUTOSH-SWAIN-GIT/weibo/source"
 	"github.com/ASHUTOSH-SWAIN-GIT/weibo/types"
 )
+
+// syncBuffer is a goroutine-safe bytes.Buffer for log capture.
+type syncBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (s *syncBuffer) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.Write(p)
+}
+
+func (s *syncBuffer) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.String()
+}
+
+// stubTracer records spans for observability assertions.
+type stubTracer struct {
+	mu    sync.Mutex
+	spans []*stubSpan
+}
+
+type stubSpan struct {
+	name  string
+	attrs []trace.Attribute
+	ended bool
+	errs  []error
+}
+
+func (t *stubTracer) Start(ctx context.Context, name string, attrs ...trace.Attribute) (context.Context, trace.Span) {
+	s := &stubSpan{name: name}
+	s.attrs = append(s.attrs, attrs...)
+	t.mu.Lock()
+	t.spans = append(t.spans, s)
+	t.mu.Unlock()
+	return trace.ContextWithSpan(ctx, s), s
+}
+
+func (s *stubSpan) End()                               { s.ended = true }
+func (s *stubSpan) RecordError(err error)              { s.errs = append(s.errs, err) }
+func (s *stubSpan) SetAttributes(a ...trace.Attribute) { s.attrs = append(s.attrs, a...) }
+func (s *stubSpan) TraceID() string                    { return "" }
+func (s *stubSpan) SpanID() string                     { return "" }
 
 // blockingSource emits a few records, signals that it is live, then
 // blocks until the context is cancelled. It keeps a job in the Running
@@ -158,6 +209,54 @@ func TestAgent_CheckpointReport(t *testing.T) {
 		}
 		if cp.SizeBytes <= 0 {
 			t.Errorf("checkpoint %s has no inline size: %d", cp.ID, cp.SizeBytes)
+		}
+	}
+}
+
+// Structured logging and tracing ride the whole run: the agent logs
+// start/finish, the engine checkpoint save is spanned, and the agent's
+// job-run span ends cleanly.
+func TestAgent_StructuredLoggingAndTracing(t *testing.T) {
+	var logs syncBuffer
+	logger := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	tr := &stubTracer{}
+	env := weibo.NewEnv().
+		FromSource(source.FromSlices([]string{"a", "b"}, []string{"1", "2"})).
+		ToSink(sink.NewBlackholeSink()).
+		WithCheckpointing(10*time.Millisecond, checkpoint.NewFileStorage(t.TempDir())).
+		WithLogger(logger).
+		WithTracer(tr)
+
+	a := jobagent.New(env).SetLogger(logger).SetTracer(tr)
+	if err := a.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	out := logs.String()
+	for _, want := range []string{"job run started", "job run finished", "checkpoint="} {
+		if !strings.Contains(out, want) {
+			t.Errorf("logs missing %q:\n%s", want, out)
+		}
+	}
+	names := map[string]bool{}
+	ended := 0
+	tr.mu.Lock()
+	for _, s := range tr.spans {
+		names[s.name] = true
+		if s.ended {
+			ended++
+		}
+		if len(s.errs) != 0 {
+			t.Errorf("span %s errors: %v", s.name, s.errs)
+		}
+	}
+	total := len(tr.spans)
+	tr.mu.Unlock()
+	if total == 0 || ended != total {
+		t.Errorf("spans=%d ended=%d", total, ended)
+	}
+	for _, want := range []string{"agent.run", "checkpoint.save"} {
+		if !names[want] {
+			t.Errorf("missing span %q (have %v)", want, names)
 		}
 	}
 }

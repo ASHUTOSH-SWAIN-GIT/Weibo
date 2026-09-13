@@ -3,8 +3,11 @@ package checkpoint
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"sync"
 	"time"
+
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/observability/trace"
 )
 
 // Step identifies a point in the coordinated checkpoint protocol.
@@ -69,6 +72,12 @@ type Coordinator struct {
 	// promoted to StatusCompleted. Observability only (progress signal
 	// for supervisors); must not block.
 	OnCompleted func(id string)
+
+	// Logger receives structured coordinator logs (finalize failures,
+	// advisory commits). Nil uses a component-tagged slog default.
+	Logger *slog.Logger
+	// Tracer starts one span per finalized checkpoint. Nil is no-op.
+	Tracer trace.Tracer
 
 	mu      sync.Mutex
 	pending map[string]*pendingCheckpoint
@@ -197,6 +206,23 @@ func (c *Coordinator) ensure(id string) *pendingCheckpoint {
 	return p
 }
 
+// log returns the coordinator logger, defaulting to a component-tagged
+// slog default.
+func (c *Coordinator) log() *slog.Logger {
+	if c.Logger != nil {
+		return c.Logger
+	}
+	return slog.Default().With("component", "checkpoint")
+}
+
+// tracing returns the coordinator tracer, defaulting to no-op.
+func (c *Coordinator) tracing() trace.Tracer {
+	if c.Tracer != nil {
+		return c.Tracer
+	}
+	return trace.Noop()
+}
+
 func (c *Coordinator) finalize(ctx context.Context, id string) {
 	c.mu.Lock()
 	if c.halted {
@@ -210,8 +236,13 @@ func (c *Coordinator) finalize(ctx context.Context, id string) {
 		return
 	}
 
+	ctx, span := c.tracing().Start(ctx, "checkpoint.finalize", trace.String("checkpoint", id))
+	defer span.End()
+
 	if p.sinkErr != nil {
-		c.abortFatal(ctx, id, fmt.Errorf("checkpoint %s: sink prepare failed: %w", id, p.sinkErr))
+		err := fmt.Errorf("checkpoint %s: sink prepare failed: %w", id, p.sinkErr)
+		span.RecordError(err)
+		c.abortFatal(ctx, id, err)
 		return
 	}
 
@@ -241,7 +272,9 @@ func (c *Coordinator) finalize(ctx context.Context, id string) {
 	if err := c.CommitSink(ctx, id); err != nil {
 		// Commit outcome unknown. Recovery resolves it via the
 		// transaction marker probe; here we only report.
-		c.reportFatal(fmt.Errorf("checkpoint %s: sink commit: %w", id, err))
+		err = fmt.Errorf("checkpoint %s: sink commit: %w", id, err)
+		span.RecordError(err)
+		c.reportFatal(err)
 		return
 	}
 	if !c.step(ctx, StepSinkCommitted, id) {
@@ -252,7 +285,9 @@ func (c *Coordinator) finalize(ctx context.Context, id string) {
 	if err := c.Storage.UpdateStatus(id, StatusCompleted); err != nil {
 		// Sink already committed: the marker makes this recoverable
 		// (prepared + marker visible → promoted on restart).
-		c.reportFatal(fmt.Errorf("checkpoint %s: persist completed: %w", id, err))
+		err = fmt.Errorf("checkpoint %s: persist completed: %w", id, err)
+		span.RecordError(err)
+		c.reportFatal(err)
 		return
 	}
 	if c.OnCompleted != nil {
@@ -266,7 +301,7 @@ func (c *Coordinator) finalize(ctx context.Context, id string) {
 	// the checkpoint file is the recovery source of truth).
 	if c.CommitOffsets != nil && p.offsets != nil {
 		if err := c.CommitOffsets(ctx, p.offsets); err != nil {
-			fmt.Printf("weibo: checkpoint %s: advisory offset commit failed: %v\n", id, err)
+			c.log().Warn("advisory offset commit failed", "checkpoint", id, "error", err)
 		}
 	}
 	c.step(ctx, StepOffsetsCommitted, id)
@@ -295,9 +330,12 @@ func (c *Coordinator) step(ctx context.Context, s Step, id string) bool {
 // abortFatal aborts the sink transaction (pre-commit failures only),
 // deletes any native state directories, and reports the pipeline-fatal error.
 func (c *Coordinator) abortFatal(ctx context.Context, id string, err error) {
+	if span := trace.SpanFromContext(ctx); span != nil {
+		span.RecordError(err)
+	}
 	if c.AbortSink != nil {
 		if aerr := c.AbortSink(ctx, id); aerr != nil {
-			fmt.Printf("weibo: checkpoint %s: sink abort failed: %v\n", id, aerr)
+			c.log().Warn("sink abort failed", "checkpoint", id, "error", aerr)
 		}
 	}
 	c.cleanupStateDirs(id)

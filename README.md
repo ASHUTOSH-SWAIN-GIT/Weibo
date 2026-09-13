@@ -370,7 +370,7 @@ include resolved values in summaries, errors, or pipeline descriptions.
 
 ```
 weibo/
-├── weibo.go              # StreamExecutionEnv, NewEnv(), Execute(), checkpointing glue
+├── engine.go             # StreamExecutionEnv, NewEnv(), Execute(), checkpointing glue
 ├── stream.go              # Stream type (fluent chain builder)
 ├── metadata.go            # Pipeline description for the dashboard
 ├── types/

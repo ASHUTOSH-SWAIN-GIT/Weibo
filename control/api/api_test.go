@@ -741,7 +741,7 @@ func TestTransitionsPagingEndpoint(t *testing.T) {
 	if n != 2 || next == 0 {
 		t.Fatalf("page1: n=%d next=%d", n, next)
 	}
-	n2, next2 := get("?limit=100&before="+strconv.FormatInt(next, 10))
+	n2, next2 := get("?limit=100&before=" + strconv.FormatInt(next, 10))
 	if n2 == 0 {
 		t.Fatalf("page2: n=%d next=%d", n2, next2)
 	}
@@ -795,6 +795,44 @@ func TestLogsStream(t *testing.T) {
 	text := strings.Join(burst, "")
 	if !strings.Contains(text, "data: line one") || !strings.Contains(text, "data: line two") {
 		t.Fatalf("stream missing initial burst: %q", text)
+	}
+}
+
+func TestSecretValuesNeverReachAPI(t *testing.T) {
+	fake := backend.NewFake()
+	ctrl := control.New(control.Options{
+		Store: mustStore(t), Backend: fake, Image: "img", StopTimeout: time.Second,
+	})
+	srv := newAPIWithController(t, ctrl)
+
+	const secret = "s3cr3t-value-xyz"
+	body, _ := json.Marshal(map[string]any{"workflow": sdkJob, "env": map[string]string{"API_KEY": secret}})
+	resp, err := http.Post(srv.URL+"/jobs", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var job store.Job
+	json.NewDecoder(resp.Body).Decode(&job)
+	resp.Body.Close()
+
+	for _, path := range []string{
+		"/jobs/" + job.ID,
+		"/jobs/" + job.ID + "/diagnostics",
+		"/jobs/" + job.ID + "/transitions?limit=100",
+		"/jobs/" + job.ID + "/runs",
+		"/jobs/history?points=10",
+		"/metrics",
+		"/targets",
+	} {
+		resp, err := http.Get(srv.URL + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		data, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if strings.Contains(string(data), secret) {
+			t.Errorf("secret value leaked in %s", path)
+		}
 	}
 }
 

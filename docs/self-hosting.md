@@ -270,6 +270,19 @@ weibo dashboard -backend kubernetes \
   *lifecycle* (submit/status/logs/cancel/restart) works from anywhere via the
   API; run the controller in-cluster (or port-forward) for live metrics.
 
+For an in-cluster controller, start from
+[`control/kubernetes-controller.yaml`](../control/kubernetes-controller.yaml).
+It includes the controller Deployment/Service, RBAC, SQLite PVC,
+`/livez`/`/readyz` probes, and a PodDisruptionBudget. Replace the placeholder
+controller image, set `WEIBO_RUNNER_IMAGE` in the ConfigMap, and keep
+`replicas: 1`: the controller uses SQLite on a single PVC, so multiple
+replicas are not safe until leader election/shared storage exists.
+
+Controller and job probes are split by purpose: `/livez` is liveness and should
+stay green while the process can answer HTTP; `/readyz` checks dependencies
+such as the store/backend and is what Services should use for readiness.
+`/healthz` remains as a compatibility alias for older clients.
+
 ---
 
 ## systemd unit (optional)

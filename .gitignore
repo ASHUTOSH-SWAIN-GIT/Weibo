@@ -44,6 +44,8 @@ screenshots/
 dashboard-demo
 pg-orders
 kafka-dashboard
+kafka-orders
+s3-demo
 
 # Control-plane runtime artifacts (SQLite store, per-job state/checkpoints)
 *.db

@@ -3,10 +3,13 @@ package sink
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
 	"github.com/ASHUTOSH-SWAIN-GIT/weibo/auth"
+	wlog "github.com/ASHUTOSH-SWAIN-GIT/weibo/observability/log"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/observability/trace"
 	"github.com/ASHUTOSH-SWAIN-GIT/weibo/types"
 
 	"github.com/segmentio/kafka-go"
@@ -169,15 +172,38 @@ func (k *KafkaSink) Write(ctx context.Context, in <-chan types.Record) error {
 	return bw.run(ctx, in)
 }
 
+// log returns the sink logger, defaulting to discard so unconfigured
+// sinks stay silent as before.
+func (k *KafkaSink) log() *slog.Logger {
+	if k.cfg.logger != nil {
+		return k.cfg.logger
+	}
+	return wlog.Discard()
+}
+
+// tracing returns the sink tracer, defaulting to no-op.
+func (k *KafkaSink) tracing() trace.Tracer {
+	if k.cfg.tracer != nil {
+		return k.cfg.tracer
+	}
+	return trace.Noop()
+}
+
 // flushBatch writes one batch of messages, retrying per the configured
 // policy. When the retries are exhausted the failure policy decides each
 // record's fate; it returns an error only when that policy is to fail.
 func (k *KafkaSink) flushBatch(ctx context.Context, entries []kafkaBatchEntry) error {
+	ctx, span := k.tracing().Start(ctx, "sink.kafka.flush",
+		trace.String("topic", k.cfg.topic), trace.Int("messages", len(entries)))
+	defer span.End()
 	msgs := make([]kafka.Message, len(entries))
 	for i, e := range entries {
 		msgs[i] = e.msg
 	}
 	if err := k.writeWithRetry(ctx, msgs); err != nil {
+		span.RecordError(err)
+		k.log().Warn("kafka batch failed, applying failure policy",
+			"topic", k.cfg.topic, "messages", len(entries), "error", err)
 		for _, e := range entries {
 			if ferr := applyFailurePolicy(ctx, k.cfg.failurePolicy, k.cfg.dlq, e.record); ferr != nil {
 				return fmt.Errorf("kafka sink: write: %w (failure policy: %w)", err, ferr)

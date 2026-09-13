@@ -11,6 +11,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
 	"maps"
 	"net/http"
 	"net/url"
@@ -26,6 +27,8 @@ import (
 	"github.com/ASHUTOSH-SWAIN-GIT/weibo/control/backend"
 	"github.com/ASHUTOSH-SWAIN-GIT/weibo/control/lifecycle"
 	"github.com/ASHUTOSH-SWAIN-GIT/weibo/control/store"
+	wlog "github.com/ASHUTOSH-SWAIN-GIT/weibo/observability/log"
+	wtrace "github.com/ASHUTOSH-SWAIN-GIT/weibo/observability/trace"
 	"github.com/ASHUTOSH-SWAIN-GIT/weibo/workflow"
 	"github.com/ASHUTOSH-SWAIN-GIT/weibo/workflow/compiler"
 	"github.com/ASHUTOSH-SWAIN-GIT/weibo/workflow/secrets"
@@ -53,9 +56,16 @@ type Options struct {
 	// GrafanaURL is the base URL of an external Grafana instance. When
 	// set, the dashboard links each job/run to a "weibo-job" dashboard
 	// with var-job/var-run variables; empty disables the links.
-	GrafanaURL           string
-	NewID                func() string        // override for deterministic tests
-	Logf                 func(string, ...any) // optional logger
+	GrafanaURL string
+	NewID      func() string // override for deterministic tests
+	// Logger receives structured controller logs (submit, launch,
+	// reconcile, sweeps, pruning). Nil discards; use wlog.New for
+	// stderr output. Secret values are never logged — only key names.
+	Logger *slog.Logger
+	// Tracer starts coarse spans (launch, reconcile, sweep, savepoint).
+	// Nil is no-op; use control/trace.Adapt over the telemetry
+	// provider for OpenTelemetry export.
+	Tracer wtrace.Tracer
 }
 
 // Controller ties the store, backend, and lifecycle rules together.
@@ -73,7 +83,8 @@ type Controller struct {
 	history     *History
 	grafanaURL  string
 	newID       func() string
-	logf        func(string, ...any)
+	logger      *slog.Logger
+	tracer      wtrace.Tracer
 	httpc       *http.Client // talks to job agents (savepoint trigger)
 
 	mu      sync.Mutex
@@ -100,7 +111,8 @@ func New(opts Options) *Controller {
 		stopTimeout: opts.StopTimeout,
 		capacity:    opts.Capacity,
 		newID:       opts.NewID,
-		logf:        opts.Logf,
+		logger:      opts.Logger,
+		tracer:      opts.Tracer,
 		httpc:       &http.Client{Timeout: 10 * time.Second},
 		secrets:     map[string]map[string]string{},
 		jobLocks:    map[string]*sync.Mutex{},
@@ -137,10 +149,21 @@ func New(opts Options) *Controller {
 	if c.newID == nil {
 		c.newID = randomID
 	}
-	if c.logf == nil {
-		c.logf = func(string, ...any) {}
+	if c.logger == nil {
+		c.logger = wlog.Discard()
 	}
 	return c
+}
+
+// log returns the controller logger.
+func (c *Controller) log() *slog.Logger { return c.logger }
+
+// tracing returns the controller tracer, defaulting to no-op.
+func (c *Controller) tracing() wtrace.Tracer {
+	if c.tracer != nil {
+		return c.tracer
+	}
+	return wtrace.Noop()
 }
 
 // Submit validates a workflow document, records the job (desired:
@@ -199,6 +222,8 @@ func (c *Controller) SubmitWithSecretRefs(ctx context.Context, doc []byte, env m
 		// failure automatically, so surface it to the caller.
 		return job, fmt.Errorf("submit: launch: %w", err)
 	}
+	// Secret key names only — values never enter logs.
+	c.log().Info("job submitted", "job", job.ID, "name", name, "kind", store.KindYAML, "secrets", wlog.EnvKeys(env))
 	return job, nil
 }
 
@@ -311,6 +336,7 @@ func (c *Controller) submitSDK(ctx context.Context, doc []byte, m sdkManifest, e
 	if err := c.launch(ctx, job, 1, ""); err != nil {
 		return job, fmt.Errorf("submit: launch: %w", err)
 	}
+	c.log().Info("job submitted", "job", job.ID, "name", m.Name, "kind", store.KindSDK, "secrets", wlog.EnvKeys(env))
 	return job, nil
 }
 
@@ -446,7 +472,7 @@ func (c *Controller) doRestart(ctx context.Context, jobID, restore string) (*sto
 		// logged and retried by retention pruning / SweepOrphans.
 		if stoppedID != "" {
 			if err := c.backend.Remove(ctx, stoppedID); err != nil {
-				c.logf("job %s: restart remove old container %s: %v", jobID, stoppedID, err)
+				c.log().Warn("restart remove old container", "job", jobID, "container", stoppedID, "error", err)
 			}
 		}
 		if err := c.finishRun(run, lifecycle.Phase(run.Phase), lifecycle.Cancelled, "restart"); err != nil {
@@ -465,7 +491,15 @@ func (c *Controller) doRestart(ctx context.Context, jobID, restore string) (*sto
 // Savepoint triggers a stop-with-savepoint on the job's live container:
 // the job drains, writes its final checkpoint, and the runner promotes it
 // to a named savepoint. The job's desired state becomes stopped.
-func (c *Controller) Savepoint(ctx context.Context, jobID, label string) error {
+func (c *Controller) Savepoint(ctx context.Context, jobID, label string) (err error) {
+	ctx, span := c.tracing().Start(ctx, "controller.savepoint",
+		wtrace.String("job", jobID), wtrace.String("label", label))
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+		}
+		span.End()
+	}()
 	if label == "" {
 		return fmt.Errorf("savepoint: empty label")
 	}
@@ -617,7 +651,19 @@ func (c *Controller) launch(ctx context.Context, job *store.Job, attempt int, re
 	return c.launchLocked(ctx, job, attempt, restore)
 }
 
-func (c *Controller) launchLocked(ctx context.Context, job *store.Job, attempt int, restore string) error {
+func (c *Controller) launchLocked(ctx context.Context, job *store.Job, attempt int, restore string) (err error) {
+	ctx, span := c.tracing().Start(ctx, "controller.launch",
+		wtrace.String("job", job.ID), wtrace.Int("attempt", attempt))
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+		}
+		span.End()
+	}()
+	return c.startRun(ctx, job, attempt, restore)
+}
+
+func (c *Controller) startRun(ctx context.Context, job *store.Job, attempt int, restore string) error {
 	// Single-live-run fencing: never run two containers for one job at
 	// once — two live transactional producers with the same id would
 	// break exactly-once. Callers stop the prior run before relaunching.
@@ -726,7 +772,7 @@ func (c *Controller) launchLocked(ctx context.Context, job *store.Job, attempt i
 		return fmt.Errorf("record launched run: %w", err)
 	}
 	c.metrics.ObserveLaunch("success")
-	c.logf("job %s: launched run %s (container %s, attempt %d)", job.ID, run.ID, id, attempt)
+	c.log().Info("launched run", "job", job.ID, "run", run.ID, "container", id, "attempt", attempt)
 	return nil
 }
 
@@ -765,7 +811,7 @@ func (c *Controller) pruneTerminalRuns(ctx context.Context, jobID string) {
 	}
 	runs, err := c.store.ListRuns(jobID)
 	if err != nil {
-		c.logf("job %s: prune history: %v", jobID, err)
+		c.log().Warn("prune history", "job", jobID, "error", err)
 		return
 	}
 	var terminal []*store.Run
@@ -783,12 +829,12 @@ func (c *Controller) pruneTerminalRuns(ctx context.Context, jobID string) {
 	for _, victim := range terminal[c.retention:] {
 		if victim.ContainerID != "" {
 			if err := c.backend.Remove(ctx, victim.ContainerID); err != nil {
-				c.logf("job %s: prune remove container %s: %v", jobID, victim.ContainerID, err)
+				c.log().Warn("prune remove container", "job", jobID, "container", victim.ContainerID, "error", err)
 			}
 		}
 	}
 	if _, err := c.store.PruneTerminalRuns(jobID, c.retention); err != nil {
-		c.logf("job %s: prune history: %v", jobID, err)
+		c.log().Warn("prune history", "job", jobID, "error", err)
 	}
 }
 

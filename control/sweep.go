@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/ASHUTOSH-SWAIN-GIT/weibo/control/backend"
+	wtrace "github.com/ASHUTOSH-SWAIN-GIT/weibo/observability/trace"
 )
 
 // SweepReport describes one SweepOrphans pass: backend resources the store
@@ -28,8 +29,16 @@ type SweepReport struct {
 // no run of its job references its backend ID (e.g. a restart's Remove
 // failed after the new run was recorded). Exited/gone orphans are removed;
 // running orphans are only reported.
-func (c *Controller) SweepOrphans(ctx context.Context) (SweepReport, error) {
-	var rep SweepReport
+func (c *Controller) SweepOrphans(ctx context.Context) (rep SweepReport, err error) {
+	ctx, span := c.tracing().Start(ctx, "controller.sweep")
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+		} else {
+			span.SetAttributes(wtrace.Int("removed", len(rep.Removed)))
+		}
+		span.End()
+	}()
 	snap, err := c.backend.Capacity(ctx, c.capacity)
 	if err != nil {
 		return rep, err

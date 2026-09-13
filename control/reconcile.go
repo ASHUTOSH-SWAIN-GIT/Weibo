@@ -16,7 +16,14 @@ import (
 // of truth). Safe to call repeatedly.
 func (c *Controller) Reconcile(ctx context.Context) (err error) {
 	start := time.Now()
-	defer func() { c.metrics.ObserveReconcile(time.Since(start), err) }()
+	ctx, span := c.tracing().Start(ctx, "controller.reconcile")
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+		}
+		span.End()
+		c.metrics.ObserveReconcile(time.Since(start), err)
+	}()
 	return c.reconcile(ctx)
 }
 
@@ -67,7 +74,7 @@ func (c *Controller) reconcile(ctx context.Context) error {
 		}
 		st, err := c.backend.Status(ctx, run.ContainerID)
 		if err != nil {
-			c.logf("reconcile: status %s: %v", run.ContainerID, err)
+			c.log().Warn("reconcile status probe", "container", run.ContainerID, "error", err)
 			unlock()
 			continue
 		}
@@ -238,7 +245,7 @@ func (c *Controller) maybeRestart(ctx context.Context, job *store.Job, run *stor
 		return nil
 	}
 	if !c.restart.ShouldRestart(lifecycle.Failed, run.Attempt) {
-		c.logf("job %s: not restarting (attempt %d, policy exhausted)", job.ID, run.Attempt)
+		c.log().Info("restart policy exhausted", "job", job.ID, "attempt", run.Attempt)
 		return nil
 	}
 	if run.RestartAt != nil && time.Now().UTC().Before(*run.RestartAt) {
@@ -248,7 +255,7 @@ func (c *Controller) maybeRestart(ctx context.Context, job *store.Job, run *stor
 		return err
 	}
 	if err := c.launchLocked(ctx, job, run.Attempt+1, ""); err != nil {
-		c.logf("job %s: restart launch failed: %v", job.ID, err)
+		c.log().Warn("restart launch failed", "job", job.ID, "error", err)
 		return err
 	}
 	return nil
@@ -280,7 +287,7 @@ func (c *Controller) RunReconciler(ctx context.Context, interval time.Duration) 
 			return
 		case <-t.C:
 			if err := c.Reconcile(ctx); err != nil {
-				c.logf("reconcile: %v", err)
+				c.log().Error("reconcile pass failed", "error", err)
 			}
 		}
 	}

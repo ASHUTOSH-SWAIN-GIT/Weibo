@@ -9,6 +9,10 @@
 //	WORKFLOW   path to the mounted workflow file        (required)
 //	DATA_DIR   base dir for derived state/checkpoints    (default /data)
 //	PORT       agent HTTP control port                   (default 8080)
+//	LOG_LEVEL  debug|info|warn|error                     (default info)
+//	LOG_FORMAT text|json                                  (default json)
+//	OTEL_EXPORTER_OTLP_ENDPOINT  OTLP traces endpoint    (unset disables tracing)
+//	OTEL_SERVICE_NAME  service name for traces           (default weibo-runner)
 //
 // Secret placeholders (${VAR}) in the workflow resolve from this process's
 // environment at compile time. On SIGTERM/SIGINT the job drains
@@ -70,6 +74,9 @@ func run(ctx context.Context, getenv func(string) string, stdout, stderr io.Writ
 	}
 	fmt.Fprintf(stdout, "weibo-runner: job=%s delivery=%s data=%s\n", cw.Name, cw.Delivery, dataDir)
 
+	logger, tracer, flush := setupTelemetry(getenv, "weibo-runner")
+	defer flush()
+
 	// The lifecycle (agent, serve, savepoints, graceful shutdown) is shared
 	// with SDK jobs so both behave identically.
 	return sdk.Serve(ctx, cw.Env, sdk.ServeOptions{
@@ -80,5 +87,7 @@ func run(ctx context.Context, getenv func(string) string, stdout, stderr io.Writ
 		RestoreSavepoint: getenv("RESTORE_SAVEPOINT"),
 		Stdout:           stdout,
 		Stderr:           stderr,
+		Logger:           logger,
+		Tracer:           tracer,
 	})
 }

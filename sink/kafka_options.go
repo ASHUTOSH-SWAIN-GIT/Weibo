@@ -1,9 +1,11 @@
 package sink
 
 import (
+	"log/slog"
 	"time"
 
 	"github.com/ASHUTOSH-SWAIN-GIT/weibo/auth"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/observability/trace"
 )
 
 // AcksLevel controls how many broker acknowledgements the Kafka sink waits
@@ -33,6 +35,7 @@ func (a AcksLevel) Display() string {
 
 // kafkaSinkConfig holds the resolved configuration for a KafkaSink.
 // It is populated by KafkaSinkOption functions and read by NewKafkaSink.
+// SASL/TLS credentials are never logged; failures log topic and error only.
 type kafkaSinkConfig struct {
 	brokers      []string
 	topic        string
@@ -49,6 +52,21 @@ type kafkaSinkConfig struct {
 	failurePolicy FailurePolicy
 	dlq           DLQ
 	maxRetries    int
+
+	logger *slog.Logger
+	tracer trace.Tracer
+}
+
+// KafkaLogger sets the structured logger for batch flush and retry
+// diagnostics. Nil (default) discards — sinks were historically silent.
+func KafkaLogger(l *slog.Logger) KafkaSinkOption {
+	return func(c *kafkaSinkConfig) { c.logger = l }
+}
+
+// KafkaTracer sets the tracer for batch-flush spans. Nil (default) is
+// no-op.
+func KafkaTracer(t trace.Tracer) KafkaSinkOption {
+	return func(c *kafkaSinkConfig) { c.tracer = t }
 }
 
 // KafkaSinkOption configures a KafkaSink. Pass one or more to NewKafkaSink.

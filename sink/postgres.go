@@ -3,11 +3,14 @@ package sink
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	wlog "github.com/ASHUTOSH-SWAIN-GIT/weibo/observability/log"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/observability/trace"
 	"github.com/ASHUTOSH-SWAIN-GIT/weibo/types"
 )
 
@@ -153,10 +156,29 @@ func (p *PostgresSink) mapRecord(r types.Record) *pendingRow {
 	return &pendingRow{table: table, columns: columns, values: values, record: r}
 }
 
+// log returns the sink logger, defaulting to discard so unconfigured
+// sinks stay silent as before.
+func (p *PostgresSink) log() *slog.Logger {
+	if p.cfg.logger != nil {
+		return p.cfg.logger
+	}
+	return wlog.Discard()
+}
+
+// tracing returns the sink tracer, defaulting to no-op.
+func (p *PostgresSink) tracing() trace.Tracer {
+	if p.cfg.tracer != nil {
+		return p.cfg.tracer
+	}
+	return trace.Noop()
+}
+
 // insertBatch groups rows by table+columns and inserts each group with
 // a single multi-value INSERT statement. Failed batches are retried up
 // to cfg.maxRetries times with exponential backoff.
 func (p *PostgresSink) insertBatch(ctx context.Context, rows []pendingRow) error {
+	ctx, span := p.tracing().Start(ctx, "sink.postgres.flush", trace.Int("rows", len(rows)))
+	defer span.End()
 	// Group rows by table + column signature.
 	type groupKey struct {
 		table   string
@@ -176,6 +198,9 @@ func (p *PostgresSink) insertBatch(ctx context.Context, rows []pendingRow) error
 	for _, key := range order {
 		groupRows := groups[key]
 		if err := p.insertGroupWithRetry(ctx, key.table, groupRows[0].columns, groupRows); err != nil {
+			span.RecordError(err)
+			p.log().Warn("postgres batch failed, applying failure policy",
+				"table", key.table, "rows", len(groupRows), "error", err)
 			return fmt.Errorf("postgres insert into %s: %w", key.table, err)
 		}
 	}

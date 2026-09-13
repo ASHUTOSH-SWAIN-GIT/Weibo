@@ -49,13 +49,13 @@ Layered; each tier depends only on the ones below it.
 │   any main(){sdk.Run(Build)} ─┼─> sdk.Serve ──> jobagent.Agent        │
 │   (Go SDK job)                │                    │  supervises 1 env │
 │                               │        HTTP control surface (:PORT):   │
-│                               │        /healthz /state /describe       │
-│                               │        /metrics /cancel /savepoint     │
+│                               │        /livez /readyz /healthz         │
+│                               │        /state /metrics /savepoint      │
 │   workflow/{parse,validate,compiler} builds the env for the YAML path  │
 └───────────────────────────┬───────────────────────────────────────────┘
                             │ StreamExecutionEnv (source+ops+sink wired)
 ┌───────────────────────────▼───────────────────────────────────────────┐
-│  TIER 1 · CORE ENGINE     weibo.go · pipeline/ · operator/ · state/ … │
+│  TIER 1 · CORE ENGINE     engine.go · pipeline/ · operator/ · state/ … │
 │                                                                       │
 │   Source ─> [stage] ─edge─> [stage] ─edge─> … ─> Sink                 │
 │   planner · edges (backpressure) · keyed parallelism · watermarks      │
@@ -118,7 +118,7 @@ Key facts for the diagram:
 - **Two contexts:** `runCtx` = graceful stop (source stops, everything drains);
   `hardCtx` = force-unwind, cancelled on any fatal stage/coordinator error or
   when the `WithShutdownTimeout` drain deadline passes.
-- **`injectBarriers` sits between the source and stage 1** (`weibo.go`). It reads
+- **`injectBarriers` sits between the source and stage 1** (`engine.go`). It reads
   the source's output, tracks `offsets[partition] = record.Offset+1` for every
   data record (the *barrier-aligned* offset map), and on each checkpoint tick
   injects a **barrier** record after registering that offset snapshot.
@@ -271,7 +271,7 @@ Checkpoint file storage (checkpoint/, FileStorage)
   <dir>/checkpoint-<id>.state/        # native hard-link dir (Pebble), per owner
         op-<i>/ | worker-<idx>/
   status pointer: prepared → completed   (atomic write+rename, fsync)
-  savepoints/<label>                   # promoted checkpoint (shared volume / S3-ready)
+  savepoints/<label>                   # promoted checkpoint (backend-local blobstore)
 ```
 
 - **Windowing** stores records in `ListState` keyed by `"<recordKey>/<start>/<end>"`
@@ -305,7 +305,7 @@ Checkpoint file storage (checkpoint/, FileStorage)
 
 ```
 client ─POST /jobs (YAML|manifest)─▶ api ─▶ Controller.Submit
-  1. dry-run compile (workflow/compiler)   ── validates; Postgres sink opens a pool
+  1. dry-run compile (workflow/compiler)   ── validates side-effect-free; Postgres pools open at runtime
   2. store.CreateJob (spec keeps ${VAR})   ── secrets held in memory only
   3. backend.Launch(LaunchSpec{image, workflowDoc, env, WEIBO_JOB_ID})
         └─▶ container starts: weibo-runner|sdk.Run → jobagent serves :PORT
@@ -378,7 +378,7 @@ state can never move ahead of restored source offsets.
 
 ```
 weibo/
-├── weibo.go, stream.go, metadata.go   # env, fluent API, Execute wiring, Describe()
+├── engine.go, stream.go, metadata.go  # env, fluent API, Execute wiring, Describe()
 ├── types/          # Record (data / watermark / barrier), NewWatermark/NewBarrier
 ├── pipeline/       # planner, stages (Source/Stateless/Keyed/Sink), edges, markers, metrics
 ├── operator/       # Map/Filter/FlatMap/Process/KeyBy/Reduce/Window(+WindowReduce)

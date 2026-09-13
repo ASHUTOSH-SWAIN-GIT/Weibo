@@ -97,9 +97,9 @@ weibo dashboard                         # -backend docker is the default
 **Kubernetes** — one `batch/v1` Job per job on a cluster (a `Job`, not a
 Deployment, so a completed job isn't auto-restarted — weibo's reconciler owns
 restarts). Each job gets a per-job PVC (state + checkpoints), a ConfigMap (the
-workflow), an optional Secret (env), and a ClusterIP Service, with `/healthz`
-liveness/readiness probes and `fsGroup` so the non-root runner can write the
-volume.
+workflow), an optional Secret (env), and a ClusterIP Service. Job pods use
+`/livez` for liveness and `/readyz` for readiness, plus `fsGroup` so the
+non-root runner can write the volume.
 
 ```sh
 # The image must be pullable by the cluster — push it, or for kind:
@@ -116,9 +116,48 @@ Notes for the Kubernetes backend:
   **in-cluster**. Run the controller on the host (against a remote cluster) and
   job *lifecycle* (submit/status/logs/cancel/restart) still works via the API,
   but the live-metrics proxy needs in-cluster networking (or a port-forward).
-- **Savepoints** live under the per-job PVC (`/data/savepoints`), so same-job
-  restart-from-savepoint works. Cross-host / cross-job savepoints need an object
-  store (an S3 `Blobstore` adapter) — a planned follow-up.
+- **Savepoints** live under the per-job PVC (`/data/savepoints`) in the
+  Kubernetes backend, so same-job restart-from-savepoint works. Cross-job or
+  cross-namespace savepoint restore needs object-store-backed checkpoint/blob
+  storage — a planned follow-up.
+
+### Deploy the controller in Kubernetes
+
+`control/kubernetes-controller.yaml` is an all-in-one starting manifest for an
+in-cluster controller:
+
+- `ServiceAccount`, `Role`, and `RoleBinding` with the permissions needed to
+  create/read/delete runner Jobs, Services, ConfigMaps, Secrets, PVCs, pod logs,
+  and namespace ResourceQuotas.
+- `Deployment` for `weibo dashboard -backend kubernetes`.
+- `Service` on port `9000`.
+- `PersistentVolumeClaim` mounted at `/var/lib/weibo` for the SQLite database.
+- `/livez` and `/readyz` probes.
+- `PodDisruptionBudget`.
+
+Before applying it, publish a controller image that contains the
+`control/cmd/weibo` binary and replace the placeholder
+`ghcr.io/ashutosh-swain-git/weibo-control:latest`. Then create the API token
+Secret and apply the manifest:
+
+```sh
+kubectl create namespace weibo
+kubectl -n weibo create secret generic weibo-controller-token \
+  --from-literal=token="$(openssl rand -hex 32)"
+kubectl -n weibo apply -f control/kubernetes-controller.yaml
+```
+
+Edit the `weibo-controller-config` ConfigMap to set the runner image that jobs
+should launch:
+
+```yaml
+WEIBO_RUNNER_IMAGE: <registry>/weibo-runner:1.0
+```
+
+The manifest intentionally uses `replicas: 1` and a `Recreate` strategy. The
+controller stores job metadata in SQLite on a single `ReadWriteOnce` PVC, so
+running multiple controller replicas is unsafe until Weibo has leader election
+and shared/HA controller storage.
 
 ## API
 
@@ -204,6 +243,23 @@ page gains a Grafana button linking to
 provision a dashboard with UID `weibo-job` and `job`/`run` variables to
 receive it.
 
+## Logging and tracing
+
+The controller logs structured lines (`--log-level debug|info|warn|error`,
+`--log-format text|json`): submits, launches, reconcile decisions,
+prunes, and sweeps, each with job/run/container IDs. Secret values never
+appear — submit logs carry secret *key names* only, and the API never
+serves values (specs keep `${VAR}` placeholders).
+
+Tracing is optional and off by default. With `--otel-endpoint
+http://collector:4318` (env `OTEL_EXPORTER_OTLP_ENDPOINT`) the controller
+exports spans for launches, reconcile passes, sweeps, and savepoints
+(`--otel-service-name`, default `weibo-controller`); job containers do the
+same for runs and checkpoint saves when the runner image sees the
+endpoint. The engine itself depends only on the stdlib
+(`observability/trace` contracts); the OTLP bridge lives in the separate
+`telemetry/` module so library users pull no tracing clients.
+
 ## Diagnostics
 
 When a job misbehaves, `GET /jobs/{id}/diagnostics` assembles the answer
@@ -232,10 +288,11 @@ curl -X POST localhost:9000/jobs/<id>/restart \
 ```
 
 The job drains, writes a final checkpoint, and the runner promotes it to a
-blob under `savepoints/<label>` in a shared volume visible to every job (the
-same namespace an S3 bucket gives across hosts — an S3 blobstore drops in for
-P6 without touching the savepoint code). The workflow must have checkpointing
-enabled (`env.checkpointing`).
+blob under `savepoints/<label>` in the configured savepoint storage namespace.
+Docker jobs share a local savepoint volume; Kubernetes jobs currently use the
+job PVC for same-job restarts. Cross-job/cross-cluster savepoints need
+object-store-backed checkpoint/blob storage. The workflow must have
+checkpointing enabled (`env.checkpointing`).
 
 ## Launch failures and retries
 
@@ -297,4 +354,5 @@ Two safeguards keep exactly-once intact when a job restarts:
 - Submit-time validation compiles the workflow in a throwaway data dir without
   side effects: no pools are opened and no connections are made, so an
   unreachable database does not fail the submit (connectivity is a runtime
-  concern, surfaced in run state).
+  concern, surfaced in run state). Declarative Postgres validation checks the
+  mapping and required config, not live database reachability.

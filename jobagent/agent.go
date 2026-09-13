@@ -3,11 +3,13 @@ package jobagent
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"sync"
 	"time"
 
 	"github.com/ASHUTOSH-SWAIN-GIT/weibo"
 	"github.com/ASHUTOSH-SWAIN-GIT/weibo/observability/metrics"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/observability/trace"
 	"github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
 )
@@ -21,6 +23,9 @@ type Agent struct {
 	mu     sync.Mutex
 	st     State
 	cancel context.CancelFunc
+
+	logger *slog.Logger
+	tracer trace.Tracer
 
 	// savepoint request (stop-with-savepoint). When set, the runner
 	// promotes the final checkpoint to a savepoint after Run returns.
@@ -36,6 +41,41 @@ func New(env *weibo.StreamExecutionEnv) *Agent {
 		env: env,
 		st:  State{Phase: PhaseStarting},
 	}
+}
+
+// SetLogger sets the structured logger for agent lifecycle events (run
+// start/finish/failure). Chainable; nil restores the default.
+func (a *Agent) SetLogger(l *slog.Logger) *Agent {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.logger = l
+	return a
+}
+
+// SetTracer sets the tracer for the agent's job-run span. Chainable;
+// nil restores the no-op tracer.
+func (a *Agent) SetTracer(t trace.Tracer) *Agent {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.tracer = t
+	return a
+}
+
+// log returns the agent logger, defaulting to a component-tagged slog
+// default.
+func (a *Agent) log() *slog.Logger {
+	if a.logger != nil {
+		return a.logger
+	}
+	return slog.Default().With("component", "agent")
+}
+
+// tracing returns the agent tracer, defaulting to no-op.
+func (a *Agent) tracing() trace.Tracer {
+	if a.tracer != nil {
+		return a.tracer
+	}
+	return trace.Noop()
 }
 
 // Run executes the job to completion, blocking until it finishes, fails,
@@ -55,7 +95,11 @@ func (a *Agent) Run(ctx context.Context) error {
 	// Surface checkpoint progress in /state (both delivery modes).
 	a.env.WithCheckpointObserver(a.onCheckpointReport)
 
-	err := a.env.Execute(runCtx)
+	a.log().Info("job run started")
+	rctx, runSpan := a.tracing().Start(runCtx, "agent.run")
+	defer runSpan.End()
+
+	err := a.env.Execute(rctx)
 	cancel() // release the context; harmless if already cancelled
 
 	a.mu.Lock()
@@ -66,8 +110,11 @@ func (a *Agent) Run(ctx context.Context) error {
 	if err != nil && !errors.Is(err, context.Canceled) {
 		a.st.Phase = PhaseFailed
 		a.st.LastError = err.Error()
+		runSpan.RecordError(err)
+		a.log().Error("job run failed", append(trace.Attrs(rctx), "error", err)...)
 	} else {
 		a.st.Phase = PhaseFinished
+		a.log().Info("job run finished")
 	}
 	return err
 }
@@ -158,6 +205,10 @@ func (a *Agent) onCheckpointReport(rep weibo.CheckpointReport) {
 	if len(a.st.Checkpoints) > maxCheckpoints {
 		a.st.Checkpoints = a.st.Checkpoints[:maxCheckpoints]
 	}
+	a.log().Debug("checkpoint observed",
+		"checkpoint", rep.ID,
+		"duration_ms", rep.Duration.Milliseconds(),
+		"size_bytes", rep.InlineBytes)
 }
 
 // counterValue reads the current value of a Prometheus counter without

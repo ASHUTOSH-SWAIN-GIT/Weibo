@@ -21,7 +21,7 @@ observable failure behavior.
 ### 1. Make source positions topic-aware end to end — ✅ DONE
 
 **Finding:** Kafka operational state is keyed by `(topic, partition)`, but
-`offsetTracker.consumed` and the barrier injector in `mailer.go` use only
+`offsetTracker.consumed` and the barrier injector in the execution engine used only
 `partition`. `CheckpointOffset`, `RestoreOffset`, and `CommitOffsets` serialize
 `{"<partition>": offset}`. Two topics using partition `0` can overwrite each
 other in one checkpoint.
@@ -236,20 +236,39 @@ button. CLI: `weibo runs`, `weibo logs -follow`.
 restart-countdown, run-logs 404/410, paging cursor, SSE burst, sampler
 checkpoint-stats, and dashboard-hook unit tests; suites green.
 
-### 17. Add tracing and structured logging
+### 17. Add tracing and structured logging — ✅ DONE
 
-Use structured logs and optional OpenTelemetry across controller, agent,
-checkpoint, and sink operations. Redact secrets and authorization centrally.
+**Shipped:** stdlib `observability/log` (levels, text/JSON, `Secret`
+redaction type, env-key-names helper) and `observability/trace`
+(coarse-span contracts, no-op default, log correlation) with zero new
+engine dependencies; engine/coordinator/agent log structured lines and
+span recovery, checkpoint saves/finalizes, and job runs; Postgres/Kafka
+sinks log batch failures and span flushes (DSN/SASL never logged);
+controller moved from `Logf` to `Logger`/`Tracer` options with spans on
+launch/reconcile/sweep/savepoint; OTLP export lives in the separate
+`telemetry/` module (workspace member) wired by `--otel-endpoint` on the
+dashboard and `OTEL_*` env on the runner, so library users pull no
+tracing clients. Secrets and the bearer token never enter logs, metrics,
+or API bodies (tested).
+
+**Exit criteria:** redaction, log/trace contract, OTLP-to-local-collector,
+coordinator/agent/sink/adapter/controller-span, and API-bodies unit
+tests; engine, control (both tag sets), and telemetry suites green.
 
 ---
 
 ## P4 — Kubernetes and production hardening
 
-### 18. Ship deployable controller manifests
+### 18. Ship deployable controller manifests — ✅ DONE
 
-Provide controller Deployment/Service, RBAC, persistent SQLite storage,
-configuration, probes, PodDisruptionBudget, and upgrades. Document that SQLite
-requires one controller replica until leader election/shared storage exists.
+**Shipped:** `control/kubernetes-controller.yaml` provides a controller
+ServiceAccount/Role/RoleBinding, ConfigMap, SQLite PVC, single-replica
+`Deployment` (`Recreate`, `weibo dashboard -backend kubernetes`), Service,
+`/livez` and `/readyz` probes, non-root/read-only-root filesystem defaults, and
+PodDisruptionBudget. Docs now cover token creation, replacing the placeholder
+controller image, setting `WEIBO_RUNNER_IMAGE`, and the SQLite single-replica
+constraint until leader election/shared storage exists. A manifest test checks
+the production basics.
 
 ### 19. Harden job isolation
 
@@ -320,14 +339,15 @@ Fuzz workflow parsing, record paths, checkpoint/archive inputs, and API request
 decoding. Publish root/control coverage separately and gate changed-package
 regressions before adopting a global threshold.
 
-### 28. Clean naming and documentation drift
+### 28. Clean naming and documentation drift — ✅ DONE
 
-- rename `mailer.go`, which contains the execution/checkpoint engine;
-- document `/livez`, `/readyz`, and the actual Kubernetes probes;
-- remove stale Postgres validation and savepoint-storage claims;
-- document checkpoint schema and public API compatibility;
-- remove or explicitly track generated binaries such as `kafka-orders` and
-  `s3-demo`.
+**Shipped:** renamed `mailer.go` to `engine.go`; documented controller/job
+`/livez` versus `/readyz` probes and kept `/healthz` as compatibility; corrected
+stale Postgres dry-run wording to describe side-effect-free validation; narrowed
+savepoint-storage claims to the storage namespace actually shared by each
+backend; added `docs/checkpoints-and-api.md` for checkpoint schema and public
+API compatibility; removed tracked generated binaries (`kafka-orders`,
+`s3-demo`) and ignored them going forward.
 
 ---
 
@@ -352,4 +372,4 @@ regressions before adopting a global threshold.
    and CI hardening (#14–#28).
 5. Begin product expansion only after those foundations (#29–#33).
 
-**Next task:** #2, filesystem crash durability and retention.
+**Next task:** #19, harden job isolation.

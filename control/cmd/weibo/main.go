@@ -11,7 +11,6 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"log"
 	"net"
 	"net/http"
 	"os"
@@ -26,6 +25,9 @@ import (
 	"github.com/ASHUTOSH-SWAIN-GIT/weibo/control/api"
 	"github.com/ASHUTOSH-SWAIN-GIT/weibo/control/backend"
 	"github.com/ASHUTOSH-SWAIN-GIT/weibo/control/store"
+	ctrace "github.com/ASHUTOSH-SWAIN-GIT/weibo/control/trace"
+	wlog "github.com/ASHUTOSH-SWAIN-GIT/weibo/observability/log"
+	teltrace "github.com/ASHUTOSH-SWAIN-GIT/weibo/telemetry/trace"
 )
 
 func main() {
@@ -103,8 +105,33 @@ func runDashboard(args []string) int {
 	defaultJobCPU := fs.String("default-job-cpu", "1", "default CPU reserved per job for capacity math")
 	defaultJobMemory := fs.String("default-job-memory", "1Gi", "default memory reserved per job for capacity math")
 	authToken := fs.String("auth-token", os.Getenv("WEIBO_AUTH_TOKEN"), "shared bearer token required by the API + UI; empty = open (env WEIBO_AUTH_TOKEN)")
+	logLevel := fs.String("log-level", envOr("WEIBO_LOG_LEVEL", "info"), "log level: debug|info|warn|error (env WEIBO_LOG_LEVEL)")
+	logFormat := fs.String("log-format", envOr("WEIBO_LOG_FORMAT", "text"), "log format: text|json (env WEIBO_LOG_FORMAT)")
+	otelEndpoint := fs.String("otel-endpoint", os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"), "OTLP/HTTP traces endpoint; empty disables tracing (env OTEL_EXPORTER_OTLP_ENDPOINT)")
+	otelService := fs.String("otel-service-name", envOr("OTEL_SERVICE_NAME", "weibo-controller"), "service name for traces (env OTEL_SERVICE_NAME)")
 	if err := fs.Parse(args); err != nil {
 		return 2
+	}
+
+	level, err := wlog.ParseLevel(*logLevel)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "weibo: %v\n", err)
+		return 2
+	}
+	logger := wlog.New(level, *logFormat)
+	tel, shutdownTracing, err := teltrace.Configure(context.Background(), teltrace.Options{
+		Endpoint: *otelEndpoint, ServiceName: *otelService,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "weibo: tracing: %v\n", err)
+		return 1
+	}
+	if shutdownTracing != nil {
+		defer func() {
+			shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_ = shutdownTracing(shutCtx)
+		}()
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -134,7 +161,8 @@ func runDashboard(args []string) int {
 			DefaultJobMemory: *defaultJobMemory,
 		},
 		GrafanaURL: *grafanaURL,
-		Logf:       log.Printf,
+		Logger:     logger,
+		Tracer:     ctrace.Adapt(tel),
 	})
 	if *historyInterval > 0 {
 		go ctrl.RunHistoryRecorder(ctx, *historyInterval)
@@ -144,10 +172,10 @@ func runDashboard(args []string) int {
 	// reconciler still converges live runs.
 	sweepCtx, sweepCancel := context.WithTimeout(ctx, 30*time.Second)
 	if rep, err := ctrl.SweepOrphans(sweepCtx); err != nil {
-		log.Printf("weibo dashboard: startup orphan sweep failed: %v", err)
+		logger.Warn("startup orphan sweep failed", "error", err)
 	} else if len(rep.Removed) > 0 || len(rep.RunningOrphans) > 0 {
-		log.Printf("weibo dashboard: startup orphan sweep removed=%d running-unknowns=%d",
-			len(rep.Removed), len(rep.RunningOrphans))
+		logger.Info("startup orphan sweep",
+			"removed", len(rep.Removed), "running_orphans", len(rep.RunningOrphans))
 	}
 	sweepCancel()
 	go ctrl.RunReconciler(ctx, *interval)
@@ -164,16 +192,16 @@ func runDashboard(args []string) int {
 	if !*noOpen {
 		go openWhenReady(ctx, url)
 	}
-	log.Printf("weibo dashboard: %s  (image=%s, db=%s)", url, *image, *dbPath)
+	logger.Info("weibo dashboard", "url", url, "image", *image, "db", *dbPath)
 	if *authToken != "" {
-		log.Print("weibo dashboard: API auth ENABLED — clients need -token / WEIBO_TOKEN")
+		logger.Info("weibo dashboard: API auth ENABLED — clients need -token / WEIBO_TOKEN")
 	}
 
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		fmt.Fprintf(os.Stderr, "weibo: serve: %v\n", err)
 		return 1
 	}
-	log.Print("weibo dashboard: stopped")
+	logger.Info("weibo dashboard: stopped")
 	return 0
 }
 

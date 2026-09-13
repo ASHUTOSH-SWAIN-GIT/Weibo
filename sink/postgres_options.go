@@ -2,9 +2,11 @@ package sink
 
 import (
 	"fmt"
+	"log/slog"
 	"regexp"
 	"time"
 
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/observability/trace"
 	"github.com/ASHUTOSH-SWAIN-GIT/weibo/types"
 )
 
@@ -35,6 +37,7 @@ const (
 type RecordMapper func(r types.Record) (table string, columns []string, values []any)
 
 // postgresSinkConfig holds the resolved configuration for a PostgresSink.
+// The DSN is never logged; failures log the table and error only.
 type postgresSinkConfig struct {
 	dsn           string
 	mapper        RecordMapper
@@ -47,6 +50,21 @@ type postgresSinkConfig struct {
 
 	failurePolicy FailurePolicy
 	dlq           DLQ
+
+	logger *slog.Logger
+	tracer trace.Tracer
+}
+
+// PostgresLogger sets the structured logger for batch flush and retry
+// diagnostics. Nil (default) discards — sinks were historically silent.
+func PostgresLogger(l *slog.Logger) PostgresSinkOption {
+	return func(c *postgresSinkConfig) { c.logger = l }
+}
+
+// PostgresTracer sets the tracer for batch-flush spans. Nil (default) is
+// no-op.
+func PostgresTracer(t trace.Tracer) PostgresSinkOption {
+	return func(c *postgresSinkConfig) { c.tracer = t }
 }
 
 // PostgresSinkOption configures a PostgresSink. Pass one or more to

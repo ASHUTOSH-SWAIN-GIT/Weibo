@@ -10,7 +10,7 @@ mount the document, point `WORKFLOW` at it, mount a volume for durable state.
 | ---------- | -------- | ------- | ------- |
 | `WORKFLOW`           | yes | —            | Path to the mounted workflow file. |
 | `DATA_DIR`           | no  | `/data`      | Base dir; the engine derives `<name>/state` and `<name>/checkpoints` under it. Mount a volume here for durability. |
-| `SAVEPOINT_DIR`      | no  | `/savepoints`| Shared blobstore for savepoints. Mount a shared volume so any job can restore any savepoint. |
+| `SAVEPOINT_DIR`      | no  | `/savepoints`| Directory where the runner promotes named savepoints. It is portable only across jobs that can read the same storage namespace. |
 | `RESTORE_SAVEPOINT`  | no  | —            | Name of a savepoint to seed state from before starting. |
 | `PORT`               | no  | `8080`       | Agent HTTP control port. |
 | `WEIBO_JOB_ID`      | no  | —            | Injected by the controller; reference it (`transactionalID: ${WEIBO_JOB_ID}`) to pin a stable exactly-once id across restarts. |
