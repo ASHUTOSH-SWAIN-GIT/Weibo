@@ -50,6 +50,15 @@ type S3Sink struct {
 // a misconfigured pipeline dies at startup rather than at the first
 // flush, minutes in.
 func NewS3Sink(opts ...S3SinkOption) *S3Sink {
+	s, err := NewS3SinkE(opts...)
+	if err != nil {
+		panic(fmt.Sprintf("weibo/sink: %v", err))
+	}
+	return s
+}
+
+// NewS3SinkE creates an S3 sink without panicking.
+func NewS3SinkE(opts ...S3SinkOption) (*S3Sink, error) {
 	cfg := s3SinkConfig{}
 	for _, opt := range opts {
 		opt(&cfg)
@@ -57,20 +66,32 @@ func NewS3Sink(opts ...S3SinkOption) *S3Sink {
 	cfg.applyDefaults()
 
 	if cfg.bucket == "" {
-		panic("weibo/sink: S3Sink requires S3Bucket(...)")
+		return nil, fmt.Errorf("S3Sink requires S3Bucket(...)")
 	}
 
 	client := cfg.client
 	if client == nil {
-		client = buildS3Client(cfg)
+		var err error
+		client, err = buildS3ClientE(cfg)
+		if err != nil {
+			return nil, err
+		}
 	}
-	return &S3Sink{cfg: cfg, client: client}
+	return &S3Sink{cfg: cfg, client: client}, nil
 }
 
 // buildS3Client assembles an S3 client from the sink's configuration,
 // falling back to the default AWS credential chain when no static
 // credentials were supplied.
 func buildS3Client(cfg s3SinkConfig) *s3.Client {
+	client, err := buildS3ClientE(cfg)
+	if err != nil {
+		panic(fmt.Sprintf("weibo/sink: %v", err))
+	}
+	return client
+}
+
+func buildS3ClientE(cfg s3SinkConfig) (*s3.Client, error) {
 	loadOpts := []func(*awsconfig.LoadOptions) error{
 		awsconfig.WithRetryMaxAttempts(cfg.maxAttempts),
 	}
@@ -85,7 +106,7 @@ func buildS3Client(cfg s3SinkConfig) *s3.Client {
 
 	awsCfg, err := awsconfig.LoadDefaultConfig(context.Background(), loadOpts...)
 	if err != nil {
-		panic(fmt.Sprintf("weibo/sink: S3Sink: load AWS config: %v", err))
+		return nil, fmt.Errorf("S3Sink: load AWS config: %w", err)
 	}
 
 	return s3.NewFromConfig(awsCfg, func(o *s3.Options) {
@@ -95,7 +116,7 @@ func buildS3Client(cfg s3SinkConfig) *s3.Client {
 		if cfg.pathStyle {
 			o.UsePathStyle = true
 		}
-	})
+	}), nil
 }
 
 // Write reads records from the input channel and uploads them in

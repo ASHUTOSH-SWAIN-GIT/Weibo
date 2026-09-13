@@ -92,6 +92,23 @@ func TestCompileSink_StdoutBlackhole(t *testing.T) {
 	}
 }
 
+func TestCompileSink_PostgresIsSideEffectFree(t *testing.T) {
+	s, err := compiler.CompileSink(workflow.SinkSpec{
+		Type: "postgres",
+		Postgres: &workflow.PostgresSinkSpec{
+			DSN:     "postgres://user:pass@127.0.0.1:1/db?sslmode=disable",
+			Table:   "customer_totals",
+			Mapping: map[string]string{"customer_id": "customer_id", "sum": "total_amount"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CompileSink should validate without opening Postgres resources: %v", err)
+	}
+	if _, ok := s.(*sink.PostgresSink); !ok {
+		t.Fatalf("expected *sink.PostgresSink, got %T", s)
+	}
+}
+
 func TestCompileSink_Errors(t *testing.T) {
 	cases := []struct {
 		name string

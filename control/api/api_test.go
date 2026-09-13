@@ -2,6 +2,7 @@ package api_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -105,6 +106,9 @@ func TestAuth_TokenGating(t *testing.T) {
 	}
 	if got := do(http.MethodGet, "/healthz", ""); got != http.StatusOK {
 		t.Errorf("/healthz no token: got %d, want 200", got)
+	}
+	if got := do(http.MethodGet, "/readyz", ""); got != http.StatusOK {
+		t.Errorf("/readyz no token: got %d, want 200", got)
 	}
 
 	// /auth verifies a token: 401 without, 200 with.
@@ -328,6 +332,69 @@ func TestCancelAndRestart(t *testing.T) {
 		t.Fatalf("restart: %d", resp.StatusCode)
 	}
 	resp.Body.Close()
+}
+
+func TestDeleteJob(t *testing.T) {
+	srv := newAPI(t)
+	resp, _ := http.Post(srv.URL+"/jobs", "application/yaml", strings.NewReader(sdkJob))
+	var job store.Job
+	json.NewDecoder(resp.Body).Decode(&job)
+	resp.Body.Close()
+
+	req, _ := http.NewRequest(http.MethodDelete, srv.URL+"/jobs/"+job.ID, nil)
+	resp, err := srv.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("delete: got %d, want 202", resp.StatusCode)
+	}
+
+	resp, err = http.Get(srv.URL + "/jobs/" + job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("deleted job should 404, got %d", resp.StatusCode)
+	}
+}
+
+func TestReadinessReportsBackendOutage(t *testing.T) {
+	ctrl := control.New(control.Options{
+		Store:       mustStore(t),
+		Backend:     outageBackend{ContainerBackend: backend.NewFake()},
+		Image:       "img",
+		StopTimeout: time.Second,
+	})
+	srv := newAPIWithController(t, ctrl)
+
+	resp, err := http.Get(srv.URL + "/livez")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("livez should stay OK during dependency outage, got %d", resp.StatusCode)
+	}
+
+	resp, err = http.Get(srv.URL + "/readyz")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("readyz: got %d, want 503", resp.StatusCode)
+	}
+}
+
+type outageBackend struct {
+	backend.ContainerBackend
+}
+
+func (outageBackend) Capacity(ctx context.Context, cfg backend.CapacityConfig) (backend.CapacitySnapshot, error) {
+	return backend.CapacitySnapshot{Backend: "fake", Health: "unreachable", Reason: "simulated outage"}, nil
 }
 
 func TestListIncludesPhase(t *testing.T) {

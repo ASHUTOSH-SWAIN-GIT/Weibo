@@ -279,6 +279,39 @@ func TestCancelStopsJob(t *testing.T) {
 	}
 }
 
+func TestDeleteRemovesBackendResourcesAndStoreHistory(t *testing.T) {
+	fake := backend.NewFake()
+	c, st := newController(t, fake, lifecycle.DefaultRestartPolicy())
+	job, err := c.Submit(context.Background(), []byte(validSDKManifest), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := c.LatestRun(job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run == nil || run.ContainerID == "" {
+		t.Fatalf("missing launched run: %+v", run)
+	}
+
+	if err := c.Delete(context.Background(), job.ID); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if _, err := st.GetJob(job.ID); err == nil {
+		t.Fatal("job should be deleted from store")
+	}
+	if runs, err := st.ListRuns(job.ID); err != nil || len(runs) != 0 {
+		t.Fatalf("runs should be deleted, got %d err=%v", len(runs), err)
+	}
+	status, err := fake.Status(context.Background(), run.ContainerID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Phase != backend.PhaseGone {
+		t.Fatalf("backend resource should be removed, got %q", status.Phase)
+	}
+}
+
 // Fencing: the controller refuses to launch a second container while a
 // run is live — two transactional producers with the same id would break
 // exactly-once. (A restart stops the old run first, so it is allowed.)

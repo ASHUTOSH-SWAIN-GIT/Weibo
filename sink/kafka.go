@@ -42,6 +42,15 @@ type KafkaSink struct {
 // NewKafkaSink creates a Sink that writes to a Kafka topic.
 // Brokers and Topic are required; if missing, NewKafkaSink panics.
 func NewKafkaSink(opts ...KafkaSinkOption) *KafkaSink {
+	k, err := NewKafkaSinkE(opts...)
+	if err != nil {
+		panic(fmt.Sprintf("weibo/sink: %v", err))
+	}
+	return k
+}
+
+// NewKafkaSinkE creates a Kafka sink without panicking.
+func NewKafkaSinkE(opts ...KafkaSinkOption) (*KafkaSink, error) {
 	cfg := kafkaSinkConfig{}
 	for _, opt := range opts {
 		opt(&cfg)
@@ -49,10 +58,10 @@ func NewKafkaSink(opts ...KafkaSinkOption) *KafkaSink {
 	cfg.applyDefaults()
 
 	if len(cfg.brokers) == 0 {
-		panic("weibo/sink: KafkaSink requires KafkaSinkBrokers(...)")
+		return nil, fmt.Errorf("KafkaSink requires KafkaSinkBrokers(...)")
 	}
 	if cfg.topic == "" {
-		panic("weibo/sink: KafkaSink requires KafkaSinkTopic(...)")
+		return nil, fmt.Errorf("KafkaSink requires KafkaSinkTopic(...)")
 	}
 
 	w := &kafka.Writer{
@@ -67,10 +76,14 @@ func NewKafkaSink(opts ...KafkaSinkOption) *KafkaSink {
 
 	// Wire SASL/TLS via Transport (kafka-go Writer uses Transport, not Dialer).
 	if cfg.sasl != nil || cfg.tls != nil {
-		w.Transport = buildTransport(cfg.sasl, cfg.tls)
+		t, err := buildTransportE(cfg.sasl, cfg.tls)
+		if err != nil {
+			return nil, err
+		}
+		w.Transport = t
 	}
 
-	return &KafkaSink{cfg: cfg, writer: w}
+	return &KafkaSink{cfg: cfg, writer: w}, nil
 }
 
 // toKafkaAcks maps the weibo AcksLevel enum to kafka-go's RequiredAcks value.
@@ -88,12 +101,20 @@ func toKafkaAcks(level AcksLevel) kafka.RequiredAcks {
 // buildTransport constructs a kafka-go Transport with SASL and/or TLS.
 // This is the sink-side equivalent of the source's buildDialer.
 func buildTransport(saslCfg *auth.SASLConfig, tlsCfg *auth.TLSConfig) *kafka.Transport {
+	t, err := buildTransportE(saslCfg, tlsCfg)
+	if err != nil {
+		panic(fmt.Sprintf("weibo/sink: %v", err))
+	}
+	return t
+}
+
+func buildTransportE(saslCfg *auth.SASLConfig, tlsCfg *auth.TLSConfig) (*kafka.Transport, error) {
 	t := &kafka.Transport{}
 
 	if saslCfg != nil {
 		mechanism, err := auth.BuildSASLMechanism(*saslCfg)
 		if err != nil {
-			panic(fmt.Sprintf("weibo/sink: %v", err))
+			return nil, err
 		}
 		t.SASL = mechanism
 	}
@@ -101,12 +122,12 @@ func buildTransport(saslCfg *auth.SASLConfig, tlsCfg *auth.TLSConfig) *kafka.Tra
 	if tlsCfg != nil {
 		tlsConf, err := auth.BuildTLSConfig(*tlsCfg)
 		if err != nil {
-			panic(fmt.Sprintf("weibo/sink: %v", err))
+			return nil, err
 		}
 		t.TLS = tlsConf
 	}
 
-	return t
+	return t, nil
 }
 
 // kafkaBatchEntry holds a converted kafka.Message and the original Record

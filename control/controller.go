@@ -9,6 +9,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"maps"
 	"net/http"
@@ -308,6 +309,44 @@ func (c *Controller) Cancel(ctx context.Context, jobID string) error {
 	return c.finishRun(run, lifecycle.Phase(run.Phase), lifecycle.Cancelled, "user cancel")
 }
 
+// Delete stops/removes all known backend resources for a job, then removes the
+// job, runs, and transition history from the store. Per-job durable state
+// volumes/savepoints are intentionally preserved by current backends; destructive
+// state deletion will be an explicit GC option rather than the default.
+func (c *Controller) Delete(ctx context.Context, jobID string) error {
+	if _, err := c.store.GetJob(jobID); err != nil {
+		return err
+	}
+	unlock := c.lockJob(jobID)
+	defer unlock()
+
+	runs, err := c.store.ListRuns(jobID)
+	if err != nil {
+		return err
+	}
+	var errs []error
+	for _, run := range runs {
+		if run.ContainerID == "" {
+			continue
+		}
+		if run.Stopped == nil {
+			if err := c.backend.Stop(ctx, run.ContainerID, c.stopTimeout); err != nil {
+				errs = append(errs, fmt.Errorf("stop run %s: %w", run.ID, err))
+			}
+		}
+		if err := c.backend.Remove(ctx, run.ContainerID); err != nil {
+			errs = append(errs, fmt.Errorf("remove run %s: %w", run.ID, err))
+		}
+	}
+	if len(errs) > 0 {
+		return errors.Join(errs...)
+	}
+	c.mu.Lock()
+	delete(c.secrets, jobID)
+	c.mu.Unlock()
+	return c.store.DeleteJob(jobID)
+}
+
 // Restart stops any live run and launches a fresh one, resetting the
 // desired state to running and the attempt counter.
 func (c *Controller) Restart(ctx context.Context, jobID string) (*store.Job, error) {
@@ -406,6 +445,24 @@ func (c *Controller) Transitions(jobID string) ([]*store.Transition, error) {
 // Cluster returns controller/backend health and capacity for the dashboard.
 func (c *Controller) Cluster(ctx context.Context) (backend.CapacitySnapshot, error) {
 	return c.backend.Capacity(ctx, c.capacity)
+}
+
+// Ready checks dependencies needed to serve mutating/control requests.
+func (c *Controller) Ready(ctx context.Context) error {
+	if _, err := c.store.ListJobs(); err != nil {
+		return fmt.Errorf("store: %w", err)
+	}
+	snap, err := c.backend.Capacity(ctx, c.capacity)
+	if err != nil {
+		return fmt.Errorf("backend: %w", err)
+	}
+	if snap.Health == "unreachable" {
+		if snap.Reason != "" {
+			return fmt.Errorf("backend unreachable: %s", snap.Reason)
+		}
+		return fmt.Errorf("backend unreachable")
+	}
+	return nil
 }
 
 // Logs returns up to tail lines from a job's latest container.

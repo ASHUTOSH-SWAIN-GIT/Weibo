@@ -456,3 +456,15 @@ func TestHTTPSink_RequiresURL(t *testing.T) {
 	}()
 	NewHTTPSink(HTTPBatchSize(1))
 }
+
+func TestNewHTTPSinkEReportsConfigErrors(t *testing.T) {
+	if _, err := NewHTTPSinkE(HTTPBatchSize(1)); err == nil {
+		t.Fatal("expected missing URL error")
+	}
+	if _, err := NewHTTPSinkE(HTTPURL("://bad-url")); err == nil {
+		t.Fatal("expected invalid URL error")
+	}
+	if h, err := NewHTTPSinkE(HTTPURL("https://example.com/ingest")); err != nil || h == nil {
+		t.Fatalf("valid HTTP sink: h=%v err=%v", h, err)
+	}
+}

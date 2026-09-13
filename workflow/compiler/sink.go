@@ -21,10 +21,9 @@ var (
 	columnRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 )
 
-// CompileSink builds a sink.Sink from a sink spec. Kafka, transactional
-// Kafka, stdout, and blackhole sinks construct without connecting;
-// constructing a Postgres sink opens its connection pool (SDK behavior),
-// so build it last, after the rest of a workflow validates.
+// CompileSink builds a sink.Sink from a sink spec. Sink compilation is
+// side-effect free: network connections are opened by runtime Write/Open hooks,
+// not by dry-run validation.
 func CompileSink(spec workflow.SinkSpec) (sink.Sink, error) {
 	switch spec.Type {
 	case "":
@@ -100,7 +99,7 @@ func compileKafkaSink(k *workflow.KafkaSinkSpec) (sink.Sink, error) {
 	if k.TLS != nil {
 		opts = append(opts, sink.KafkaSinkTLS(compileTLS(k.TLS)))
 	}
-	return sink.NewKafkaSink(opts...), nil
+	return sink.NewKafkaSinkE(opts...)
 }
 
 func compileTxnKafkaSink(t *workflow.TxnKafkaSinkSpec) (sink.Sink, error) {
@@ -213,8 +212,7 @@ func compilePostgresSink(p *workflow.PostgresSinkSpec) (sink.Sink, error) {
 	}
 	opts = append(opts, sink.PostgresFailurePolicy(pol))
 
-	// NewPostgresSink opens the connection pool eagerly (SDK behavior).
-	return sink.NewPostgresSink(opts...), nil
+	return sink.NewPostgresSinkE(opts...)
 }
 
 func compilePostgresMode(mode string) (sink.PostgresWriteMode, error) {

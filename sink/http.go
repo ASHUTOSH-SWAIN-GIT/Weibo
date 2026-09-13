@@ -47,6 +47,15 @@ type HTTPSink struct {
 // NewHTTPSink creates a Sink that posts records to an HTTP endpoint.
 // HTTPURL is required; if missing, NewHTTPSink panics.
 func NewHTTPSink(opts ...HTTPSinkOption) *HTTPSink {
+	h, err := NewHTTPSinkE(opts...)
+	if err != nil {
+		panic(fmt.Sprintf("weibo/sink: %v", err))
+	}
+	return h
+}
+
+// NewHTTPSinkE creates an HTTP sink without panicking.
+func NewHTTPSinkE(opts ...HTTPSinkOption) (*HTTPSink, error) {
 	cfg := httpSinkConfig{}
 	for _, opt := range opts {
 		opt(&cfg)
@@ -54,13 +63,13 @@ func NewHTTPSink(opts ...HTTPSinkOption) *HTTPSink {
 	cfg.applyDefaults()
 
 	if cfg.url == "" {
-		panic("weibo/sink: HTTPSink requires HTTPURL(...)")
+		return nil, fmt.Errorf("HTTPSink requires HTTPURL(...)")
 	}
 	if _, err := url.Parse(cfg.url); err != nil {
-		panic(fmt.Sprintf("weibo/sink: HTTPSink invalid URL: %v", err))
+		return nil, fmt.Errorf("HTTPSink invalid URL: %w", err)
 	}
 
-	return &HTTPSink{cfg: cfg, client: cfg.client}
+	return &HTTPSink{cfg: cfg, client: cfg.client}, nil
 }
 
 // Write reads records from the input channel and posts them in batches.

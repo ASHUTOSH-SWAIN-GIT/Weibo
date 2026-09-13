@@ -127,6 +127,7 @@ Notes for the Kubernetes backend:
 | `POST /jobs`                  | Submit a workflow. Body: raw YAML, or JSON `{"workflow": "...", "env": {...}, "envRefs": {...}}` to pass launch env and durable secret refs. Validated (dry-run compile) before launch. |
 | `GET  /jobs`                  | List jobs. |
 | `GET  /jobs/{id}`             | Job detail: job + latest run + transition log. |
+| `DELETE /jobs/{id}`           | Stop/remove known backend run resources, then delete job/run/history rows. Durable state volumes/savepoints are preserved. |
 | `POST /jobs/{id}/cancel`      | Graceful stop; desired state → stopped. |
 | `POST /jobs/{id}/restart`     | Stop any live run and launch a fresh one. Body `{"savepoint":"<label>"}` resumes from a savepoint. |
 | `POST /jobs/{id}/savepoint`   | Stop-with-savepoint. Label via `?label=` or body `{"label":"..."}`. |
@@ -134,6 +135,8 @@ Notes for the Kubernetes backend:
 | `GET  /jobs/{id}/state`       | Proxy to the job's live agent `/state`. |
 | `GET  /jobs/{id}/metrics`     | Proxy to the job's live agent `/metrics`. |
 | `POST /auth`                  | Returns 200 iff the bearer token is valid (UI token check). |
+| `GET  /livez`                 | Process liveness. |
+| `GET  /readyz`                | Store/backend readiness; returns 503 when dependencies are unavailable. |
 
 **Auth:** start the controller with `-auth-token <secret>` (env
 `WEIBO_AUTH_TOKEN`) to require `Authorization: Bearer <secret>` on every route
@@ -214,6 +217,14 @@ Two safeguards keep exactly-once intact when a job restarts:
   env, and the reconciler retries once the reference becomes resolvable.
 - **Reconciler** enforces desired state, applies the restart policy to crashed
   containers (bounded attempts + backoff), and marks clean exits Finished.
+- **Deletion cleans run resources first.** `DELETE /jobs/{id}` stops/removes
+  every known backend run resource before deleting store history. Docker
+  containers and Kubernetes per-run Jobs/Services/ConfigMaps/Secrets are
+  removed; durable volumes/savepoints are intentionally kept until explicit
+  destructive GC exists.
+- **Health checks are dependency-aware.** `/livez` reports the controller
+  process is alive. `/readyz` verifies the store and selected backend are
+  reachable without exposing credentials or internal addresses.
 - Submit-time validation compiles the workflow in a throwaway data dir, so a
   Postgres sink is checked by opening its pool — an unreachable database fails
   the submit.

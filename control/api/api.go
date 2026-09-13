@@ -41,12 +41,15 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /{$}", ui.Index()) // dashboard at the app root
 	mux.Handle("GET /logo.png", ui.Logo())
 	mux.HandleFunc("GET /healthz", s.health)
+	mux.HandleFunc("GET /livez", s.livez)
+	mux.HandleFunc("GET /readyz", s.readyz)
 	mux.HandleFunc("POST /auth", s.authCheck)
 	mux.HandleFunc("GET /cluster", s.cluster)
 	mux.HandleFunc("POST /validate", s.validate)
 	mux.HandleFunc("POST /jobs", s.submit)
 	mux.HandleFunc("GET /jobs", s.list)
 	mux.HandleFunc("GET /jobs/{id}", s.get)
+	mux.HandleFunc("DELETE /jobs/{id}", s.delete)
 	mux.HandleFunc("POST /jobs/{id}/cancel", s.cancel)
 	mux.HandleFunc("POST /jobs/{id}/restart", s.restart)
 	mux.HandleFunc("POST /jobs/{id}/savepoint", s.savepoint)
@@ -85,7 +88,7 @@ func (s *Server) auth(h http.Handler) http.Handler {
 // publicRoute reports whether r may bypass auth: the HTML shell at "/" and
 // the health check, both GET-only.
 func publicRoute(r *http.Request) bool {
-	return r.Method == http.MethodGet && (r.URL.Path == "/" || r.URL.Path == "/healthz")
+	return r.Method == http.MethodGet && (r.URL.Path == "/" || r.URL.Path == "/healthz" || r.URL.Path == "/livez" || r.URL.Path == "/readyz")
 }
 
 // authCheck returns 200 once a request reaches it — the auth middleware has
@@ -120,7 +123,19 @@ type jobDetail struct {
 }
 
 func (s *Server) health(w http.ResponseWriter, r *http.Request) {
+	s.readyz(w, r)
+}
+
+func (s *Server) livez(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (s *Server) readyz(w http.ResponseWriter, r *http.Request) {
+	if err := s.ctrl.Ready(r.Context()); err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "not_ready", "reason": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ready"})
 }
 
 // readWorkflow extracts a workflow doc (+ optional env) from a request:
@@ -220,6 +235,14 @@ func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 	run, _ := s.ctrl.LatestRun(id)
 	trans, _ := s.ctrl.Transitions(id)
 	writeJSON(w, http.StatusOK, jobDetail{Job: job, LatestRun: run, Transitions: trans})
+}
+
+func (s *Server) delete(w http.ResponseWriter, r *http.Request) {
+	if err := s.ctrl.Delete(r.Context(), r.PathValue("id")); err != nil {
+		writeErr(w, http.StatusNotFound, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]string{"status": "deleted"})
 }
 
 func (s *Server) cancel(w http.ResponseWriter, r *http.Request) {

@@ -38,9 +38,19 @@ type PostgresSink struct {
 // NewPostgresSink creates a Sink that writes to Postgres.
 // DSN and a RecordMapper are required; if missing, NewPostgresSink panics.
 //
-// The connection pool is created immediately. If the database is unreachable,
-// NewPostgresSink panics to fail fast at construction time.
+// Construction is side-effect free: the connection pool is opened when Write
+// starts. Use NewPostgresSinkE when you want errors instead of panics.
 func NewPostgresSink(opts ...PostgresSinkOption) *PostgresSink {
+	s, err := NewPostgresSinkE(opts...)
+	if err != nil {
+		panic(fmt.Sprintf("weibo/sink: %v", err))
+	}
+	return s
+}
+
+// NewPostgresSinkE creates a Postgres sink without panicking. It validates the
+// static configuration but does not open a network connection.
+func NewPostgresSinkE(opts ...PostgresSinkOption) (*PostgresSink, error) {
 	cfg := postgresSinkConfig{}
 	for _, opt := range opts {
 		opt(&cfg)
@@ -48,21 +58,16 @@ func NewPostgresSink(opts ...PostgresSinkOption) *PostgresSink {
 	cfg.applyDefaults()
 
 	if cfg.dsn == "" {
-		panic("weibo/sink: PostgresSink requires PostgresDSN(...)")
+		return nil, fmt.Errorf("PostgresSink requires PostgresDSN(...)")
 	}
 	if cfg.mapper == nil {
-		panic("weibo/sink: PostgresSink requires PostgresMapper(...)")
+		return nil, fmt.Errorf("PostgresSink requires PostgresMapper(...)")
 	}
 	if err := cfg.validateWriteMode(); err != nil {
-		panic(fmt.Sprintf("weibo/sink: %v", err))
+		return nil, err
 	}
 
-	pool, err := pgxpool.New(context.Background(), cfg.dsn)
-	if err != nil {
-		panic(fmt.Sprintf("weibo/sink: postgres connection failed: %v", err))
-	}
-
-	return &PostgresSink{cfg: cfg, pool: pool}
+	return &PostgresSink{cfg: cfg}, nil
 }
 
 // pendingRow holds a mapped record waiting to be batch-inserted.
@@ -77,7 +82,10 @@ type pendingRow struct {
 // in batches. On context cancellation, the sink drains remaining records
 // for up to shutdownTimeout before flushing.
 func (p *PostgresSink) Write(ctx context.Context, in <-chan types.Record) error {
-	defer p.pool.Close()
+	if err := p.Open(ctx); err != nil {
+		return err
+	}
+	defer p.Close()
 
 	bw := &batchWriter[pendingRow]{
 		batchSize:     p.cfg.batchSize,
@@ -96,6 +104,43 @@ func (p *PostgresSink) Write(ctx context.Context, in <-chan types.Record) error 
 		flush: p.insertBatch,
 	}
 	return bw.run(ctx, in)
+}
+
+// Open initializes the Postgres connection pool. It is called automatically by
+// Write, and is exposed so runtime code can perform an explicit connectivity
+// check when desired. Open is idempotent.
+func (p *PostgresSink) Open(ctx context.Context) error {
+	if p.pool != nil {
+		return nil
+	}
+	pool, err := pgxpool.New(ctx, p.cfg.dsn)
+	if err != nil {
+		return fmt.Errorf("postgres connection pool: %w", err)
+	}
+	p.pool = pool
+	return nil
+}
+
+// Check opens the pool if needed and verifies the database is reachable. It is
+// intentionally opt-in so compile/validation remains side-effect free; callers
+// should pass a context with a bounded timeout.
+func (p *PostgresSink) Check(ctx context.Context) error {
+	if err := p.Open(ctx); err != nil {
+		return err
+	}
+	if err := p.pool.Ping(ctx); err != nil {
+		return fmt.Errorf("postgres connectivity check: %w", err)
+	}
+	return nil
+}
+
+// Close releases the Postgres pool if it has been opened.
+func (p *PostgresSink) Close() {
+	if p.pool == nil {
+		return
+	}
+	p.pool.Close()
+	p.pool = nil
 }
 
 // mapRecord runs the user-provided mapper on a record.

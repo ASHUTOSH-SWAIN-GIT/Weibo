@@ -332,6 +332,15 @@ func TestS3Sink_RequiresBucket(t *testing.T) {
 	NewS3Sink(S3Client(&fakeS3{}))
 }
 
+func TestNewS3SinkEReportsConfigErrors(t *testing.T) {
+	if _, err := NewS3SinkE(S3Client(&fakeS3{})); err == nil {
+		t.Fatal("expected missing bucket error")
+	}
+	if s, err := NewS3SinkE(S3Bucket("lake"), S3Client(&fakeS3{})); err != nil || s == nil {
+		t.Fatalf("valid S3 sink: s=%v err=%v", s, err)
+	}
+}
+
 // TestS3Sink_DescribeOmitsCredentials pins that Describe, which feeds the
 // dashboard, never exposes static credentials.
 func TestS3Sink_DescribeOmitsCredentials(t *testing.T) {
