@@ -6,6 +6,9 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
 # Cancel in-progress runs for the same branch when a new commit lands.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -172,3 +175,60 @@ jobs:
       - name: Run SDK lifecycle integration
         working-directory: control
         run: go test -count=1 -run TestIntegration_SDKImageLifecycle .
+
+  security:
+    name: dependency + artifact security
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.2'
+          cache: true
+
+      - name: Install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@latest
+
+      - name: govulncheck root module
+        run: govulncheck ./...
+
+      - name: govulncheck control module
+        working-directory: control
+        run: govulncheck ./...
+
+      - name: Build runner image for scanning
+        run: docker build -f Dockerfile.runner -t weibo-runner:ci .
+
+      - name: Scan runner image
+        uses: aquasecurity/trivy-action@0.33.1
+        with:
+          image-ref: weibo-runner:ci
+          format: sarif
+          output: trivy-results.sarif
+          severity: CRITICAL,HIGH
+          exit-code: '1'
+
+      - name: Upload container scan results
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-results.sarif
+
+      - name: Generate SBOM
+        uses: anchore/sbom-action@v0.20.6
+        with:
+          path: .
+          format: spdx-json
+          output-file: sbom.spdx.json
+
+      - name: Upload SBOM artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom
+          path: sbom.spdx.json
+          retention-days: 30

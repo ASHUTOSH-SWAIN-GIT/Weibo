@@ -1,0 +1,28 @@
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      go-root:
+        patterns:
+          - "*"
+
+  - package-ecosystem: gomod
+    directory: /control
+    schedule:
+      interval: weekly
+    groups:
+      go-control:
+        patterns:
+          - "*"
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      github-actions:
+        patterns:
+          - "*"

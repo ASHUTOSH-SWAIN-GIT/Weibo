@@ -4,6 +4,7 @@ package backend
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -23,12 +24,13 @@ func k8sBackend(t *testing.T) *Kubernetes {
 func TestK8sLaunch_AppliesIsolationOptions(t *testing.T) {
 	ctx := context.Background()
 	k := newK8s(fake.NewSimpleClientset(), KubernetesOptions{
-		Image:              "weibo-sdk-demo:test",
-		Namespace:          "weibo",
-		ServiceAccountName: "weibo-runner",
-		RuntimeClassName:   "gvisor",
-		PriorityClassName:  "weibo-low",
-		NodeSelector:       map[string]string{"workload": "weibo"},
+		Image:                   "weibo-sdk-demo:test",
+		Namespace:               "weibo",
+		ServiceAccountName:      "weibo-runner",
+		RuntimeClassName:        "gvisor",
+		PriorityClassName:       "weibo-low",
+		TTLSecondsAfterFinished: int32Ptr(300),
+		NodeSelector:            map[string]string{"workload": "weibo"},
 		Tolerations: []corev1.Toleration{{
 			Key: "dedicated", Operator: corev1.TolerationOpEqual, Value: "weibo", Effect: corev1.TaintEffectNoSchedule,
 		}},
@@ -43,6 +45,9 @@ func TestK8sLaunch_AppliesIsolationOptions(t *testing.T) {
 		t.Fatal(err)
 	}
 	pod := job.Spec.Template.Spec
+	if job.Spec.TTLSecondsAfterFinished == nil || *job.Spec.TTLSecondsAfterFinished != 300 {
+		t.Errorf("ttlSecondsAfterFinished=%v, want 300", job.Spec.TTLSecondsAfterFinished)
+	}
 	if pod.ServiceAccountName != "weibo-runner" {
 		t.Errorf("serviceAccountName=%q, want weibo-runner", pod.ServiceAccountName)
 	}
@@ -201,6 +206,35 @@ func TestK8sStatus_Gone(t *testing.T) {
 	st, err := k.Status(context.Background(), "does-not-exist")
 	if err != nil || st.Phase != PhaseGone {
 		t.Fatalf("expected gone, got %q err=%v", st.Phase, err)
+	}
+}
+
+func TestK8sStatus_IncludesRecentEvents(t *testing.T) {
+	ctx := context.Background()
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "p", Namespace: "weibo", Labels: map[string]string{"weibo.run": "weibo-x"}},
+		Status:     corev1.PodStatus{Phase: corev1.PodPending},
+	}
+	ev := &corev1.Event{
+		ObjectMeta:     metav1.ObjectMeta{Name: "e1", Namespace: "weibo"},
+		InvolvedObject: corev1.ObjectReference{Kind: "Pod", Name: "p", Namespace: "weibo"},
+		Type:           corev1.EventTypeWarning,
+		Reason:         "FailedScheduling",
+		Message:        "0/3 nodes are available: insufficient memory",
+		LastTimestamp:  metav1.Now(),
+	}
+	cs := fake.NewSimpleClientset(&batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{Name: "weibo-x", Namespace: "weibo"},
+		Status:     batchv1.JobStatus{Active: 1},
+	}, pod, ev)
+	k := newK8s(cs, KubernetesOptions{Namespace: "weibo"})
+
+	st, err := k.Status(ctx, "weibo-x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(st.Reason, "FailedScheduling") || !strings.Contains(st.Reason, "insufficient memory") {
+		t.Fatalf("reason missing event: %q", st.Reason)
 	}
 }
 

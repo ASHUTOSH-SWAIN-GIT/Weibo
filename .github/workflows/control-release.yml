@@ -12,6 +12,8 @@ on:
 
 permissions:
   contents: write
+  attestations: write
+  id-token: write
 
 jobs:
   linux-binaries:
@@ -63,6 +65,13 @@ jobs:
       - name: Generate checksums
         working-directory: control/dist
         run: sha256sum weibo-linux-* > checksums.txt
+
+      - name: Attest binary provenance
+        uses: actions/attest-build-provenance@v3
+        with:
+          subject-path: |
+            control/dist/weibo-linux-amd64
+            control/dist/weibo-linux-arm64
 
       - name: Upload binaries to release
         env:

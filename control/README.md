@@ -169,7 +169,8 @@ weibo dashboard -backend kubernetes \
   -job-runtime-class gvisor \
   -job-priority-class weibo-low \
   -job-node-selector workload=weibo \
-  -job-tolerations dedicated=weibo:NoSchedule
+  -job-tolerations dedicated=weibo:NoSchedule \
+  -job-ttl-after-finished 3600
 ```
 
 SDK manifests can also bound ephemeral storage:
@@ -190,6 +191,11 @@ For storage guardrails, set namespace `ResourceQuota` limits for PVC count and
 requested storage, for example `persistentvolumeclaims` and
 `requests.storage`. Weibo sizes each job PVC from `-pvc-size`; a quota rejection
 surfaces as a launch failure instead of silently falling back to ephemeral data.
+
+When Kubernetes jobs are pending or failing, Weibo appends recent pod/job events
+to the backend reason. Image-pull failures, failed scheduling, quota denials,
+and PVC binding issues therefore show up in run state/diagnostics without
+requiring an immediate `kubectl describe`.
 
 ## API
 
@@ -325,6 +331,22 @@ Docker jobs share a local savepoint volume; Kubernetes jobs currently use the
 job PVC for same-job restarts. Cross-job/cross-cluster savepoints need
 object-store-backed checkpoint/blob storage. The workflow must have
 checkpointing enabled (`env.checkpointing`).
+
+To use S3-compatible savepoint storage, pass these environment variables to the
+runner job (via SDK manifest `env`, submit env, or secret refs):
+
+```sh
+SAVEPOINT_S3_BUCKET=weibo-savepoints
+SAVEPOINT_S3_PREFIX=prod
+SAVEPOINT_S3_ENDPOINT=https://minio.example.com   # optional
+SAVEPOINT_S3_PATH_STYLE=true                      # for many S3-compatible stores
+SAVEPOINT_S3_SSE=aws:kms                          # optional
+SAVEPOINT_S3_KMS_KEY_ID=<kms-key-id>              # optional
+AWS_REGION=us-east-1
+```
+
+The S3 blobstore stores a SHA-256 object metadata value for integrity auditing
+and uses the AWS SDK retry policy.
 
 ## Launch failures and retries
 

@@ -11,12 +11,22 @@ mount the document, point `WORKFLOW` at it, mount a volume for durable state.
 | `WORKFLOW`           | yes | —            | Path to the mounted workflow file. |
 | `DATA_DIR`           | no  | `/data`      | Base dir; the engine derives `<name>/state` and `<name>/checkpoints` under it. Mount a volume here for durability. |
 | `SAVEPOINT_DIR`      | no  | `/savepoints`| Directory where the runner promotes named savepoints. It is portable only across jobs that can read the same storage namespace. |
+| `SAVEPOINT_S3_BUCKET`| no  | —            | Use S3-compatible object storage for savepoints instead of `SAVEPOINT_DIR`. |
+| `SAVEPOINT_S3_PREFIX`| no  | —            | Key prefix for S3 savepoint objects. |
+| `SAVEPOINT_S3_ENDPOINT` | no | —          | S3-compatible endpoint override. |
+| `SAVEPOINT_S3_PATH_STYLE` | no | `false`  | Use path-style bucket addressing for S3-compatible stores. |
+| `SAVEPOINT_S3_SSE`   | no  | —            | Server-side encryption mode, e.g. `AES256` or `aws:kms`. |
+| `SAVEPOINT_S3_KMS_KEY_ID` | no | —        | KMS key ID when using KMS encryption. |
 | `RESTORE_SAVEPOINT`  | no  | —            | Name of a savepoint to seed state from before starting. |
 | `PORT`               | no  | `8080`       | Agent HTTP control port. |
 | `WEIBO_JOB_ID`      | no  | —            | Injected by the controller; reference it (`transactionalID: ${WEIBO_JOB_ID}`) to pin a stable exactly-once id across restarts. |
 
 Secret placeholders (`${VAR}`) in the workflow resolve from the process
 environment at compile time — pass them with `-e`.
+
+S3 savepoints use the standard AWS credential chain. Set `AWS_REGION`,
+`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, and `AWS_SESSION_TOKEN` as needed,
+or rely on the pod/instance role.
 
 ## Control surface
 

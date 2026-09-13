@@ -84,6 +84,7 @@ func run(ctx context.Context, getenv func(string) string, stdout, stderr io.Writ
 		Port:             getenv("PORT"),
 		CheckpointDir:    cw.CheckpointDir,
 		SavepointDir:     getenv("SAVEPOINT_DIR"),
+		SavepointS3:      sdk.SavepointS3FromEnv(getenv),
 		RestoreSavepoint: getenv("RESTORE_SAVEPOINT"),
 		Stdout:           stdout,
 		Stderr:           stderr,

@@ -9,7 +9,10 @@ cd control && go run ./cmd/weibo dashboard        # starts controller + opens UI
 go run ./cmd/weibo dashboard -no-open             # headless
 ```
 
-Dashboard: http://localhost:9000 — API auth via `-auth-token` (env `WEIBO_AUTH_TOKEN`); empty = open.
+Dashboard: http://localhost:9000 — API auth via `-auth-token` (env
+`WEIBO_AUTH_TOKEN`) or hashed tokens via `-auth-token-sha256` (env
+`WEIBO_AUTH_TOKEN_SHA256`). Empty auth is allowed for loopback; wildcard
+listens require `-allow-open-public`.
 
 ## Code layout
 
@@ -25,7 +28,7 @@ The dashboard is a plain-JS SPA with a hash router (`#/overview`, `#/job-manager
 
 ### Layout & navigation
 - **Sidebar** — compact dark navigation with Overview, Infrastructure, Active, History, and Deploy. Connection status appears in the footer.
-- **Token auth** — on a 401 the UI drops to a token prompt, validates it via `POST /auth`, and stores it in `localStorage`.
+- **Token auth** — on a 401 the UI drops to a token prompt, validates it via `POST /auth`, and stores it in `localStorage`. Read-only hashed tokens can inspect the dashboard but cannot submit, delete, cancel, restart, or savepoint jobs.
 
 ### Overview
 - Stat tiles: Available Task Slots (jobs × 2), Running, Finished, Failed.

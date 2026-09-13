@@ -39,3 +39,18 @@ func TestParseTolerations(t *testing.T) {
 		t.Fatal("expected bad effect error")
 	}
 }
+
+func TestAuthAndBindGuards(t *testing.T) {
+	if !isPublicBind(":9000") || !isPublicBind("0.0.0.0:9000") || !isPublicBind("[::]:9000") {
+		t.Fatal("expected wildcard listen addresses to be public")
+	}
+	if isPublicBind("127.0.0.1:9000") || isPublicBind("localhost:9000") || isPublicBind("[::1]:9000") {
+		t.Fatal("expected loopback listen addresses to be non-public")
+	}
+	if authConfigured("", "") {
+		t.Fatal("empty auth should not be configured")
+	}
+	if !authConfigured("plain", "") || !authConfigured("", "abcd") {
+		t.Fatal("token or hash should configure auth")
+	}
+}

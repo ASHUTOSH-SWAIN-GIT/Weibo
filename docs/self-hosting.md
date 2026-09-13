@@ -92,6 +92,9 @@ weibo dashboard \
   `-addr :9000` only behind such a proxy.
 - `-auth-token` is read from `WEIBO_AUTH_TOKEN`; the log prints
   `API auth ENABLED` when a token is set.
+- `-auth-token-sha256` is read from `WEIBO_AUTH_TOKEN_SHA256` and accepts
+  comma-separated SHA-256 hashes of raw bearer tokens. Prefix a hash with
+  `readonly:` for inspect-only access, or `readwrite:` for mutation access.
 - `-no-open` keeps it from trying to open a browser on the server.
 
 Keep it running under [systemd](#systemd-unit-optional) in production.
@@ -212,10 +215,10 @@ not let it cross an untrusted network in cleartext.
 - [ ] **Bind to a private interface.** Start with `-addr 127.0.0.1:9000` and
       reach it via an SSH tunnel or the TLS proxy on the same host. Use a public
       `-addr :9000` **only** when a TLS proxy sits in front.
-- [ ] **Set a strong token and rotate it.** `openssl rand -hex 32`. To rotate:
-      restart the dashboard with a new `WEIBO_AUTH_TOKEN` and redistribute it;
-      clients update `WEIBO_TOKEN`. Browsers re-prompt automatically on the
-      next 401.
+- [ ] **Set a strong token and rotate it.** `openssl rand -hex 32`. Prefer
+      storing only token hashes with `WEIBO_AUTH_TOKEN_SHA256`, and keep two
+      comma-separated hashes during rotation. Clients still send the raw token
+      via `WEIBO_TOKEN`. Browsers re-prompt automatically on the next 401.
 - [ ] **Job control port is already loopback-only.** The Docker backend
       publishes each job's control surface on `127.0.0.1` only — it is not
       reachable off-host. Nothing to configure.
@@ -228,9 +231,10 @@ not let it cross an untrusted network in cleartext.
       persistent volume (e.g. `/var/lib/weibo/control.db`) so job records
       survive a redeploy of the controller.
 
-> **No token = open API.** Running `weibo dashboard` without `-auth-token`
-> leaves the API fully open (the pre-auth behavior). That is fine for a laptop
-> or a fully private network, but never for anything reachable by others.
+> **No token = open API.** Running `weibo dashboard` without `-auth-token` or
+> `-auth-token-sha256` is allowed only for loopback/private use. The controller
+> refuses wildcard binds such as `:9000` or `0.0.0.0:9000` unless you explicitly
+> pass `-allow-open-public`.
 
 ---
 

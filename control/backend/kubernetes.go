@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -32,18 +33,19 @@ import (
 // ConfigMap (the workflow), an optional Secret (env), and a ClusterIP
 // Service so the controller can reach the agent's control surface.
 type Kubernetes struct {
-	cs                     kubernetes.Interface
-	namespace              string
-	image                  string
-	pvcSize                string
-	storageClass           string
-	serviceAccountName     string
-	imagePullSecrets       []string
-	runtimeClassName       string
-	priorityClassName      string
-	nodeSelector           map[string]string
-	tolerations            []corev1.Toleration
-	controlAddressTemplate string
+	cs                      kubernetes.Interface
+	namespace               string
+	image                   string
+	pvcSize                 string
+	storageClass            string
+	serviceAccountName      string
+	imagePullSecrets        []string
+	runtimeClassName        string
+	priorityClassName       string
+	nodeSelector            map[string]string
+	tolerations             []corev1.Toleration
+	ttlSecondsAfterFinished *int32
+	controlAddressTemplate  string
 }
 
 // KubernetesOptions configures the backend.
@@ -68,6 +70,9 @@ type KubernetesOptions struct {
 	// NodeSelector and Tolerations constrain where runner pods may land.
 	NodeSelector map[string]string
 	Tolerations  []corev1.Toleration
+	// TTLSecondsAfterFinished is copied onto runner Jobs when >= 0. Nil leaves
+	// finished Jobs for the controller retention/sweep path.
+	TTLSecondsAfterFinished *int32
 	// ControlAddressTemplate makes the agent reachable from the controller.
 	// Tokens: {service}, {namespace}, {port}. Empty uses cluster-local DNS.
 	ControlAddressTemplate string
@@ -90,18 +95,19 @@ func NewKubernetes(opts KubernetesOptions) (*Kubernetes, error) {
 // newK8s builds the backend from an injected client (used by tests).
 func newK8s(cs kubernetes.Interface, opts KubernetesOptions) *Kubernetes {
 	k := &Kubernetes{
-		cs:                     cs,
-		namespace:              orString(opts.Namespace, "default"),
-		image:                  opts.Image,
-		pvcSize:                orString(opts.PVCSize, "1Gi"),
-		storageClass:           opts.StorageClass,
-		serviceAccountName:     opts.ServiceAccountName,
-		imagePullSecrets:       opts.ImagePullSecrets,
-		runtimeClassName:       opts.RuntimeClassName,
-		priorityClassName:      opts.PriorityClassName,
-		nodeSelector:           copyStringMap(opts.NodeSelector),
-		tolerations:            append([]corev1.Toleration(nil), opts.Tolerations...),
-		controlAddressTemplate: opts.ControlAddressTemplate,
+		cs:                      cs,
+		namespace:               orString(opts.Namespace, "default"),
+		image:                   opts.Image,
+		pvcSize:                 orString(opts.PVCSize, "1Gi"),
+		storageClass:            opts.StorageClass,
+		serviceAccountName:      opts.ServiceAccountName,
+		imagePullSecrets:        opts.ImagePullSecrets,
+		runtimeClassName:        opts.RuntimeClassName,
+		priorityClassName:       opts.PriorityClassName,
+		nodeSelector:            copyStringMap(opts.NodeSelector),
+		tolerations:             append([]corev1.Toleration(nil), opts.Tolerations...),
+		ttlSecondsAfterFinished: opts.TTLSecondsAfterFinished,
+		controlAddressTemplate:  opts.ControlAddressTemplate,
 	}
 	return k
 }
@@ -348,7 +354,8 @@ func (k *Kubernetes) buildJob(run, jobID, pvc, cmName, secretName, image string,
 	return &batchv1.Job{
 		ObjectMeta: k.meta(run, jobID, run),
 		Spec: batchv1.JobSpec{
-			BackoffLimit: int32Ptr(0), // no k8s retries; weibo reconciler restarts
+			BackoffLimit:            int32Ptr(0), // no k8s retries; weibo reconciler restarts
+			TTLSecondsAfterFinished: k.ttlSecondsAfterFinished,
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{Labels: labels(jobID, run), Annotations: map[string]string{
 					"prometheus.io/scrape": "true", "prometheus.io/path": "/metrics", "prometheus.io/port": strconv.Itoa(port),
@@ -464,6 +471,9 @@ func (k *Kubernetes) Status(ctx context.Context, id string) (Status, error) {
 		}
 		st.Address = strings.NewReplacer("{service}", id, "{namespace}", k.namespace, "{port}", port).Replace(tmpl)
 	}
+	if events := k.recentEvents(ctx, id); events != "" {
+		st.Reason = joinReason(st.Reason, "events: "+events)
+	}
 	return st, nil
 }
 
@@ -499,6 +509,56 @@ func (k *Kubernetes) podPendingReason(ctx context.Context, run string) string {
 		}
 	}
 	return string(p.Status.Phase)
+}
+
+func (k *Kubernetes) recentEvents(ctx context.Context, run string) string {
+	pods, _ := k.cs.CoreV1().Pods(k.namespace).List(ctx, metav1.ListOptions{LabelSelector: "weibo.run=" + run})
+	names := map[string]bool{run: true}
+	for _, p := range pods.Items {
+		names[p.Name] = true
+	}
+	events, err := k.cs.CoreV1().Events(k.namespace).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return ""
+	}
+	var matched []corev1.Event
+	for _, ev := range events.Items {
+		if names[ev.InvolvedObject.Name] && ev.Message != "" {
+			matched = append(matched, ev)
+		}
+	}
+	sort.Slice(matched, func(i, j int) bool {
+		return eventTime(matched[i]).After(eventTime(matched[j]))
+	})
+	if len(matched) > 3 {
+		matched = matched[:3]
+	}
+	parts := make([]string, 0, len(matched))
+	for _, ev := range matched {
+		label := ev.Reason
+		if label == "" {
+			label = ev.Type
+		}
+		if label == "" {
+			parts = append(parts, ev.Message)
+		} else {
+			parts = append(parts, label+": "+ev.Message)
+		}
+	}
+	return strings.Join(parts, " | ")
+}
+
+func eventTime(ev corev1.Event) time.Time {
+	switch {
+	case !ev.EventTime.IsZero():
+		return ev.EventTime.Time
+	case !ev.LastTimestamp.IsZero():
+		return ev.LastTimestamp.Time
+	case !ev.FirstTimestamp.IsZero():
+		return ev.FirstTimestamp.Time
+	default:
+		return ev.CreationTimestamp.Time
+	}
 }
 
 // podExitCode returns a failed pod's container exit code, or 1 if unknown.

@@ -106,16 +106,23 @@ func runDashboard(args []string) int {
 	priorityClass := fs.String("job-priority-class", "", "priorityClassName assigned to runner pods (kubernetes backend)")
 	nodeSelector := fs.String("job-node-selector", "", "comma-separated key=value node selector for runner pods (kubernetes backend)")
 	tolerations := fs.String("job-tolerations", "", "comma-separated tolerations key[=value][:effect], e.g. dedicated=weibo:NoSchedule (kubernetes backend)")
+	jobTTL := fs.Int("job-ttl-after-finished", -1, "seconds Kubernetes keeps finished runner Jobs; -1 leaves cleanup to Weibo (kubernetes backend)")
 	controlAddress := fs.String("k8s-control-address-template", "", "agent address template with {service}, {namespace}, {port}; empty = cluster DNS")
 	maxJobs := fs.Int("max-jobs", 0, "maximum concurrent jobs; 0 = resource-limited only")
 	defaultJobCPU := fs.String("default-job-cpu", "1", "default CPU reserved per job for capacity math")
 	defaultJobMemory := fs.String("default-job-memory", "1Gi", "default memory reserved per job for capacity math")
 	authToken := fs.String("auth-token", os.Getenv("WEIBO_AUTH_TOKEN"), "shared bearer token required by the API + UI; empty = open (env WEIBO_AUTH_TOKEN)")
+	authTokenSHA256 := fs.String("auth-token-sha256", os.Getenv("WEIBO_AUTH_TOKEN_SHA256"), "comma-separated SHA-256 bearer token hashes; optional readonly:/readwrite: prefixes (env WEIBO_AUTH_TOKEN_SHA256)")
+	allowOpenPublic := fs.Bool("allow-open-public", envBool("WEIBO_ALLOW_OPEN_PUBLIC"), "allow an unauthenticated public bind; required for -addr :PORT/0.0.0.0 without auth")
 	logLevel := fs.String("log-level", envOr("WEIBO_LOG_LEVEL", "info"), "log level: debug|info|warn|error (env WEIBO_LOG_LEVEL)")
 	logFormat := fs.String("log-format", envOr("WEIBO_LOG_FORMAT", "text"), "log format: text|json (env WEIBO_LOG_FORMAT)")
 	otelEndpoint := fs.String("otel-endpoint", os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"), "OTLP/HTTP traces endpoint; empty disables tracing (env OTEL_EXPORTER_OTLP_ENDPOINT)")
 	otelService := fs.String("otel-service-name", envOr("OTEL_SERVICE_NAME", "weibo-controller"), "service name for traces (env OTEL_SERVICE_NAME)")
 	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if !authConfigured(*authToken, *authTokenSHA256) && isPublicBind(*addr) && !*allowOpenPublic {
+		fmt.Fprintf(os.Stderr, "weibo: refusing unauthenticated public bind on %q; set -auth-token or -auth-token-sha256, bind to localhost, or pass -allow-open-public\n", *addr)
 		return 2
 	}
 
@@ -156,7 +163,8 @@ func runDashboard(args []string) int {
 		return 2
 	}
 
-	be, rc := makeBackend(ctx, *backendKind, *image, *namespace, *kubeconfig, splitCSV(*pullSecrets), *pvcSize, *storageClass, *jobServiceAccount, *runtimeClass, *priorityClass, ns, tols, *controlAddress)
+	ttl := int32PtrFromNonNegative(*jobTTL)
+	be, rc := makeBackend(ctx, *backendKind, *image, *namespace, *kubeconfig, splitCSV(*pullSecrets), *pvcSize, *storageClass, *jobServiceAccount, *runtimeClass, *priorityClass, ns, tols, ttl, *controlAddress)
 	if be == nil {
 		return rc
 	}
@@ -197,7 +205,13 @@ func runDashboard(args []string) int {
 	sweepCancel()
 	go ctrl.RunReconciler(ctx, *interval)
 
-	srv := &http.Server{Addr: *addr, Handler: api.NewServer(ctrl, *authToken).Handler()}
+	srv := &http.Server{
+		Addr:              *addr,
+		Handler:           api.NewServerWithAuth(ctrl, api.AuthConfig{Token: *authToken, TokenSHA256: splitCSV(*authTokenSHA256)}).Handler(),
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		IdleTimeout:       60 * time.Second,
+	}
 	go func() {
 		<-ctx.Done()
 		shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -210,8 +224,10 @@ func runDashboard(args []string) int {
 		go openWhenReady(ctx, url)
 	}
 	logger.Info("weibo dashboard", "url", url, "image", *image, "db", *dbPath)
-	if *authToken != "" {
+	if authConfigured(*authToken, *authTokenSHA256) {
 		logger.Info("weibo dashboard: API auth ENABLED — clients need -token / WEIBO_TOKEN")
+	} else {
+		logger.Warn("weibo dashboard: API auth DISABLED; bind is local or explicitly allowed", "addr", *addr)
 	}
 
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
@@ -224,7 +240,7 @@ func runDashboard(args []string) int {
 
 // makeBackend constructs and preflights the chosen container backend. On
 // failure it prints a hint and returns (nil, exitCode).
-func makeBackend(ctx context.Context, kind, image, namespace, kubeconfig string, pullSecrets []string, pvcSize, storageClass, jobServiceAccount, runtimeClass, priorityClass string, nodeSelector map[string]string, tolerations []corev1.Toleration, controlAddress string) (backend.ContainerBackend, int) {
+func makeBackend(ctx context.Context, kind, image, namespace, kubeconfig string, pullSecrets []string, pvcSize, storageClass, jobServiceAccount, runtimeClass, priorityClass string, nodeSelector map[string]string, tolerations []corev1.Toleration, ttlSecondsAfterFinished *int32, controlAddress string) (backend.ContainerBackend, int) {
 	switch kind {
 	case "docker":
 		d, err := backend.NewDocker(image)
@@ -247,12 +263,13 @@ func makeBackend(ctx context.Context, kind, image, namespace, kubeconfig string,
 			Kubeconfig: kubeconfig, Namespace: namespace, Image: image,
 			ImagePullSecrets: pullSecrets,
 			PVCSize:          pvcSize, StorageClass: storageClass,
-			ServiceAccountName:     jobServiceAccount,
-			RuntimeClassName:       runtimeClass,
-			PriorityClassName:      priorityClass,
-			NodeSelector:           nodeSelector,
-			Tolerations:            tolerations,
-			ControlAddressTemplate: controlAddress,
+			ServiceAccountName:      jobServiceAccount,
+			RuntimeClassName:        runtimeClass,
+			PriorityClassName:       priorityClass,
+			NodeSelector:            nodeSelector,
+			Tolerations:             tolerations,
+			TTLSecondsAfterFinished: ttlSecondsAfterFinished,
+			ControlAddressTemplate:  controlAddress,
 		})
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "weibo: kubernetes: %v\n", err)
@@ -280,6 +297,31 @@ func splitCSV(s string) []string {
 		}
 	}
 	return out
+}
+
+func envBool(key string) bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(key))) {
+	case "1", "true", "t", "yes", "y", "on":
+		return true
+	default:
+		return false
+	}
+}
+
+func authConfigured(token, hashes string) bool {
+	return strings.TrimSpace(token) != "" || len(splitCSV(hashes)) > 0
+}
+
+func isPublicBind(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		if strings.HasPrefix(addr, ":") {
+			return true
+		}
+		return false
+	}
+	host = strings.Trim(host, "[]")
+	return host == "" || host == "0.0.0.0" || host == "::"
 }
 
 func parseKeyValues(s string) (map[string]string, error) {
@@ -334,6 +376,14 @@ func parseTolerations(s string) ([]corev1.Toleration, error) {
 		out = append(out, tol)
 	}
 	return out, nil
+}
+
+func int32PtrFromNonNegative(n int) *int32 {
+	if n < 0 {
+		return nil
+	}
+	v := int32(n)
+	return &v
 }
 
 // browserURL turns a listen address (":9000", "0.0.0.0:9000") into a URL

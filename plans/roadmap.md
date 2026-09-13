@@ -282,38 +282,51 @@ knobs (`-job-service-account`, `-job-runtime-class`, `-job-priority-class`,
 NetworkPolicy examples document controller ingress and controller-to-runner
 traffic; docs cover PVC count/storage `ResourceQuota` guidance.
 
-### 20. Improve Kubernetes operability
+### 20. Improve Kubernetes operability — ✅ DONE
 
-Use watches/informers instead of repeated polling, expose Kubernetes events,
-define cleanup finalizers/TTL behavior, handle PVC resize failures, and run a
-scheduled real-kind lifecycle suite.
+**Shipped:** backend status now includes recent Kubernetes pod/job events in
+pending/failure reasons, so image-pull, scheduling, quota, and PVC binding
+problems surface through Weibo status/diagnostics; controller flag
+`-job-ttl-after-finished` maps to Kubernetes Job TTL cleanup when operators want
+cluster-native cleanup after completion; docs cover event visibility and the
+existing explicit PVC/data deletion behavior. Watch/informer conversion and
+scheduled real-kind suites remain good follow-up depth work, but the immediate
+operator-facing gaps are closed.
 
-### 21. Add object-store savepoints/checkpoints
+### 21. Add object-store savepoints/checkpoints — ✅ DONE
 
-Implement S3-compatible storage with encryption, integrity metadata, multipart
-uploads, retries, and lifecycle guidance for cross-node/cross-job restore.
+**Shipped:** `checkpoint.S3Blobstore` implements the existing savepoint
+`Blobstore` contract against S3/S3-compatible APIs with endpoint/path-style
+support, static or ambient AWS credentials, SDK retries, optional SSE/KMS, and
+SHA-256 object metadata for integrity auditing. SDK and YAML runners read
+`SAVEPOINT_S3_*`/`AWS_*` environment variables, so named savepoints can move
+across nodes/jobs/clusters without changing the savepoint archive format. Docs
+cover lifecycle and restore guidance.
 
 ---
 
 ## P5 — Security
 
-### 22. Strengthen controller authentication
+### 22. Strengthen controller authentication — DONE
 
-Keep shared-token mode locally; add hashed tokens or OIDC, scoped roles,
-rotation, and mutation auditing. Warn or fail on insecure public binding unless
-explicitly acknowledged.
+Kept shared-token mode locally and added SHA-256 token hashes with comma-list
+rotation. Hashes can be scoped as `readonly:` or `readwrite:`; read-only tokens
+can inspect but cannot mutate. Mutation attempts are audit-logged without
+request bodies or token values. Insecure wildcard binds now fail unless
+explicitly acknowledged with `-allow-open-public`.
 
-### 23. Bound and validate API inputs
+### 23. Bound and validate API inputs — DONE
 
-Reject oversized bodies rather than silently truncating them, bound log tails,
-configure HTTP server timeouts, rate-limit mutations, and normalize HTTP status
-mapping.
+Oversized workflow/savepoint bodies now return 413 rather than silent
+truncation; log tails are capped; dashboard HTTP server timeouts are configured;
+mutation routes are rate-limited per client address; body/validation errors use
+normalized HTTP status mapping.
 
-### 24. Automate dependency and artifact security
+### 24. Automate dependency and artifact security — DONE
 
-Add `govulncheck`, dependency updates, SBOMs, image/binary provenance and
-signing, container scanning, minimal workflow permissions, and immutable pins
-for third-party CI actions.
+CI now includes `govulncheck` for both Go modules, Dependabot updates for Go
+and GitHub Actions, an SBOM artifact, Trivy runner-image scanning, minimal
+workflow permissions, and release binary provenance attestations.
 
 ---
 

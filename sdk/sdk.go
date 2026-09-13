@@ -17,10 +17,12 @@
 //	DATA_DIR             state/checkpoint root                (default /data)
 //	PORT                 control port                          (default 8080)
 //	SAVEPOINT_DIR        savepoint blobstore                   (default /savepoints)
+//	SAVEPOINT_S3_BUCKET  use S3-compatible savepoint storage   (default off)
 //	CHECKPOINT_INTERVAL  enable durable checkpointing, e.g. 5s (default off)
 //	CHECKPOINT_RETENTION completed recovery points to keep          (default 3)
 //	RESTORE_SAVEPOINT    savepoint label to resume from        (default none)
 //	JOB_NAME             human-readable name for logs
+//
 // weibo-runner additionally honors LOG_LEVEL, LOG_FORMAT,
 // OTEL_EXPORTER_OTLP_ENDPOINT, and OTEL_SERVICE_NAME for its own
 // logger/tracer; plain SDK mains pass Logger/Tracer via ServeOptions.
@@ -36,6 +38,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -44,6 +47,7 @@ import (
 	"github.com/ASHUTOSH-SWAIN-GIT/weibo/jobagent"
 	"github.com/ASHUTOSH-SWAIN-GIT/weibo/observability/trace"
 	"github.com/ASHUTOSH-SWAIN-GIT/weibo/state"
+	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 )
 
 const (
@@ -117,6 +121,7 @@ func runBuild(ctx context.Context, build Builder, getenv func(string) string, st
 		Port:             getenv("PORT"),
 		CheckpointDir:    checkpointDir,
 		SavepointDir:     getenv("SAVEPOINT_DIR"),
+		SavepointS3:      SavepointS3FromEnv(getenv),
 		RestoreSavepoint: getenv("RESTORE_SAVEPOINT"),
 		Stdout:           stdout,
 		Stderr:           stderr,
@@ -129,6 +134,7 @@ type ServeOptions struct {
 	Port             string // control port; default 8080
 	CheckpointDir    string // "" when checkpointing is disabled
 	SavepointDir     string // savepoint blobstore; default /savepoints
+	SavepointS3      SavepointS3Options
 	RestoreSavepoint string // savepoint label to seed from, or ""
 	Stdout, Stderr   io.Writer
 	// Logger sets structured logging for the engine and agent (nil keeps
@@ -136,6 +142,43 @@ type ServeOptions struct {
 	// engine checkpoint spans (nil is no-op).
 	Logger *slog.Logger
 	Tracer trace.Tracer
+}
+
+type SavepointS3Options struct {
+	Bucket       string
+	Prefix       string
+	Region       string
+	Endpoint     string
+	PathStyle    bool
+	SSE          string
+	KMSKeyID     string
+	AccessKey    string
+	SecretKey    string
+	SessionToken string
+}
+
+func SavepointS3FromEnv(getenv func(string) string) SavepointS3Options {
+	return SavepointS3Options{
+		Bucket:       getenv("SAVEPOINT_S3_BUCKET"),
+		Prefix:       getenv("SAVEPOINT_S3_PREFIX"),
+		Region:       getenv("AWS_REGION"),
+		Endpoint:     getenv("SAVEPOINT_S3_ENDPOINT"),
+		PathStyle:    truthy(getenv("SAVEPOINT_S3_PATH_STYLE")),
+		SSE:          getenv("SAVEPOINT_S3_SSE"),
+		KMSKeyID:     getenv("SAVEPOINT_S3_KMS_KEY_ID"),
+		AccessKey:    getenv("AWS_ACCESS_KEY_ID"),
+		SecretKey:    getenv("AWS_SECRET_ACCESS_KEY"),
+		SessionToken: getenv("AWS_SESSION_TOKEN"),
+	}
+}
+
+func truthy(v string) bool {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "1", "true", "yes", "y", "on":
+		return true
+	default:
+		return false
+	}
 }
 
 // Serve supervises a configured env under a jobagent: it restores a
@@ -147,7 +190,11 @@ func Serve(ctx context.Context, env *weibo.StreamExecutionEnv, opts ServeOptions
 	stdout := orWriter(opts.Stdout, os.Stdout)
 	stderr := orWriter(opts.Stderr, os.Stderr)
 	port := orDefault(opts.Port, defaultPort)
-	blobs := checkpoint.NewFileBlobstore(orDefault(opts.SavepointDir, defaultSavepointDir))
+	blobs, err := savepointBlobstore(opts)
+	if err != nil {
+		fmt.Fprintf(stderr, "sdk: savepoint blobstore: %v\n", err)
+		return 1
+	}
 
 	if opts.RestoreSavepoint != "" {
 		if opts.CheckpointDir == "" {
@@ -209,6 +256,26 @@ func Serve(ctx context.Context, env *weibo.StreamExecutionEnv, opts ServeOptions
 		fmt.Fprintf(stderr, "sdk: job=%s failed: %v\n", opts.Name, runErr)
 		return 1
 	}
+}
+
+func savepointBlobstore(opts ServeOptions) (checkpoint.Blobstore, error) {
+	if opts.SavepointS3.Bucket == "" {
+		return checkpoint.NewFileBlobstore(orDefault(opts.SavepointDir, defaultSavepointDir)), nil
+	}
+	s3opts := []checkpoint.S3BlobstoreOption{
+		checkpoint.S3BlobBucket(opts.SavepointS3.Bucket),
+		checkpoint.S3BlobPrefix(opts.SavepointS3.Prefix),
+		checkpoint.S3BlobRegion(opts.SavepointS3.Region),
+		checkpoint.S3BlobEndpoint(opts.SavepointS3.Endpoint),
+		checkpoint.S3BlobStaticCredentials(opts.SavepointS3.AccessKey, opts.SavepointS3.SecretKey, opts.SavepointS3.SessionToken),
+	}
+	if opts.SavepointS3.PathStyle {
+		s3opts = append(s3opts, checkpoint.S3BlobPathStyle())
+	}
+	if opts.SavepointS3.SSE != "" {
+		s3opts = append(s3opts, checkpoint.S3BlobSSE(types.ServerSideEncryption(opts.SavepointS3.SSE), opts.SavepointS3.KMSKeyID))
+	}
+	return checkpoint.NewS3Blobstore(s3opts...)
 }
 
 func orDefault(v, def string) string {

@@ -158,6 +158,24 @@ func New(opts Options) *Controller {
 // log returns the controller logger.
 func (c *Controller) log() *slog.Logger { return c.logger }
 
+// AuditMutation records API-side write attempts without logging credentials or
+// request bodies. The API passes route templates rather than raw URLs so job
+// IDs do not explode log cardinality.
+func (c *Controller) AuditMutation(method, route, jobID, actor, remote string, status int, d time.Duration) {
+	args := []any{
+		"method", method,
+		"route", route,
+		"actor", actor,
+		"remote", remote,
+		"status", status,
+		"duration_ms", d.Milliseconds(),
+	}
+	if jobID != "" {
+		args = append(args, "job", jobID)
+	}
+	c.log().Info("api mutation", args...)
+}
+
 // tracing returns the controller tracer, defaulting to no-op.
 func (c *Controller) tracing() wtrace.Tracer {
 	if c.tracer != nil {

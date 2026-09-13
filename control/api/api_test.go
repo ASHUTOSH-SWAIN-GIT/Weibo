@@ -4,10 +4,13 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strconv"
 	"strings"
 	"testing"
@@ -66,6 +69,21 @@ func newAuthAPI(t *testing.T, token string) *httptest.Server {
 	srv := httptest.NewServer(api.NewServer(ctrl, token).Handler())
 	t.Cleanup(srv.Close)
 	return srv
+}
+
+func newAuthHashAPI(t *testing.T, hashes ...string) *httptest.Server {
+	t.Helper()
+	ctrl := control.New(control.Options{
+		Store: mustStore(t), Backend: backend.NewFake(), Image: "img", StopTimeout: time.Second,
+	})
+	srv := httptest.NewServer(api.NewServerWithAuth(ctrl, api.AuthConfig{TokenSHA256: hashes}).Handler())
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func sha256Hex(s string) string {
+	sum := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(sum[:])
 }
 
 func TestAuth_TokenGating(t *testing.T) {
@@ -132,6 +150,75 @@ func TestAuth_OpenWhenNoToken(t *testing.T) {
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("open /jobs: got %d, want 200", resp.StatusCode)
+	}
+}
+
+func TestAuth_SHA256HashesAndReadonlyScope(t *testing.T) {
+	srv := newAuthHashAPI(t, "readonly:"+sha256Hex("reader"), "readwrite:"+sha256Hex("writer"))
+	client := srv.Client()
+
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/jobs", nil)
+	req.Header.Set("Authorization", "Bearer reader")
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("readonly GET /jobs: got %d, want 200", resp.StatusCode)
+	}
+
+	req, _ = http.NewRequest(http.MethodPost, srv.URL+"/jobs", strings.NewReader(sdkJob))
+	req.Header.Set("Authorization", "Bearer reader")
+	resp, err = client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("readonly POST /jobs: got %d, want 403", resp.StatusCode)
+	}
+
+	req, _ = http.NewRequest(http.MethodPost, srv.URL+"/jobs", strings.NewReader(sdkJob))
+	req.Header.Set("Authorization", "Bearer writer")
+	resp, err = client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("readwrite POST /jobs: got %d, want 201", resp.StatusCode)
+	}
+}
+
+func TestSubmitRejectsOversizedBody(t *testing.T) {
+	srv := newAPI(t)
+	resp, err := http.Post(srv.URL+"/jobs", "application/yaml", strings.NewReader(strings.Repeat("x", (4<<20)+1)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusRequestEntityTooLarge {
+		t.Fatalf("oversized submit: got %d, want 413", resp.StatusCode)
+	}
+}
+
+func TestMutationRateLimit(t *testing.T) {
+	srv := newAPI(t)
+	client := srv.Client()
+	form := url.Values{"deleteData": {"false"}}
+	var got int
+	for i := 0; i < 31; i++ {
+		req, _ := http.NewRequest(http.MethodDelete, srv.URL+"/jobs/missing?"+form.Encode(), nil)
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got = resp.StatusCode
+		resp.Body.Close()
+	}
+	if got != http.StatusTooManyRequests {
+		t.Fatalf("31st mutation: got %d, want 429", got)
 	}
 }
 

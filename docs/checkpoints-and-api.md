@@ -44,8 +44,10 @@ read those blobs:
 
 - Docker currently uses a shared local volume for savepoints.
 - Kubernetes currently stores same-job savepoints under the job PVC.
-- Cross-job/cross-cluster portability requires future object-store-backed
-  checkpoint/blob storage.
+- S3-compatible object storage can be enabled with `SAVEPOINT_S3_BUCKET` and
+  related runner environment variables for cross-job/cross-cluster portability.
+  Objects carry SHA-256 metadata for integrity auditing and may use S3
+  server-side encryption.
 
 ## Durable-state compatibility rules
 
@@ -65,7 +67,11 @@ surface:
 - Existing routes and JSON fields should remain valid.
 - New response fields may be added; clients should ignore unknown fields.
 - Routes that mutate jobs require bearer-token auth when the controller is
-  configured with `WEIBO_AUTH_TOKEN`.
+  configured with `WEIBO_AUTH_TOKEN` or `WEIBO_AUTH_TOKEN_SHA256`. Hashed
+  tokens may be scoped with `readonly:` or `readwrite:` prefixes; read-only
+  tokens cannot mutate jobs.
+- Mutation routes are audit-logged without request bodies or token values, and
+  are rate-limited per client address.
 - `GET /`, `GET /healthz`, `GET /livez`, `GET /readyz`, and `GET /metrics`
   remain unauthenticated operational endpoints.
 - `/livez` reports process liveness. `/readyz` reports dependency readiness and

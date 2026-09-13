@@ -5,13 +5,18 @@ package api
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ASHUTOSH-SWAIN-GIT/weibo/control"
@@ -21,18 +26,51 @@ import (
 
 // Server adapts a Controller to an http.Handler.
 type Server struct {
-	ctrl   *control.Controller
-	client *http.Client
-	// token, when non-empty, is the shared bearer token required on every
-	// API route (the HTML shell and health check stay public). Empty means
-	// the API is fully open — today's behavior.
-	token string
+	ctrl       *control.Controller
+	client     *http.Client
+	authConfig AuthConfig
+	limit      *mutationLimiter
+}
+
+// Role is an API token scope. Read-only tokens may inspect jobs and cluster
+// state; read-write tokens may also submit, cancel, restart, savepoint and
+// delete jobs.
+type Role string
+
+const (
+	RoleReadOnly  Role = "readonly"
+	RoleReadWrite Role = "readwrite"
+)
+
+// AuthConfig configures bearer-token auth. Token preserves the original local
+// plaintext-token mode. TokenSHA256 accepts one or more hex SHA-256 digests of
+// raw bearer tokens; prefix a digest with "readonly:" or "readwrite:" to scope
+// it. Unprefixed hashes are read-write for compatibility and rotation.
+type AuthConfig struct {
+	Token       string
+	TokenSHA256 []string
+}
+
+type tokenHash struct {
+	role Role
+	sum  []byte
 }
 
 // NewServer builds the API server. An empty token leaves the API open;
 // a non-empty token gates every route behind Authorization: Bearer <token>.
 func NewServer(ctrl *control.Controller, token string) *Server {
-	return &Server{ctrl: ctrl, client: &http.Client{Timeout: 5 * time.Second}, token: token}
+	return NewServerWithAuth(ctrl, AuthConfig{Token: token})
+}
+
+// NewServerWithAuth builds the API server with plaintext and/or hashed tokens.
+func NewServerWithAuth(ctrl *control.Controller, auth AuthConfig) *Server {
+	auth.TokenSHA256 = normalizeTokenHashes(auth.TokenSHA256)
+	return &Server{
+		ctrl:       ctrl,
+		client:     &http.Client{Timeout: 5 * time.Second},
+		authConfig: auth,
+		limit:      newMutationLimiter(30, time.Minute),
+	}
 }
 
 // Handler returns the routed API. Method patterns give automatic 405s.
@@ -74,7 +112,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /jobs/{id}/runs/{runId}/logs", s.runLogs)
 	mux.HandleFunc("GET /jobs/{id}/transitions", s.transitions)
 	mux.HandleFunc("GET /jobs/{id}/logs/stream", s.logsStream)
-	return s.auth(s.instrument(mux))
+	return s.auth(s.auditMutations(s.rateLimitMutations(s.instrument(mux))))
 }
 
 // instrument records per-request API metrics. The route label is the
@@ -112,34 +150,188 @@ func (r *statusRecorder) Flush() {
 	}
 }
 
+type mutationLimiter struct {
+	mu     sync.Mutex
+	limit  int
+	window time.Duration
+	hits   map[string][]time.Time
+}
+
+func newMutationLimiter(limit int, window time.Duration) *mutationLimiter {
+	return &mutationLimiter{limit: limit, window: window, hits: map[string][]time.Time{}}
+}
+
+func (l *mutationLimiter) Allow(key string) bool {
+	now := time.Now()
+	cutoff := now.Add(-l.window)
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	hits := l.hits[key]
+	keep := hits[:0]
+	for _, ts := range hits {
+		if ts.After(cutoff) {
+			keep = append(keep, ts)
+		}
+	}
+	if len(keep) >= l.limit {
+		l.hits[key] = keep
+		return false
+	}
+	keep = append(keep, now)
+	l.hits[key] = keep
+	return true
+}
+
+func clientIP(r *http.Request) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err == nil {
+		return host
+	}
+	if r.RemoteAddr != "" {
+		return r.RemoteAddr
+	}
+	return "unknown"
+}
+
+type authRoleKey struct{}
+
 // auth wraps h with shared-bearer-token enforcement. With no token
 // configured it is a pass-through (open API). Otherwise every request must
 // carry Authorization: Bearer <token>, except the two public routes: the
 // health check and the HTML shell (which must load so the browser can
 // prompt for a token).
 func (s *Server) auth(h http.Handler) http.Handler {
-	if s.token == "" {
+	if !s.authConfigured() {
 		return h
 	}
-	want := []byte("Bearer " + s.token)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if publicRoute(r) {
 			h.ServeHTTP(w, r)
 			return
 		}
-		got := []byte(r.Header.Get("Authorization"))
-		if subtle.ConstantTimeCompare(got, want) != 1 {
+		role, ok := s.authenticate(r.Header.Get("Authorization"))
+		if !ok {
 			writeErr(w, http.StatusUnauthorized, "unauthorized")
 			return
 		}
+		if role == RoleReadOnly && mutationRoute(r) {
+			writeErr(w, http.StatusForbidden, "read-only token cannot mutate jobs")
+			return
+		}
+		r = r.WithContext(context.WithValue(r.Context(), authRoleKey{}, role))
 		h.ServeHTTP(w, r)
 	})
+}
+
+func (s *Server) authConfigured() bool {
+	return s.authConfig.Token != "" || len(s.authConfig.TokenSHA256) > 0
+}
+
+func (s *Server) authenticate(header string) (Role, bool) {
+	const prefix = "Bearer "
+	token, ok := strings.CutPrefix(header, prefix)
+	if !ok || token == "" {
+		return "", false
+	}
+	if s.authConfig.Token != "" && subtle.ConstantTimeCompare([]byte(token), []byte(s.authConfig.Token)) == 1 {
+		return RoleReadWrite, true
+	}
+	sum := sha256.Sum256([]byte(token))
+	got := make([]byte, hex.EncodedLen(len(sum)))
+	hex.Encode(got, sum[:])
+	for _, raw := range s.authConfig.TokenSHA256 {
+		role, want, ok := parseTokenHash(raw)
+		if !ok {
+			continue
+		}
+		if subtle.ConstantTimeCompare(got, want) == 1 {
+			return role, true
+		}
+	}
+	return "", false
+}
+
+func normalizeTokenHashes(in []string) []string {
+	var out []string
+	for _, part := range in {
+		for _, item := range strings.Split(part, ",") {
+			if item = strings.TrimSpace(item); item != "" {
+				out = append(out, item)
+			}
+		}
+	}
+	return out
+}
+
+func parseTokenHash(raw string) (Role, []byte, bool) {
+	role := RoleReadWrite
+	body := strings.TrimSpace(raw)
+	if before, after, ok := strings.Cut(body, ":"); ok {
+		switch Role(strings.ToLower(strings.TrimSpace(before))) {
+		case RoleReadOnly:
+			role = RoleReadOnly
+		case RoleReadWrite:
+			role = RoleReadWrite
+		default:
+			return "", nil, false
+		}
+		body = strings.TrimSpace(after)
+	}
+	body = strings.ToLower(body)
+	if len(body) != sha256.Size*2 {
+		return "", nil, false
+	}
+	decoded, err := hex.DecodeString(body)
+	if err != nil {
+		return "", nil, false
+	}
+	return role, []byte(hex.EncodeToString(decoded)), true
 }
 
 // publicRoute reports whether r may bypass auth: the HTML shell at "/" and
 // the health check, both GET-only.
 func publicRoute(r *http.Request) bool {
 	return r.Method == http.MethodGet && (r.URL.Path == "/" || r.URL.Path == "/healthz" || r.URL.Path == "/livez" || r.URL.Path == "/readyz" || r.URL.Path == "/metrics")
+}
+
+func mutationRoute(r *http.Request) bool {
+	switch r.Method {
+	case http.MethodPost, http.MethodDelete, http.MethodPut, http.MethodPatch:
+		return r.URL.Path != "/auth" && r.URL.Path != "/validate"
+	default:
+		return false
+	}
+}
+
+func (s *Server) rateLimitMutations(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if mutationRoute(r) && s.limit != nil && !s.limit.Allow(clientIP(r)) {
+			writeErr(w, http.StatusTooManyRequests, "too many mutation requests")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func (s *Server) auditMutations(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !mutationRoute(r) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		start := time.Now()
+		rw := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+		next.ServeHTTP(rw, r)
+		role := Role("anonymous")
+		if v, ok := r.Context().Value(authRoleKey{}).(Role); ok && v != "" {
+			role = v
+		}
+		route := r.Pattern
+		if route == "" {
+			route = r.Method + " unknown"
+		}
+		s.ctrl.AuditMutation(r.Method, route, r.PathValue("id"), string(role), clientIP(r), rw.status, time.Since(start))
+	})
 }
 
 // authCheck returns 200 once a request reaches it — the auth middleware has
@@ -424,13 +616,24 @@ func logTail(r *http.Request) int {
 			tail = n
 		}
 	}
+	if tail < 0 {
+		return 0
+	}
+	if tail > 5000 {
+		return 5000
+	}
 	return tail
 }
+
+const (
+	maxWorkflowBody  = 4 << 20
+	maxSavepointBody = 1 << 16
+)
 
 // readWorkflow extracts a workflow doc (+ optional env) from a request:
 // a JSON envelope {"workflow","env"} or a raw workflow body.
 func readWorkflow(r *http.Request) (doc []byte, env map[string]string, refs map[string]store.SecretRef, err error) {
-	body, err := io.ReadAll(io.LimitReader(r.Body, 4<<20)) // 4 MiB cap
+	body, err := readLimited(r.Body, maxWorkflowBody)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("read body: %w", err)
 	}
@@ -449,7 +652,7 @@ func readWorkflow(r *http.Request) (doc []byte, env map[string]string, refs map[
 func (s *Server) validate(w http.ResponseWriter, r *http.Request) {
 	doc, env, _, err := readWorkflow(r)
 	if err != nil {
-		writeErr(w, http.StatusBadRequest, err.Error())
+		writeErr(w, statusForError(err), err.Error())
 		return
 	}
 	if len(doc) == 0 {
@@ -469,7 +672,7 @@ func (s *Server) validate(w http.ResponseWriter, r *http.Request) {
 func (s *Server) submit(w http.ResponseWriter, r *http.Request) {
 	doc, env, refs, err := readWorkflow(r)
 	if err != nil {
-		writeErr(w, http.StatusBadRequest, err.Error())
+		writeErr(w, statusForError(err), err.Error())
 		return
 	}
 	if len(doc) == 0 {
@@ -549,7 +752,7 @@ func (s *Server) restart(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	label, err := savepointLabel(r)
 	if err != nil {
-		writeErr(w, http.StatusBadRequest, err.Error())
+		writeErr(w, statusForError(err), err.Error())
 		return
 	}
 
@@ -575,7 +778,7 @@ func (s *Server) restart(w http.ResponseWriter, r *http.Request) {
 func (s *Server) savepoint(w http.ResponseWriter, r *http.Request) {
 	label, err := savepointLabel(r)
 	if err != nil {
-		writeErr(w, http.StatusBadRequest, err.Error())
+		writeErr(w, statusForError(err), err.Error())
 		return
 	}
 	if label == "" {
@@ -598,7 +801,7 @@ func savepointLabel(r *http.Request) (string, error) {
 	if r.Body == nil {
 		return "", nil
 	}
-	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<16))
+	body, err := readLimited(r.Body, maxSavepointBody)
 	if err != nil {
 		return "", err
 	}
@@ -619,12 +822,7 @@ func savepointLabel(r *http.Request) (string, error) {
 }
 
 func (s *Server) logs(w http.ResponseWriter, r *http.Request) {
-	tail := 200
-	if t := r.URL.Query().Get("tail"); t != "" {
-		if n, err := strconv.Atoi(t); err == nil {
-			tail = n
-		}
-	}
+	tail := logTail(r)
 	out, err := s.ctrl.Logs(r.Context(), r.PathValue("id"), tail)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
@@ -633,6 +831,20 @@ func (s *Server) logs(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	_, _ = io.WriteString(w, out)
+}
+
+var errBodyTooLarge = errors.New("body too large")
+
+func readLimited(r io.Reader, max int64) ([]byte, error) {
+	lr := io.LimitReader(r, max+1)
+	body, err := io.ReadAll(lr)
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(body)) > max {
+		return nil, errBodyTooLarge
+	}
+	return body, nil
 }
 
 // proxy forwards to a path on the job's live container control surface.
@@ -676,4 +888,11 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 
 func writeErr(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, map[string]string{"error": msg})
+}
+
+func statusForError(err error) int {
+	if errors.Is(err, errBodyTooLarge) {
+		return http.StatusRequestEntityTooLarge
+	}
+	return http.StatusBadRequest
 }
