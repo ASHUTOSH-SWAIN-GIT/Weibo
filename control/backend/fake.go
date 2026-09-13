@@ -11,9 +11,10 @@ import (
 // records launches and lets a test drive each container's phase without
 // Docker. Safe for concurrent use.
 type Fake struct {
-	mu         sync.Mutex
-	seq        int
-	containers map[string]*fakeContainer
+	mu          sync.Mutex
+	seq         int
+	containers  map[string]*fakeContainer
+	dataDeleted map[string]bool
 	// LaunchErr, if set, makes the next Launch fail (then clears).
 	LaunchErr error
 }
@@ -85,6 +86,25 @@ func (f *Fake) Remove(ctx context.Context, id string) error {
 		c.removed = true
 	}
 	return nil
+}
+
+// DeleteJobData records durable-state deletion for assertions. The fake
+// has no real volumes; it just tracks which job IDs were wiped.
+func (f *Fake) DeleteJobData(ctx context.Context, jobID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.dataDeleted == nil {
+		f.dataDeleted = map[string]bool{}
+	}
+	f.dataDeleted[jobID] = true
+	return nil
+}
+
+// DataDeleted reports whether DeleteJobData was called for jobID.
+func (f *Fake) DataDeleted(jobID string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.dataDeleted[jobID]
 }
 
 func (f *Fake) Capacity(ctx context.Context, cfg CapacityConfig) (CapacitySnapshot, error) {

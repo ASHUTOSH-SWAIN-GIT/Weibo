@@ -281,6 +281,77 @@ func (s *SQLite) ActiveRuns() ([]*Run, error) {
 	return collectRuns(rows)
 }
 
+func (s *SQLite) PruneTerminalRuns(jobID string, keep int) (int64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if keep < 0 {
+		keep = 0
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return 0, err
+	}
+	ids := []string{}
+	if keep <= 0 {
+		rows, err := tx.Query(`SELECT id FROM runs WHERE job_id=? AND stopped_at IS NOT NULL`, jobID)
+		if err != nil {
+			_ = tx.Rollback()
+			return 0, err
+		}
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				rows.Close()
+				_ = tx.Rollback()
+				return 0, err
+			}
+			ids = append(ids, id)
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			_ = tx.Rollback()
+			return 0, err
+		}
+	} else {
+		rows, err := tx.Query(
+			`SELECT id FROM runs WHERE job_id=? AND stopped_at IS NOT NULL
+			 ORDER BY started_at DESC LIMIT -1 OFFSET ?`, jobID, keep)
+		if err != nil {
+			_ = tx.Rollback()
+			return 0, err
+		}
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				rows.Close()
+				_ = tx.Rollback()
+				return 0, err
+			}
+			ids = append(ids, id)
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			_ = tx.Rollback()
+			return 0, err
+		}
+	}
+	var deleted int64
+	for _, id := range ids {
+		if _, err := tx.Exec(`DELETE FROM transitions WHERE run_id=?`, id); err != nil {
+			_ = tx.Rollback()
+			return 0, err
+		}
+		res, err := tx.Exec(`DELETE FROM runs WHERE id=?`, id)
+		if err != nil {
+			_ = tx.Rollback()
+			return 0, err
+		}
+		n, _ := res.RowsAffected()
+		deleted += n
+	}
+	return deleted, tx.Commit()
+}
+
 func (s *SQLite) AppendTransition(t *Transition) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

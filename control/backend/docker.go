@@ -360,6 +360,25 @@ func (d *Docker) Remove(ctx context.Context, id string) error {
 	return err
 }
 
+// DeleteJobData removes the job's named data volume (weibo-<jobID>),
+// which holds checkpoints and Pebble state. The shared savepoints volume
+// is never touched here. Missing volumes are not an error.
+func (d *Docker) DeleteJobData(ctx context.Context, jobID string) error {
+	if jobID == "" {
+		return fmt.Errorf("docker: delete data: empty job id")
+	}
+	err := d.cli.VolumeRemove(ctx, "weibo-"+jobID, false)
+	if err != nil && !client.IsErrNotFound(err) {
+		// VolumeRemove reports "no such volume" as a plain error on some
+		// daemon versions — treat any not-found wording as success.
+		if strings.Contains(strings.ToLower(err.Error()), "no such volume") {
+			return nil
+		}
+		return fmt.Errorf("docker: remove volume weibo-%s: %w", jobID, err)
+	}
+	return nil
+}
+
 func (d *Docker) Capacity(ctx context.Context, cfg CapacityConfig) (CapacitySnapshot, error) {
 	now := time.Now().UTC()
 	snap := CapacitySnapshot{

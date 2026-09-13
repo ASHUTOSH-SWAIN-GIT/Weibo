@@ -127,7 +127,7 @@ Notes for the Kubernetes backend:
 | `POST /jobs`                  | Submit a workflow. Body: raw YAML, or JSON `{"workflow": "...", "env": {...}, "envRefs": {...}}` to pass launch env and durable secret refs. Validated (dry-run compile) before launch. |
 | `GET  /jobs`                  | List jobs. |
 | `GET  /jobs/{id}`             | Job detail: job + latest run + transition log. |
-| `DELETE /jobs/{id}`           | Stop/remove known backend run resources, then delete job/run/history rows. Durable state volumes/savepoints are preserved. |
+| `DELETE /jobs/{id}`           | Stop/remove known backend run resources, then delete job/run/history rows. Durable state volumes/savepoints are preserved unless `?deleteData=true` (wipes the Docker volume / K8s PVC irreversibly). |
 | `POST /jobs/{id}/cancel`      | Graceful stop; desired state → stopped. |
 | `POST /jobs/{id}/restart`     | Stop any live run and launch a fresh one. Body `{"savepoint":"<label>"}` resumes from a savepoint. |
 | `POST /jobs/{id}/savepoint`   | Stop-with-savepoint. Label via `?label=` or body `{"label":"..."}`. |
@@ -220,11 +220,15 @@ Two safeguards keep exactly-once intact when a job restarts:
 - **Deletion cleans run resources first.** `DELETE /jobs/{id}` stops/removes
   every known backend run resource before deleting store history. Docker
   containers and Kubernetes per-run Jobs/Services/ConfigMaps/Secrets are
-  removed; durable volumes/savepoints are intentionally kept until explicit
-  destructive GC exists.
+  removed; durable volumes/PVCs/savepoints are kept unless
+  `?deleteData=true`. Restarts remove the previous attempt's backend
+  resource, terminal-run history is retained bounded (newest 5 by default),
+  and a startup orphan sweep removes exited backend resources the store no
+  longer references (running unknowns are reported, never removed).
 - **Health checks are dependency-aware.** `/livez` reports the controller
   process is alive. `/readyz` verifies the store and selected backend are
   reachable without exposing credentials or internal addresses.
-- Submit-time validation compiles the workflow in a throwaway data dir, so a
-  Postgres sink is checked by opening its pool — an unreachable database fails
-  the submit.
+- Submit-time validation compiles the workflow in a throwaway data dir without
+  side effects: no pools are opened and no connections are made, so an
+  unreachable database does not fail the submit (connectivity is a runtime
+  concern, surfaced in run state).

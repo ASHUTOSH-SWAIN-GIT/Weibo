@@ -238,7 +238,8 @@ func (s *Server) get(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) delete(w http.ResponseWriter, r *http.Request) {
-	if err := s.ctrl.Delete(r.Context(), r.PathValue("id")); err != nil {
+	opts := control.DeleteOptions{DeleteData: r.URL.Query().Get("deleteData") == "true"}
+	if err := s.ctrl.DeleteWithOptions(r.Context(), r.PathValue("id"), opts); err != nil {
 		writeErr(w, http.StatusNotFound, err.Error())
 		return
 	}

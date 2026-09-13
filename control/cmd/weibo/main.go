@@ -50,6 +50,8 @@ func main() {
 		os.Exit(runRestart(os.Args[2:]))
 	case "savepoint":
 		os.Exit(runSavepoint(os.Args[2:]))
+	case "delete":
+		os.Exit(runDelete(os.Args[2:]))
 	case "-h", "--help", "help":
 		usage()
 	default:
@@ -70,7 +72,8 @@ Usage:
   weibo logs <job-id> [-tail N]        Print a job's container logs
   weibo cancel <job-id>                Gracefully stop a job
   weibo restart <job-id> [-savepoint]  Resume a job (optionally from a savepoint)
-  weibo savepoint <job-id> -label N    Stop a job with a named savepoint
+   weibo savepoint <job-id> -label N    Stop a job with a named savepoint
+   weibo delete <job-id> [-delete-data]  Delete a job (optionally with its durable state)
 
 Management commands talk to a controller over REST (env WEIBO_CONTROLLER,
 default http://localhost:9000). Run "weibo <command> -h" for flags.
@@ -127,6 +130,17 @@ func runDashboard(args []string) int {
 		},
 		Logf: log.Printf,
 	})
+	// Recover labeled backend orphans left by crashed deletes/removes
+	// before serving. A sweep failure is logged, never fatal: the
+	// reconciler still converges live runs.
+	sweepCtx, sweepCancel := context.WithTimeout(ctx, 30*time.Second)
+	if rep, err := ctrl.SweepOrphans(sweepCtx); err != nil {
+		log.Printf("weibo dashboard: startup orphan sweep failed: %v", err)
+	} else if len(rep.Removed) > 0 || len(rep.RunningOrphans) > 0 {
+		log.Printf("weibo dashboard: startup orphan sweep removed=%d running-unknowns=%d",
+			len(rep.Removed), len(rep.RunningOrphans))
+	}
+	sweepCancel()
 	go ctrl.RunReconciler(ctx, *interval)
 
 	srv := &http.Server{Addr: *addr, Handler: api.NewServer(ctrl, *authToken).Handler()}

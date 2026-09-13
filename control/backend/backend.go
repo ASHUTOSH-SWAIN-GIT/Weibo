@@ -179,6 +179,12 @@ type ContainerBackend interface {
 	Logs(ctx context.Context, containerID string, tail int) (string, error)
 	// Remove deletes the container (not its data volume).
 	Remove(ctx context.Context, containerID string) error
+	// DeleteJobData deletes a job's durable state: the Docker named
+	// volume (weibo-<jobID>) or the Kubernetes PVC (weibo-<jobID>-data).
+	// It never touches containers or the shared savepoint volume — call
+	// Remove/Stop for those. Destructive by design: the controller only
+	// calls it on explicit user request (job deletion with deleteData).
+	DeleteJobData(ctx context.Context, jobID string) error
 	// Capacity reports backend health and job-slot capacity.
 	Capacity(ctx context.Context, cfg CapacityConfig) (CapacitySnapshot, error)
 }

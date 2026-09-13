@@ -115,6 +115,12 @@ type Store interface {
 	// the job has never been launched.
 	LatestRun(jobID string) (*Run, error)
 	ListRuns(jobID string) ([]*Run, error)
+	// PruneTerminalRuns deletes terminal runs (stopped_at NOT NULL) for a
+	// job, keeping the newest keep rows plus every active run (which is
+	// never deleted). Transitions belonging to pruned runs are deleted
+	// too. keep <= 0 keeps all terminal runs. It returns the number of
+	// runs deleted.
+	PruneTerminalRuns(jobID string, keep int) (int64, error)
 	// ActiveRuns returns every non-terminal run across all jobs — the set
 	// the reconciler must watch.
 	ActiveRuns() ([]*Run, error)

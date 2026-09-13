@@ -171,6 +171,28 @@ func runRestart(args []string) int {
 	return 0
 }
 
+// runDelete deletes a job and its run history. Without -delete-data the
+// job's durable state (checkpoints/Pebble/savepoints volume or PVC) is
+// preserved for a same-ID recreate; -delete-data wipes it irreversibly.
+func runDelete(args []string) int {
+	fs := flag.NewFlagSet("delete", flag.ContinueOnError)
+	controller, token := controllerFlags(fs)
+	deleteData := fs.Bool("delete-data", false, "also delete durable state (checkpoints/state/savepoints volume or PVC)")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	id := fs.Arg(0)
+	if id == "" {
+		fmt.Fprintln(os.Stderr, "usage: weibo delete <job-id> [-delete-data] [flags]")
+		return 2
+	}
+	if err := newClient(*controller, *token).deleteJob(context.Background(), id, *deleteData); err != nil {
+		return fail(err)
+	}
+	fmt.Printf("deleted %s\n", id)
+	return 0
+}
+
 // runSavepoint triggers a stop-with-savepoint.
 func runSavepoint(args []string) int {
 	fs := flag.NewFlagSet("savepoint", flag.ContinueOnError)

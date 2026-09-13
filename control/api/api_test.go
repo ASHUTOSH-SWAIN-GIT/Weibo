@@ -361,6 +361,31 @@ func TestDeleteJob(t *testing.T) {
 	}
 }
 
+func TestDeleteJobWithDeleteDataFlag(t *testing.T) {
+	fake := backend.NewFake()
+	ctrl := control.New(control.Options{
+		Store: mustStore(t), Backend: fake, Image: "img", StopTimeout: time.Second,
+	})
+	srv := newAPIWithController(t, ctrl)
+	resp, _ := http.Post(srv.URL+"/jobs", "application/yaml", strings.NewReader(sdkJob))
+	var job store.Job
+	json.NewDecoder(resp.Body).Decode(&job)
+	resp.Body.Close()
+
+	req, _ := http.NewRequest(http.MethodDelete, srv.URL+"/jobs/"+job.ID+"?deleteData=true", nil)
+	resp, err := srv.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("delete: got %d, want 202", resp.StatusCode)
+	}
+	if !fake.DataDeleted(job.ID) {
+		t.Error("?deleteData=true should wipe durable state")
+	}
+}
+
 func TestReadinessReportsBackendOutage(t *testing.T) {
 	ctrl := control.New(control.Options{
 		Store:       mustStore(t),

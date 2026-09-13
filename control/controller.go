@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -40,8 +41,13 @@ type Options struct {
 	Secrets     SecretProvider          // default: environment-backed references
 	StopTimeout time.Duration           // graceful stop wait (default 30s)
 	Capacity    backend.CapacityConfig
-	NewID       func() string        // override for deterministic tests
-	Logf        func(string, ...any) // optional logger
+	// TerminalRunRetention bounds per-job history: after a run reaches a
+	// terminal phase, terminal runs beyond the newest TerminalRunRetention
+	// are pruned (backend container removed, run row + transitions
+	// deleted). Default 5 when zero; negative keeps everything.
+	TerminalRunRetention int
+	NewID                func() string        // override for deterministic tests
+	Logf                 func(string, ...any) // optional logger
 }
 
 // Controller ties the store, backend, and lifecycle rules together.
@@ -54,6 +60,7 @@ type Controller struct {
 	secretStore SecretProvider
 	stopTimeout time.Duration
 	capacity    backend.CapacityConfig
+	retention   int
 	newID       func() string
 	logf        func(string, ...any)
 	httpc       *http.Client // talks to job agents (savepoint trigger)
@@ -64,6 +71,11 @@ type Controller struct {
 	jobLocksMu sync.Mutex
 	jobLocks   map[string]*sync.Mutex
 }
+
+// DefaultTerminalRunRetention is the per-job terminal-run history kept
+// when Options.TerminalRunRetention is zero: the newest five terminal
+// runs (and their backend containers) survive; older ones are pruned.
+const DefaultTerminalRunRetention = 5
 
 // New builds a Controller, applying defaults.
 func New(opts Options) *Controller {
@@ -93,6 +105,14 @@ func New(opts Options) *Controller {
 	}
 	if c.stopTimeout == 0 {
 		c.stopTimeout = 30 * time.Second
+	}
+	// DefaultTerminalRunRetention bounds per-job run history when the
+	// caller leaves Options.TerminalRunRetention at zero. Negative
+	// disables pruning entirely.
+	if opts.TerminalRunRetention == 0 {
+		c.retention = DefaultTerminalRunRetention
+	} else {
+		c.retention = opts.TerminalRunRetention
 	}
 	if c.capacity.DefaultJobCPU == "" {
 		c.capacity.DefaultJobCPU = "1"
@@ -309,11 +329,25 @@ func (c *Controller) Cancel(ctx context.Context, jobID string) error {
 	return c.finishRun(run, lifecycle.Phase(run.Phase), lifecycle.Cancelled, "user cancel")
 }
 
+// DeleteOptions controls job deletion. DeleteData requests destructive
+// removal of the job's durable state (Docker volume / Kubernetes PVC,
+// including same-job savepoints under it) in addition to the default
+// container/history cleanup. It defaults to false: deletion preserves
+// durable state so a same-ID job recreated later can still recover.
+type DeleteOptions struct {
+	DeleteData bool
+}
+
 // Delete stops/removes all known backend resources for a job, then removes the
 // job, runs, and transition history from the store. Per-job durable state
-// volumes/savepoints are intentionally preserved by current backends; destructive
-// state deletion will be an explicit GC option rather than the default.
+// volumes/PVCs/savepoints are preserved unless DeleteData is requested via
+// DeleteWithOptions.
 func (c *Controller) Delete(ctx context.Context, jobID string) error {
+	return c.DeleteWithOptions(ctx, jobID, DeleteOptions{})
+}
+
+// DeleteWithOptions is Delete with explicit destructive-state control.
+func (c *Controller) DeleteWithOptions(ctx context.Context, jobID string, opts DeleteOptions) error {
 	if _, err := c.store.GetJob(jobID); err != nil {
 		return err
 	}
@@ -340,6 +374,14 @@ func (c *Controller) Delete(ctx context.Context, jobID string) error {
 	}
 	if len(errs) > 0 {
 		return errors.Join(errs...)
+	}
+	if opts.DeleteData {
+		// Explicit and destructive: drop checkpoints, Pebble state, and
+		// same-job savepoints. The store row is kept on failure so the
+		// deletion can be retried.
+		if err := c.backend.DeleteJobData(ctx, jobID); err != nil {
+			return fmt.Errorf("delete job data: %w", err)
+		}
 	}
 	c.mu.Lock()
 	delete(c.secrets, jobID)
@@ -374,8 +416,18 @@ func (c *Controller) doRestart(ctx context.Context, jobID, restore string) (*sto
 		return nil, err
 	}
 	if run != nil && run.Stopped == nil {
+		stoppedID := run.ContainerID
 		if err := c.backend.Stop(ctx, run.ContainerID, c.stopTimeout); err != nil {
 			return job, fmt.Errorf("restart: stop run %s: %w", run.ID, err)
+		}
+		// Remove the stopped container now so restarts do not accumulate
+		// one exited container (Docker) or Job/Service/ConfigMap/Secret
+		// set (Kubernetes) per attempt. Best effort: a failed remove is
+		// logged and retried by retention pruning / SweepOrphans.
+		if stoppedID != "" {
+			if err := c.backend.Remove(ctx, stoppedID); err != nil {
+				c.logf("job %s: restart remove old container %s: %v", jobID, stoppedID, err)
+			}
 		}
 		if err := c.finishRun(run, lifecycle.Phase(run.Phase), lifecycle.Cancelled, "restart"); err != nil {
 			return job, fmt.Errorf("restart: finish run %s: %w", run.ID, err)
@@ -647,13 +699,54 @@ func (c *Controller) markLaunchRecordFailure(run *store.Run, cause error) error 
 	return c.store.UpdateRun(run)
 }
 
-// finishRun marks a run terminal in the store and logs the transition.
+// finishRun marks a run terminal in the store and logs the transition,
+// then prunes terminal-run history beyond the retention bound.
 func (c *Controller) finishRun(run *store.Run, from, to lifecycle.Phase, reason string) error {
 	now := time.Now().UTC()
 	run.Phase = string(to)
 	run.Stopped = &now
 	run.RestartAt = nil
-	return c.store.UpdateRunWithTransition(run, transitionRecord(run.JobID, run.ID, from, to, reason))
+	if err := c.store.UpdateRunWithTransition(run, transitionRecord(run.JobID, run.ID, from, to, reason)); err != nil {
+		return err
+	}
+	c.pruneTerminalRuns(context.Background(), run.JobID)
+	return nil
+}
+
+// pruneTerminalRuns removes backend containers and store rows for terminal
+// runs beyond the retention bound (newest first). Best effort: failures are
+// logged for SweepOrphans to recover, never propagated.
+func (c *Controller) pruneTerminalRuns(ctx context.Context, jobID string) {
+	if c.retention < 0 {
+		return
+	}
+	runs, err := c.store.ListRuns(jobID)
+	if err != nil {
+		c.logf("job %s: prune history: %v", jobID, err)
+		return
+	}
+	var terminal []*store.Run
+	for _, r := range runs {
+		if r.Stopped != nil {
+			terminal = append(terminal, r)
+		}
+	}
+	if len(terminal) <= c.retention {
+		return
+	}
+	sort.Slice(terminal, func(i, j int) bool {
+		return terminal[i].Started.After(terminal[j].Started)
+	})
+	for _, victim := range terminal[c.retention:] {
+		if victim.ContainerID != "" {
+			if err := c.backend.Remove(ctx, victim.ContainerID); err != nil {
+				c.logf("job %s: prune remove container %s: %v", jobID, victim.ContainerID, err)
+			}
+		}
+	}
+	if _, err := c.store.PruneTerminalRuns(jobID, c.retention); err != nil {
+		c.logf("job %s: prune history: %v", jobID, err)
+	}
 }
 
 func (c *Controller) blockRun(job *store.Job, run *store.Run, from lifecycle.Phase, reason string) error {

@@ -719,6 +719,189 @@ func TestScheduledRestartSurvivesControllerRestart(t *testing.T) {
 	}
 }
 
+// A restart removes the previous attempt's backend resource instead of
+// leaking one exited container (Docker) or Job/Service/ConfigMap/Secret
+// set (Kubernetes) per restart.
+func TestRestartRemovesOldContainer(t *testing.T) {
+	fake := backend.NewFake()
+	c, _ := newController(t, fake, lifecycle.DefaultRestartPolicy())
+	job, err := c.Submit(context.Background(), []byte(validSDKManifest), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, _ := c.LatestRun(job.ID)
+
+	if _, err := c.Restart(context.Background(), job.ID); err != nil {
+		t.Fatalf("Restart: %v", err)
+	}
+	st, err := fake.Status(context.Background(), first.ContainerID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Phase != backend.PhaseGone {
+		t.Fatalf("old container should be removed on restart, got %q", st.Phase)
+	}
+}
+
+// Deletion preserves durable state by default and wipes it only on
+// explicit request — checkpoints/Pebble/savepoints survive an
+// accidental delete unless the operator opts into destruction.
+func TestDeletePreservesDataByDefault(t *testing.T) {
+	fake := backend.NewFake()
+	c, _ := newController(t, fake, lifecycle.DefaultRestartPolicy())
+	job, err := c.Submit(context.Background(), []byte(validSDKManifest), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Delete(context.Background(), job.ID); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if fake.DataDeleted(job.ID) {
+		t.Error("default Delete must preserve durable state")
+	}
+}
+
+func TestDeleteWithOptionsDeletesData(t *testing.T) {
+	fake := backend.NewFake()
+	c, _ := newController(t, fake, lifecycle.DefaultRestartPolicy())
+	job, err := c.Submit(context.Background(), []byte(validSDKManifest), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.DeleteWithOptions(context.Background(), job.ID, control.DeleteOptions{DeleteData: true}); err != nil {
+		t.Fatalf("DeleteWithOptions: %v", err)
+	}
+	if !fake.DataDeleted(job.ID) {
+		t.Error("DeleteData=true should wipe durable state")
+	}
+	if _, err := c.GetJob(job.ID); err == nil {
+		t.Error("job row should be deleted")
+	}
+}
+
+// Terminal-run history is bounded: cancelling past the retention bound
+// removes the oldest backend container and its store rows + transitions.
+func TestTerminalRunRetentionPrunesHistory(t *testing.T) {
+	fake := backend.NewFake()
+	st := openStore(t)
+	c := control.New(control.Options{
+		Store: st, Backend: fake, Image: "img", StopTimeout: time.Second,
+		TerminalRunRetention: 1,
+	})
+	job, err := c.Submit(context.Background(), []byte(validSDKManifest), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, _ := c.LatestRun(job.ID)
+	firstContainer := first.ContainerID
+
+	if err := c.Cancel(context.Background(), job.ID); err != nil {
+		t.Fatalf("Cancel: %v", err)
+	}
+	if _, err := c.Restart(context.Background(), job.ID); err != nil {
+		t.Fatalf("Restart: %v", err)
+	}
+	if err := c.Cancel(context.Background(), job.ID); err != nil {
+		t.Fatalf("Cancel: %v", err)
+	}
+
+	// Two terminal runs existed; retention=1 keeps only the newest.
+	runs, err := st.ListRuns(job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	terminal := 0
+	for _, r := range runs {
+		if r.Stopped != nil {
+			terminal++
+		}
+	}
+	if terminal != 1 {
+		t.Fatalf("expected 1 terminal run after pruning, got %d: %+v", terminal, runs)
+	}
+	if _, err := st.GetRun(first.ID); err == nil {
+		t.Error("oldest terminal run should be pruned from the store")
+	}
+	if st, _ := fake.Status(context.Background(), firstContainer); st.Phase != backend.PhaseGone {
+		t.Errorf("pruned run's container should be removed, got %q", st.Phase)
+	}
+	for _, tr := range mustTransitions(t, c, job.ID) {
+		if tr.RunID == first.ID {
+			t.Errorf("pruned run's transitions should be deleted: %+v", tr)
+		}
+	}
+}
+
+// SweepOrphans removes exited backend resources the store no longer
+// references (deleted jobs, failed removes) and reports — but never
+// touches — running unknowns.
+func TestSweepOrphans(t *testing.T) {
+	fake := backend.NewFake()
+	st := openStore(t)
+	c := control.New(control.Options{
+		Store: st, Backend: fake, Image: "img", StopTimeout: time.Second,
+	})
+	job, err := c.Submit(context.Background(), []byte(validSDKManifest), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	live, _ := c.LatestRun(job.ID)
+
+	ghost, err := fake.Launch(context.Background(), backend.LaunchSpec{JobID: "ghost", Name: "ghost", Image: "img"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fake.SetPhase(ghost, backend.PhaseExited, 0)
+	stale, err := fake.Launch(context.Background(), backend.LaunchSpec{JobID: job.ID, Name: job.Name, Image: "img"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fake.SetPhase(stale, backend.PhaseExited, 0)
+	runningUnknown, err := fake.Launch(context.Background(), backend.LaunchSpec{JobID: "ghost-live", Name: "ghost-live", Image: "img"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rep, err := c.SweepOrphans(context.Background())
+	if err != nil {
+		t.Fatalf("SweepOrphans: %v", err)
+	}
+	removed := map[string]bool{}
+	for _, id := range rep.Removed {
+		removed[id] = true
+	}
+	if !removed[ghost] || !removed[stale] {
+		t.Errorf("exited orphans should be removed, got %+v", rep.Removed)
+	}
+	found := false
+	for _, id := range rep.RunningOrphans {
+		if id == runningUnknown {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("running unknown should be reported, got %+v", rep.RunningOrphans)
+	}
+	if removed[live.ContainerID] {
+		t.Error("referenced live container must not be swept")
+	}
+	if st, _ := fake.Status(context.Background(), live.ContainerID); st.Phase != backend.PhaseRunning {
+		t.Errorf("referenced container disturbed: %q", st.Phase)
+	}
+	if st, _ := fake.Status(context.Background(), runningUnknown); st.Phase != backend.PhaseRunning {
+		t.Errorf("running unknown must be left alone, got %q", st.Phase)
+	}
+}
+
+func mustTransitions(t *testing.T, c *control.Controller, jobID string) []*store.Transition {
+	t.Helper()
+	ts, err := c.Transitions(jobID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return ts
+}
+
 // The store is the source of truth: a fresh Controller over the same store
 // re-attaches to a still-running container via Reconcile — no state lost
 // across a controller restart.

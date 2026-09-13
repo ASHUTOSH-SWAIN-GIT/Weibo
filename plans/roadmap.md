@@ -118,12 +118,26 @@ Add a `SecretProvider` abstraction with environment and Kubernetes Secret
 references. Never return resolved values. If references cannot resolve, place
 the job in an explicit blocked state instead of launching incomplete.
 
-### 8. Add backend resource garbage collection
+### 8. Add backend resource garbage collection — ✅ DONE
 
-Implement job deletion and retention for stopped containers, Kubernetes Jobs,
-Services, ConfigMaps, per-run Secrets, Docker volumes, PVCs, logs, savepoints,
-and database history. Make PVC/savepoint deletion explicit and recover labeled
-backend orphans at startup.
+**Finding:** restarts stopped the old container without removing it (one
+leaked exited container / Job+Service+ConfigMap+Secret set per attempt),
+durable volumes/PVCs had no deletion path at all, terminal-run rows grew
+without bound, and labeled backend resources with no store reference were
+never reclaimed.
+
+**Shipped:** restarts remove the previous attempt's backend resource;
+`DELETE /jobs/{id}` gains `?deleteData=true` (plus `weibo delete
+-delete-data` and `Controller.DeleteWithOptions`) that wipes the Docker
+volume / K8s PVC — default deletion still preserves durable state;
+terminal-run history is bounded (`TerminalRunRetention`, default 5 newest,
+backend container + rows + transitions pruned via
+`store.PruneTerminalRuns`); `Controller.SweepOrphans` removes exited
+managed resources the store no longer references at dashboard startup
+(running unknowns are reported, never removed).
+
+**Exit criteria:** restart-leak, preserve-by-default/explicit-wipe,
+retention-bound, and orphan-sweep unit tests; k8s-tagged backend suite green.
 
 ### 9. Make controller health dependency-aware
 

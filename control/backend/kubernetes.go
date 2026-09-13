@@ -569,6 +569,20 @@ func (k *Kubernetes) Remove(ctx context.Context, id string) error {
 	return k.cleanup(ctx, id)
 }
 
+// DeleteJobData deletes the job's PVC (weibo-<jobID>-data), which holds
+// checkpoints, Pebble state, and same-job savepoints. Missing PVCs are
+// not an error. Never called implicitly — only on explicit user request.
+func (k *Kubernetes) DeleteJobData(ctx context.Context, jobID string) error {
+	if jobID == "" {
+		return fmt.Errorf("k8s: delete data: empty job id")
+	}
+	err := k.cs.CoreV1().PersistentVolumeClaims(k.namespace).Delete(ctx, "weibo-"+jobID+"-data", metav1.DeleteOptions{})
+	if apierrors.IsNotFound(err) {
+		return nil
+	}
+	return err
+}
+
 // cleanup best-effort deletes a run's Job, Service, ConfigMap, and Secret
 // (the per-job PVC is kept so state survives).
 func (k *Kubernetes) cleanup(ctx context.Context, run string) error {

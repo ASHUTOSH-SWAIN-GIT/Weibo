@@ -53,6 +53,10 @@ func (k *Kubernetes) Remove(ctx context.Context, containerID string) error {
 	return fmt.Errorf("kubernetes backend not included; build with -tags kubernetes")
 }
 
+func (k *Kubernetes) DeleteJobData(ctx context.Context, jobID string) error {
+	return fmt.Errorf("kubernetes backend not included; build with -tags kubernetes")
+}
+
 func (k *Kubernetes) Capacity(ctx context.Context, cfg CapacityConfig) (CapacitySnapshot, error) {
 	return CapacitySnapshot{
 		Backend:     "kubernetes",

@@ -171,6 +171,80 @@ func TestOnlyOneActiveRunPerJob(t *testing.T) {
 	}
 }
 
+func TestPruneTerminalRuns(t *testing.T) {
+	s := open(t)
+	j := &store.Job{ID: "j", Name: "n", Spec: "x", Desired: store.DesiredRunning, Created: time.Now(), Updated: time.Now()}
+	if err := s.CreateJob(j); err != nil {
+		t.Fatal(err)
+	}
+	base := time.Now().UTC()
+	seq := 0
+	mkRun := func(id string, stopped bool) {
+		seq++
+		r := &store.Run{ID: id, JobID: "j", ContainerID: "c-" + id, Phase: "running", Attempt: 1, Started: base.Add(time.Duration(seq) * time.Second)}
+		if err := s.CreateRun(r); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.AppendTransition(&store.Transition{JobID: "j", RunID: id, From: "a", To: "b", At: time.Now()}); err != nil {
+			t.Fatal(err)
+		}
+		if stopped {
+			finished := base.Add(time.Hour)
+			r.Phase, r.Stopped = "finished", &finished
+			if err := s.UpdateRun(r); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	// r1 stays active (oldest Started); r2..r4 are terminal, r4 newest.
+	// Terminals are created first so the one-active-run constraint is
+	// never violated mid-test; Started values still order r1 oldest.
+	mkRun("r2", true)
+	mkRun("r3", true)
+	mkRun("r4", true)
+	mkRun("r1", false)
+	r1, err := s.GetRun("r1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	older := base.Add(-time.Hour)
+	r1.Started = older
+	if err := s.UpdateRun(r1); err != nil {
+		t.Fatal(err)
+	}
+
+	deleted, err := s.PruneTerminalRuns("j", 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deleted != 1 {
+		t.Fatalf("deleted=%d, want 1 (oldest terminal r2)", deleted)
+	}
+	runs, err := s.ListRuns("j")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := map[string]bool{}
+	for _, r := range runs {
+		ids[r.ID] = true
+	}
+	if len(runs) != 3 || !ids["r1"] || !ids["r3"] || !ids["r4"] {
+		t.Fatalf("wrong survivors: %+v", runs)
+	}
+	ts, err := s.ListTransitions("j")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tr := range ts {
+		if tr.RunID == "r2" {
+			t.Fatal("transitions of pruned run r2 should be deleted")
+		}
+	}
+	if len(ts) != 3 {
+		t.Fatalf("transitions=%d, want 3", len(ts))
+	}
+}
+
 func TestTransitions(t *testing.T) {
 	s := open(t)
 	j := &store.Job{ID: "j", Name: "n", Spec: "x", Desired: store.DesiredRunning, Created: time.Now(), Updated: time.Now()}

@@ -184,6 +184,17 @@ func (c *client) savepoint(ctx context.Context, id, label string) error {
 	return err
 }
 
+// deleteJob deletes a job. deleteData also wipes its durable state
+// (checkpoints/Pebble/savepoints volume or PVC) — irreversible.
+func (c *client) deleteJob(ctx context.Context, id string, deleteData bool) error {
+	q := ""
+	if deleteData {
+		q = "?deleteData=true"
+	}
+	_, err := c.do(ctx, http.MethodDelete, "/jobs/"+url.PathEscape(id)+q, "", nil)
+	return err
+}
+
 // logs returns the last `tail` lines of the job's container logs as text.
 func (c *client) logs(ctx context.Context, id string, tail int) (string, error) {
 	q := "?tail=" + strconv.Itoa(tail)
