@@ -3,6 +3,12 @@ kind: ServiceAccount
 metadata:
   name: weibo-controller
 ---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: weibo-runner
+automountServiceAccountToken: false
+---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:

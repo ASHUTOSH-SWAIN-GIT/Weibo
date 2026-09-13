@@ -129,6 +129,8 @@ in-cluster controller:
 - `ServiceAccount`, `Role`, and `RoleBinding` with the permissions needed to
   create/read/delete runner Jobs, Services, ConfigMaps, Secrets, PVCs, pod logs,
   and namespace ResourceQuotas.
+- Separate `weibo-runner` ServiceAccount for job pods. It has no RoleBinding and
+  `automountServiceAccountToken: false` by default.
 - `Deployment` for `weibo dashboard -backend kubernetes`.
 - `Service` on port `9000`.
 - `PersistentVolumeClaim` mounted at `/var/lib/weibo` for the SQLite database.
@@ -158,6 +160,36 @@ The manifest intentionally uses `replicas: 1` and a `Recreate` strategy. The
 controller stores job metadata in SQLite on a single `ReadWriteOnce` PVC, so
 running multiple controller replicas is unsafe until Weibo has leader election
 and shared/HA controller storage.
+
+Job pod isolation knobs are configured on the controller:
+
+```sh
+weibo dashboard -backend kubernetes \
+  -job-service-account weibo-runner \
+  -job-runtime-class gvisor \
+  -job-priority-class weibo-low \
+  -job-node-selector workload=weibo \
+  -job-tolerations dedicated=weibo:NoSchedule
+```
+
+SDK manifests can also bound ephemeral storage:
+
+```yaml
+resources:
+  cpu: 500m
+  memory: 512Mi
+  ephemeralStorage: 1Gi
+```
+
+`control/kubernetes-networkpolicy.yaml` contains optional NetworkPolicy
+examples for exposing the controller and allowing controller-to-runner control
+traffic. Apply them only after confirming your CNI enforces NetworkPolicy and
+your cluster has the egress rules your sources/sinks need.
+
+For storage guardrails, set namespace `ResourceQuota` limits for PVC count and
+requested storage, for example `persistentvolumeclaims` and
+`requests.storage`. Weibo sizes each job PVC from `-pvc-size`; a quota rejection
+surfaces as a launch failure instead of silently falling back to ephemeral data.
 
 ## API
 

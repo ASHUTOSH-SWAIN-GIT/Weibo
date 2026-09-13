@@ -235,15 +235,16 @@ type sdkManifest struct {
 	// Env are non-secret environment variables baked into the job. Secret
 	// env supplied via the API at submit time overrides these at launch.
 	Env map[string]string `yaml:"env,omitempty"`
-	// Resources caps CPU/memory as Kubernetes quantity strings.
+	// Resources caps CPU/memory/ephemeral-storage as Kubernetes quantity strings.
 	Resources *resourceSpec `yaml:"resources,omitempty"`
 }
 
-// resourceSpec is the manifest's CPU/memory request, using Kubernetes
-// quantity strings (CPU "500m"/"2", Memory "512Mi"/"1Gi").
+// resourceSpec is the manifest's resource request, using Kubernetes quantity
+// strings (CPU "500m"/"2", Memory/EphemeralStorage "512Mi"/"1Gi").
 type resourceSpec struct {
-	CPU    string `yaml:"cpu,omitempty"`
-	Memory string `yaml:"memory,omitempty"`
+	CPU              string `yaml:"cpu,omitempty"`
+	Memory           string `yaml:"memory,omitempty"`
+	EphemeralStorage string `yaml:"ephemeralStorage,omitempty"`
 }
 
 // parseSDKManifest reports whether doc is an SDK job manifest (kind: sdk).
@@ -273,16 +274,21 @@ func validateResources(r *resourceSpec) error {
 			return fmt.Errorf("invalid resources.memory %q: %w", r.Memory, err)
 		}
 	}
+	if r.EphemeralStorage != "" {
+		if _, err := resource.ParseQuantity(r.EphemeralStorage); err != nil {
+			return fmt.Errorf("invalid resources.ephemeralStorage %q: %w", r.EphemeralStorage, err)
+		}
+	}
 	return nil
 }
 
 // toLimits converts a manifest resourceSpec to a backend ResourceLimits.
 // Nil or fully-empty specs return nil (unlimited).
 func (r *resourceSpec) toLimits() *backend.ResourceLimits {
-	if r == nil || (r.CPU == "" && r.Memory == "") {
+	if r == nil || (r.CPU == "" && r.Memory == "" && r.EphemeralStorage == "") {
 		return nil
 	}
-	return &backend.ResourceLimits{CPU: r.CPU, Memory: r.Memory}
+	return &backend.ResourceLimits{CPU: r.CPU, Memory: r.Memory, EphemeralStorage: r.EphemeralStorage}
 }
 
 // mergeEnv layers override on top of base, returning a new map. Keys in

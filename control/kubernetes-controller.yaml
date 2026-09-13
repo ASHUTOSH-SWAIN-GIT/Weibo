@@ -19,6 +19,16 @@ metadata:
     app.kubernetes.io/part-of: weibo
     app.kubernetes.io/managed-by: weibo
 ---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: weibo-runner
+  labels:
+    app.kubernetes.io/name: weibo-runner
+    app.kubernetes.io/part-of: weibo
+    app.kubernetes.io/managed-by: weibo
+automountServiceAccountToken: false
+---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -132,6 +142,7 @@ spec:
             - -namespace=$(POD_NAMESPACE)
             - -image=$(WEIBO_RUNNER_IMAGE)
             - -db=/var/lib/weibo/control.db
+            - -job-service-account=weibo-runner
             - -log-level=$(WEIBO_LOG_LEVEL)
             - -log-format=$(WEIBO_LOG_FORMAT)
             - -grafana-url=$(WEIBO_GRAFANA_URL)

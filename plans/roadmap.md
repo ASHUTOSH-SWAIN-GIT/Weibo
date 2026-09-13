@@ -270,11 +270,17 @@ controller image, setting `WEIBO_RUNNER_IMAGE`, and the SQLite single-replica
 constraint until leader election/shared storage exists. A manifest test checks
 the production basics.
 
-### 19. Harden job isolation
+### 19. Harden job isolation — ✅ DONE
 
-Add least-privilege service accounts, NetworkPolicies, pod/node placement
-options, priority/runtime classes, ephemeral-storage limits, PVC quotas, and
-safe per-job overrides.
+**Shipped:** Kubernetes runner pods can use a dedicated `weibo-runner`
+ServiceAccount (base manifest creates it with no RoleBinding and token automount
+disabled); runner pods keep non-root/read-only-root/no-privilege-escalation
+defaults; controller flags now expose safe cluster-level placement/isolation
+knobs (`-job-service-account`, `-job-runtime-class`, `-job-priority-class`,
+`-job-node-selector`, `-job-tolerations`); SDK resource specs accept
+`ephemeralStorage` and map it to Kubernetes requests/limits; optional
+NetworkPolicy examples document controller ingress and controller-to-runner
+traffic; docs cover PVC count/storage `ResourceQuota` guidance.
 
 ### 20. Improve Kubernetes operability
 

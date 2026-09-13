@@ -1,0 +1,47 @@
+# Optional NetworkPolicy examples for an in-cluster Weibo install.
+#
+# These policies assume a CNI that enforces networking.k8s.io/NetworkPolicy.
+# Apply after verifying your cluster labels. They intentionally live outside
+# kubernetes-controller.yaml because a namespace-wide default deny can break
+# DNS, image pulls, or external sinks/sources unless your cluster has matching
+# egress allowances.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: weibo-controller-ingress
+  labels:
+    app.kubernetes.io/part-of: weibo
+    app.kubernetes.io/managed-by: weibo
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: weibo-controller
+  policyTypes: ["Ingress"]
+  ingress:
+    - ports:
+        - protocol: TCP
+          port: 9000
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: weibo-runner-control-surface
+  labels:
+    app.kubernetes.io/part-of: weibo
+    app.kubernetes.io/managed-by: weibo
+spec:
+  podSelector:
+    matchExpressions:
+      - key: weibo.job
+        operator: Exists
+  policyTypes: ["Ingress"]
+  ingress:
+    # The controller proxies /state, /metrics, logs, cancellation, and
+    # savepoint requests to runner pods through their per-run Services.
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: weibo-controller
+      ports:
+        - protocol: TCP
+          port: 8080

@@ -28,6 +28,7 @@ import (
 	ctrace "github.com/ASHUTOSH-SWAIN-GIT/weibo/control/trace"
 	wlog "github.com/ASHUTOSH-SWAIN-GIT/weibo/observability/log"
 	teltrace "github.com/ASHUTOSH-SWAIN-GIT/weibo/telemetry/trace"
+	corev1 "k8s.io/api/core/v1"
 )
 
 func main() {
@@ -100,6 +101,11 @@ func runDashboard(args []string) int {
 	pullSecrets := fs.String("image-pull-secrets", "", "comma-separated k8s imagePullSecret names for private registries (kubernetes backend)")
 	pvcSize := fs.String("pvc-size", "1Gi", "per-job PVC size (kubernetes backend)")
 	storageClass := fs.String("storage-class", "", "PVC storage class; empty = cluster default (kubernetes backend)")
+	jobServiceAccount := fs.String("job-service-account", "", "service account assigned to runner pods; empty = namespace default (kubernetes backend)")
+	runtimeClass := fs.String("job-runtime-class", "", "runtimeClassName assigned to runner pods (kubernetes backend)")
+	priorityClass := fs.String("job-priority-class", "", "priorityClassName assigned to runner pods (kubernetes backend)")
+	nodeSelector := fs.String("job-node-selector", "", "comma-separated key=value node selector for runner pods (kubernetes backend)")
+	tolerations := fs.String("job-tolerations", "", "comma-separated tolerations key[=value][:effect], e.g. dedicated=weibo:NoSchedule (kubernetes backend)")
 	controlAddress := fs.String("k8s-control-address-template", "", "agent address template with {service}, {namespace}, {port}; empty = cluster DNS")
 	maxJobs := fs.Int("max-jobs", 0, "maximum concurrent jobs; 0 = resource-limited only")
 	defaultJobCPU := fs.String("default-job-cpu", "1", "default CPU reserved per job for capacity math")
@@ -139,7 +145,18 @@ func runDashboard(args []string) int {
 
 	// Build and preflight the selected backend — a clear message beats a
 	// launch-time failure later.
-	be, rc := makeBackend(ctx, *backendKind, *image, *namespace, *kubeconfig, splitCSV(*pullSecrets), *pvcSize, *storageClass, *controlAddress)
+	ns, err := parseKeyValues(*nodeSelector)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "weibo: -job-node-selector: %v\n", err)
+		return 2
+	}
+	tols, err := parseTolerations(*tolerations)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "weibo: -job-tolerations: %v\n", err)
+		return 2
+	}
+
+	be, rc := makeBackend(ctx, *backendKind, *image, *namespace, *kubeconfig, splitCSV(*pullSecrets), *pvcSize, *storageClass, *jobServiceAccount, *runtimeClass, *priorityClass, ns, tols, *controlAddress)
 	if be == nil {
 		return rc
 	}
@@ -207,7 +224,7 @@ func runDashboard(args []string) int {
 
 // makeBackend constructs and preflights the chosen container backend. On
 // failure it prints a hint and returns (nil, exitCode).
-func makeBackend(ctx context.Context, kind, image, namespace, kubeconfig string, pullSecrets []string, pvcSize, storageClass, controlAddress string) (backend.ContainerBackend, int) {
+func makeBackend(ctx context.Context, kind, image, namespace, kubeconfig string, pullSecrets []string, pvcSize, storageClass, jobServiceAccount, runtimeClass, priorityClass string, nodeSelector map[string]string, tolerations []corev1.Toleration, controlAddress string) (backend.ContainerBackend, int) {
 	switch kind {
 	case "docker":
 		d, err := backend.NewDocker(image)
@@ -230,6 +247,11 @@ func makeBackend(ctx context.Context, kind, image, namespace, kubeconfig string,
 			Kubeconfig: kubeconfig, Namespace: namespace, Image: image,
 			ImagePullSecrets: pullSecrets,
 			PVCSize:          pvcSize, StorageClass: storageClass,
+			ServiceAccountName:     jobServiceAccount,
+			RuntimeClassName:       runtimeClass,
+			PriorityClassName:      priorityClass,
+			NodeSelector:           nodeSelector,
+			Tolerations:            tolerations,
 			ControlAddressTemplate: controlAddress,
 		})
 		if err != nil {
@@ -258,6 +280,60 @@ func splitCSV(s string) []string {
 		}
 	}
 	return out
+}
+
+func parseKeyValues(s string) (map[string]string, error) {
+	parts := splitCSV(s)
+	if len(parts) == 0 {
+		return nil, nil
+	}
+	out := make(map[string]string, len(parts))
+	for _, part := range parts {
+		key, val, ok := strings.Cut(part, "=")
+		key, val = strings.TrimSpace(key), strings.TrimSpace(val)
+		if !ok || key == "" || val == "" {
+			return nil, fmt.Errorf("expected key=value, got %q", part)
+		}
+		out[key] = val
+	}
+	return out, nil
+}
+
+func parseTolerations(s string) ([]corev1.Toleration, error) {
+	parts := splitCSV(s)
+	if len(parts) == 0 {
+		return nil, nil
+	}
+	out := make([]corev1.Toleration, 0, len(parts))
+	for _, part := range parts {
+		body, effectText, _ := strings.Cut(part, ":")
+		key, value, hasValue := strings.Cut(body, "=")
+		key = strings.TrimSpace(key)
+		value = strings.TrimSpace(value)
+		effectText = strings.TrimSpace(effectText)
+		if key == "" {
+			return nil, fmt.Errorf("empty toleration key in %q", part)
+		}
+		tol := corev1.Toleration{Key: key, Operator: corev1.TolerationOpExists}
+		if hasValue {
+			if value == "" {
+				return nil, fmt.Errorf("empty toleration value in %q", part)
+			}
+			tol.Operator = corev1.TolerationOpEqual
+			tol.Value = value
+		}
+		if effectText != "" {
+			effect := corev1.TaintEffect(effectText)
+			switch effect {
+			case corev1.TaintEffectNoSchedule, corev1.TaintEffectPreferNoSchedule, corev1.TaintEffectNoExecute:
+				tol.Effect = effect
+			default:
+				return nil, fmt.Errorf("invalid toleration effect %q in %q", effectText, part)
+			}
+		}
+		out = append(out, tol)
+	}
+	return out, nil
 }
 
 // browserURL turns a listen address (":9000", "0.0.0.0:9000") into a URL

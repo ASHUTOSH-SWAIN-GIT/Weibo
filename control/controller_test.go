@@ -97,6 +97,7 @@ env:
 resources:
   cpu: 500m
   memory: 256Mi
+  ephemeralStorage: 1Gi
 `
 	fake := backend.NewFake()
 	c, _ := newController(t, fake, lifecycle.DefaultRestartPolicy())
@@ -109,7 +110,7 @@ resources:
 	run, _ := c.LatestRun(job.ID)
 
 	res := fake.LastResources(run.ContainerID)
-	if res == nil || res.CPU != "500m" || res.Memory != "256Mi" {
+	if res == nil || res.CPU != "500m" || res.Memory != "256Mi" || res.EphemeralStorage != "1Gi" {
 		t.Fatalf("resources not threaded: %+v", res)
 	}
 	env := fake.LastEnv(run.ContainerID)
@@ -136,6 +137,27 @@ resources:
 		t.Fatal("expected error for invalid resources.cpu")
 	}
 	if !strings.Contains(err.Error(), "resources.cpu") {
+		t.Errorf("error should name the bad field: %v", err)
+	}
+	if fake.Launched() != 0 {
+		t.Errorf("must not launch on invalid resources, launched %d", fake.Launched())
+	}
+}
+
+func TestSubmitSDK_InvalidEphemeralStorage(t *testing.T) {
+	const doc = `kind: sdk
+name: bad
+image: my-registry/bad:v1
+resources:
+  ephemeralStorage: not-storage
+`
+	fake := backend.NewFake()
+	c, _ := newController(t, fake, lifecycle.DefaultRestartPolicy())
+	_, err := c.Submit(context.Background(), []byte(doc), nil)
+	if err == nil {
+		t.Fatal("expected error for invalid resources.ephemeralStorage")
+	}
+	if !strings.Contains(err.Error(), "resources.ephemeralStorage") {
 		t.Errorf("error should name the bad field: %v", err)
 	}
 	if fake.Launched() != 0 {

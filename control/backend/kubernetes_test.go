@@ -20,6 +20,46 @@ func k8sBackend(t *testing.T) *Kubernetes {
 	return newK8s(fake.NewSimpleClientset(), KubernetesOptions{Image: "weibo-sdk-demo:test", Namespace: "weibo"})
 }
 
+func TestK8sLaunch_AppliesIsolationOptions(t *testing.T) {
+	ctx := context.Background()
+	k := newK8s(fake.NewSimpleClientset(), KubernetesOptions{
+		Image:              "weibo-sdk-demo:test",
+		Namespace:          "weibo",
+		ServiceAccountName: "weibo-runner",
+		RuntimeClassName:   "gvisor",
+		PriorityClassName:  "weibo-low",
+		NodeSelector:       map[string]string{"workload": "weibo"},
+		Tolerations: []corev1.Toleration{{
+			Key: "dedicated", Operator: corev1.TolerationOpEqual, Value: "weibo", Effect: corev1.TaintEffectNoSchedule,
+		}},
+	})
+
+	id, err := k.Launch(ctx, LaunchSpec{JobID: "iso", Image: "registry/job:v1", ControlPort: 8080})
+	if err != nil {
+		t.Fatal(err)
+	}
+	job, err := k.cs.BatchV1().Jobs("weibo").Get(ctx, id, metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pod := job.Spec.Template.Spec
+	if pod.ServiceAccountName != "weibo-runner" {
+		t.Errorf("serviceAccountName=%q, want weibo-runner", pod.ServiceAccountName)
+	}
+	if pod.RuntimeClassName == nil || *pod.RuntimeClassName != "gvisor" {
+		t.Errorf("runtimeClassName=%v, want gvisor", pod.RuntimeClassName)
+	}
+	if pod.PriorityClassName != "weibo-low" {
+		t.Errorf("priorityClassName=%q, want weibo-low", pod.PriorityClassName)
+	}
+	if pod.NodeSelector["workload"] != "weibo" {
+		t.Errorf("nodeSelector=%v", pod.NodeSelector)
+	}
+	if len(pod.Tolerations) != 1 || pod.Tolerations[0].Key != "dedicated" || pod.Tolerations[0].Value != "weibo" {
+		t.Errorf("tolerations=%+v", pod.Tolerations)
+	}
+}
+
 // Launch must create the full object set with correct config.
 func TestK8sLaunch_CreatesObjects(t *testing.T) {
 	ctx := context.Background()

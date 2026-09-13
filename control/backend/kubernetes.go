@@ -37,7 +37,12 @@ type Kubernetes struct {
 	image                  string
 	pvcSize                string
 	storageClass           string
+	serviceAccountName     string
 	imagePullSecrets       []string
+	runtimeClassName       string
+	priorityClassName      string
+	nodeSelector           map[string]string
+	tolerations            []corev1.Toleration
 	controlAddressTemplate string
 }
 
@@ -48,10 +53,21 @@ type KubernetesOptions struct {
 	Image        string // runner image (must be pullable by the cluster)
 	PVCSize      string // per-job volume size, default "1Gi"
 	StorageClass string // optional; empty → cluster default
+	// ServiceAccountName is assigned to runner pods. Empty leaves the pod on
+	// Kubernetes' namespace default service account. Production installs should
+	// provide a dedicated least-privilege account such as "weibo-runner".
+	ServiceAccountName string
 	// ImagePullSecrets names pre-created dockerconfigjson Secrets in the
 	// namespace, referenced on every job pod so the cluster can pull from
 	// private registries. Weibo references them; it does not create them.
 	ImagePullSecrets []string
+	// RuntimeClassName and PriorityClassName opt runner pods into cluster-level
+	// sandboxing / scheduling classes.
+	RuntimeClassName  string
+	PriorityClassName string
+	// NodeSelector and Tolerations constrain where runner pods may land.
+	NodeSelector map[string]string
+	Tolerations  []corev1.Toleration
 	// ControlAddressTemplate makes the agent reachable from the controller.
 	// Tokens: {service}, {namespace}, {port}. Empty uses cluster-local DNS.
 	ControlAddressTemplate string
@@ -79,7 +95,12 @@ func newK8s(cs kubernetes.Interface, opts KubernetesOptions) *Kubernetes {
 		image:                  opts.Image,
 		pvcSize:                orString(opts.PVCSize, "1Gi"),
 		storageClass:           opts.StorageClass,
+		serviceAccountName:     opts.ServiceAccountName,
 		imagePullSecrets:       opts.ImagePullSecrets,
+		runtimeClassName:       opts.RuntimeClassName,
+		priorityClassName:      opts.PriorityClassName,
+		nodeSelector:           copyStringMap(opts.NodeSelector),
+		tolerations:            append([]corev1.Toleration(nil), opts.Tolerations...),
 		controlAddressTemplate: opts.ControlAddressTemplate,
 	}
 	return k
@@ -335,7 +356,12 @@ func (k *Kubernetes) buildJob(run, jobID, pvc, cmName, secretName, image string,
 				Spec: corev1.PodSpec{
 					RestartPolicy:                 corev1.RestartPolicyNever,
 					TerminationGracePeriodSeconds: int64Ptr(45), // room to drain + final checkpoint
+					ServiceAccountName:            k.serviceAccountName,
 					ImagePullSecrets:              pullSecrets,
+					RuntimeClassName:              runtimeClassNamePtr(k.runtimeClassName),
+					PriorityClassName:             k.priorityClassName,
+					NodeSelector:                  copyStringMap(k.nodeSelector),
+					Tolerations:                   append([]corev1.Toleration(nil), k.tolerations...),
 					SecurityContext: &corev1.PodSecurityContext{
 						RunAsNonRoot: boolPtr(true),
 						RunAsUser:    int64Ptr(nonRootUID),
@@ -646,7 +672,7 @@ func k8sPullPolicy(policy string) corev1.PullPolicy {
 // controller validates the quantity strings, so ParseQuantity cannot fail
 // here — MustParse would only panic on an already-rejected value.
 func k8sResources(r *ResourceLimits) corev1.ResourceRequirements {
-	if r == nil || (r.CPU == "" && r.Memory == "") {
+	if r == nil || (r.CPU == "" && r.Memory == "" && r.EphemeralStorage == "") {
 		return corev1.ResourceRequirements{}
 	}
 	list := corev1.ResourceList{}
@@ -656,7 +682,28 @@ func k8sResources(r *ResourceLimits) corev1.ResourceRequirements {
 	if r.Memory != "" {
 		list[corev1.ResourceMemory] = resource.MustParse(r.Memory)
 	}
+	if r.EphemeralStorage != "" {
+		list[corev1.ResourceEphemeralStorage] = resource.MustParse(r.EphemeralStorage)
+	}
 	return corev1.ResourceRequirements{Requests: list, Limits: list}
+}
+
+func runtimeClassNamePtr(name string) *string {
+	if name == "" {
+		return nil
+	}
+	return &name
+}
+
+func copyStringMap(in map[string]string) map[string]string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
 }
 
 // compile-time check.

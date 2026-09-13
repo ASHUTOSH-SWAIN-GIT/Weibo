@@ -37,6 +37,7 @@ func TestKubernetesControllerManifestIncludesProductionBasics(t *testing.T) {
 	}
 	for _, want := range []string{
 		"ServiceAccount/weibo-controller",
+		"ServiceAccount/weibo-runner",
 		"Role/weibo-controller",
 		"RoleBinding/weibo-controller",
 		"ConfigMap/weibo-controller-config",
@@ -73,6 +74,7 @@ func TestKubernetesControllerManifestIncludesProductionBasics(t *testing.T) {
 	assertProbe(t, container, "readinessProbe", "/readyz")
 	assertArgContains(t, container, "-backend=kubernetes")
 	assertArgContains(t, container, "-db=/var/lib/weibo/control.db")
+	assertArgContains(t, container, "-job-service-account=weibo-runner")
 
 	mounts := asSlice(t, container["volumeMounts"], "volumeMounts")
 	if !hasNamedMount(mounts, "data", "/var/lib/weibo") {

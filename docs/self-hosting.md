@@ -278,6 +278,14 @@ controller image, set `WEIBO_RUNNER_IMAGE` in the ConfigMap, and keep
 `replicas: 1`: the controller uses SQLite on a single PVC, so multiple
 replicas are not safe until leader election/shared storage exists.
 
+The manifest also creates a separate `weibo-runner` ServiceAccount for job pods
+with no RoleBinding and token automount disabled. For tighter placement or
+sandboxing, start the controller with `-job-runtime-class`,
+`-job-priority-class`, `-job-node-selector`, and `-job-tolerations`. For network
+boundaries, adapt
+[`control/kubernetes-networkpolicy.yaml`](../control/kubernetes-networkpolicy.yaml)
+to your CNI and data-source/sink egress needs.
+
 Controller and job probes are split by purpose: `/livez` is liveness and should
 stay green while the process can answer HTTP; `/readyz` checks dependencies
 such as the store/backend and is what Services should use for readiness.

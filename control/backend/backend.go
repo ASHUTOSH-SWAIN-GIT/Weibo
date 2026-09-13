@@ -50,18 +50,19 @@ type LaunchSpec struct {
 	// PullAlways, PullNever, or PullIfNotPresent (the default when empty).
 	PullPolicy string
 
-	// Resources caps the container's CPU/memory. Nil means unlimited
+	// Resources caps the container's CPU/memory/storage. Nil means unlimited
 	// (today's behavior); each backend maps it to its native limits.
 	Resources *ResourceLimits
 }
 
-// ResourceLimits are CPU/memory caps expressed as Kubernetes quantity
-// strings (e.g. CPU "500m" or "2", Memory "512Mi" or "1Gi"). An empty
+// ResourceLimits are caps expressed as Kubernetes quantity strings (e.g.
+// CPU "500m" or "2", Memory/EphemeralStorage "512Mi" or "1Gi"). An empty
 // field means "no limit for this dimension". The controller validates the
 // strings before launch, so backends can assume they parse.
 type ResourceLimits struct {
-	CPU    string
-	Memory string
+	CPU              string
+	Memory           string
+	EphemeralStorage string
 }
 
 // CapacityConfig describes Weibo's scheduling policy for converting backend

@@ -6,6 +6,8 @@ import (
 	"context"
 	"fmt"
 	"time"
+
+	corev1 "k8s.io/api/core/v1"
 )
 
 // KubernetesOptions configures the Kubernetes backend. The default binary is
@@ -16,7 +18,12 @@ type KubernetesOptions struct {
 	Image                  string
 	PVCSize                string
 	StorageClass           string
+	ServiceAccountName     string
 	ImagePullSecrets       []string
+	RuntimeClassName       string
+	PriorityClassName      string
+	NodeSelector           map[string]string
+	Tolerations            []corev1.Toleration
 	ControlAddressTemplate string
 }
 
