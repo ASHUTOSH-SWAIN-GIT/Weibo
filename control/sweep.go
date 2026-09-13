@@ -85,6 +85,8 @@ func (c *Controller) SweepOrphans(ctx context.Context) (SweepReport, error) {
 			rep.Removed = append(rep.Removed, ctr.ID)
 		}
 	}
+	c.metrics.AddSweepRemoved(len(rep.Removed))
+	c.metrics.AddSweepRunningSeen(len(rep.RunningOrphans))
 	return rep, nil
 }
 

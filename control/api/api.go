@@ -43,6 +43,13 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /healthz", s.health)
 	mux.HandleFunc("GET /livez", s.livez)
 	mux.HandleFunc("GET /readyz", s.readyz)
+	// Controller-native Prometheus metrics (process, reconcile, launches,
+	// inventory, API). Aggregate counters only — no job/run/container IDs,
+	// so this is safe to scrape without auth, like /healthz.
+	mux.Handle("GET /metrics", s.ctrl.Metrics().Handler())
+	// Prometheus http_sd discovery for live job agents. Gated by the same
+	// auth as the rest of the API: it exposes internal control addresses.
+	mux.HandleFunc("GET /targets", s.targets)
 	mux.HandleFunc("POST /auth", s.authCheck)
 	mux.HandleFunc("GET /cluster", s.cluster)
 	mux.HandleFunc("POST /validate", s.validate)
@@ -58,7 +65,34 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /jobs/{id}/metrics", s.proxy("/metrics"))
 	mux.HandleFunc("GET /jobs/{id}/describe", s.proxy("/describe"))
 	mux.HandleFunc("GET /jobs/{id}/plan", s.proxy("/plan"))
-	return s.auth(mux)
+	return s.auth(s.instrument(mux))
+}
+
+// instrument records per-request API metrics. The route label is the
+// matched mux template (e.g. "GET /jobs/{id}"), never the raw path, so
+// job IDs cannot explode cardinality.
+func (s *Server) instrument(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		rw := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+		next.ServeHTTP(rw, r)
+		route := r.Pattern
+		if route == "" {
+			route = r.Method + " unknown"
+		}
+		s.ctrl.Metrics().ObserveAPI(r.Method, route, strconv.Itoa(rw.status), time.Since(start))
+	})
+}
+
+// statusRecorder captures the status code for metrics.
+type statusRecorder struct {
+	http.ResponseWriter
+	status int
+}
+
+func (r *statusRecorder) WriteHeader(status int) {
+	r.status = status
+	r.ResponseWriter.WriteHeader(status)
 }
 
 // auth wraps h with shared-bearer-token enforcement. With no token
@@ -88,7 +122,7 @@ func (s *Server) auth(h http.Handler) http.Handler {
 // publicRoute reports whether r may bypass auth: the HTML shell at "/" and
 // the health check, both GET-only.
 func publicRoute(r *http.Request) bool {
-	return r.Method == http.MethodGet && (r.URL.Path == "/" || r.URL.Path == "/healthz" || r.URL.Path == "/livez" || r.URL.Path == "/readyz")
+	return r.Method == http.MethodGet && (r.URL.Path == "/" || r.URL.Path == "/healthz" || r.URL.Path == "/livez" || r.URL.Path == "/readyz" || r.URL.Path == "/metrics")
 }
 
 // authCheck returns 200 once a request reaches it — the auth middleware has
@@ -136,6 +170,21 @@ func (s *Server) readyz(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ready"})
+}
+
+// targets serves Prometheus http_sd discovery: one target per job with a
+// reachable live control surface, so Prometheus can scrape agent /metrics
+// directly. Unreachable jobs are skipped; an empty list encodes as [].
+func (s *Server) targets(w http.ResponseWriter, r *http.Request) {
+	targets, err := s.ctrl.DiscoveryTargets(r.Context())
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if targets == nil {
+		targets = []control.DiscoveryTarget{}
+	}
+	writeJSON(w, http.StatusOK, targets)
 }
 
 // readWorkflow extracts a workflow doc (+ optional env) from a request:

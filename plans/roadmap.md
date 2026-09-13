@@ -182,13 +182,22 @@ Reject incompatible combinations before execution.
 
 ## P3 — Observability and operations
 
-### 14. Add controller-native metrics aggregation and discovery
+### 14. Add controller-native metrics aggregation and discovery — ✅ DONE
 
-- controller process/reconcile/API metrics;
-- Prometheus discovery or federation for all live jobs;
-- bounded scrape concurrency/timeouts;
-- stable job/run labels without unbounded cardinality;
-- a Kubernetes `ServiceMonitor` example.
+**Shipped:** `ControllerMetrics` on a private registry (process + Go
+collectors, reconcile count/duration, launch outcomes
+`success|transient|permanent|blocked|record_failed`, live job/run
+inventory gauges read from the store per scrape, sweep counters, per-route
+API counts/latency) served at public `GET /metrics`; `GET /targets`
+(auth-gated) lists live job agents in Prometheus http_sd format with
+stable `weibo_job_id`/`weibo_job_name` labels. Metric labels carry only
+small enumerations (mux route templates, never raw IDs); discovery runs at
+most 8 concurrent backend probes under a 15s deadline. Includes
+`control/kubernetes-servicemonitor.yaml` (ServiceMonitor + commented
+`weibo-jobs` scrape job).
+
+**Exit criteria:** endpoint, route-normalization, cardinality,
+launch-kind, and discovery unit tests; k8s-tagged backend suite green.
 
 ### 15. Add short metrics history and Grafana links
 

@@ -137,6 +137,8 @@ Notes for the Kubernetes backend:
 | `POST /auth`                  | Returns 200 iff the bearer token is valid (UI token check). |
 | `GET  /livez`                 | Process liveness. |
 | `GET  /readyz`                | Store/backend readiness; returns 503 when dependencies are unavailable. |
+| `GET  /metrics`               | Controller Prometheus metrics (public; aggregate counters only). |
+| `GET  /targets`               | Prometheus http_sd discovery for live job agents (auth-gated). |
 
 **Auth:** start the controller with `-auth-token <secret>` (env
 `WEIBO_AUTH_TOKEN`) to require `Authorization: Bearer <secret>` on every route
@@ -152,6 +154,27 @@ curl localhost:9000/jobs
 curl localhost:9000/jobs/<id>/state
 curl -X POST localhost:9000/jobs/<id>/cancel
 ```
+
+## Metrics and discovery
+
+- `GET /metrics` (no auth, like `/healthz`) — controller-native Prometheus
+  metrics: process/Go runtime, `weibo_controller_reconciles_total` +
+  `weibo_controller_reconcile_duration_seconds`, `weibo_controller_launches_total{result}`
+  (`success|transient|permanent|blocked|record_failed`),
+  `weibo_controller_jobs{desired}` and `weibo_controller_runs{phase}`
+  inventory gauges (read live from the store on each scrape), sweep
+  counters, and `weibo_controller_api_requests_total{method,route,status}`.
+- `GET /targets` (same auth as the API) — Prometheus `http_sd` discovery:
+  one target per job with a reachable live agent, labeled `weibo_job_id`,
+  `weibo_job_name`, `weibo_run_phase`. Stopped jobs disappear; unreachable
+  ones are skipped.
+
+Cardinality is bounded by design: metric labels carry only small
+enumerations (route templates, never raw paths or IDs — `/jobs/{id}`, not
+`/jobs/abc123`). Per-job addressing lives in `/targets`, and discovery
+resolves at most 8 backend probes concurrently under a 15s deadline.
+`control/kubernetes-servicemonitor.yaml` is a ready ServiceMonitor plus a
+commented `weibo-jobs` scrape job using `/targets`.
 
 ## Savepoints (stop-with-savepoint)
 

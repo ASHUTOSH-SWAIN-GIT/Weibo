@@ -61,6 +61,7 @@ type Controller struct {
 	stopTimeout time.Duration
 	capacity    backend.CapacityConfig
 	retention   int
+	metrics     *ControllerMetrics
 	newID       func() string
 	logf        func(string, ...any)
 	httpc       *http.Client // talks to job agents (savepoint trigger)
@@ -114,6 +115,7 @@ func New(opts Options) *Controller {
 	} else {
 		c.retention = opts.TerminalRunRetention
 	}
+	c.metrics = NewControllerMetrics(c.store)
 	if c.capacity.DefaultJobCPU == "" {
 		c.capacity.DefaultJobCPU = "1"
 	}
@@ -480,6 +482,11 @@ func (c *Controller) Validate(doc []byte, env map[string]string) (string, compil
 	return c.validate(doc, env)
 }
 
+// Metrics exposes the controller's Prometheus instruments (registry,
+// launch/reconcile/sweep counters, API observer). The api package serves
+// them at GET /metrics.
+func (c *Controller) Metrics() *ControllerMetrics { return c.metrics }
+
 // ListJobs returns all jobs, newest first.
 func (c *Controller) ListJobs() ([]*store.Job, error) { return c.store.ListJobs() }
 
@@ -609,6 +616,7 @@ func (c *Controller) launchLocked(ctx context.Context, job *store.Job, attempt i
 	var doc []byte
 	env, err := c.launchEnv(job)
 	if err != nil {
+		c.metrics.ObserveLaunch("blocked")
 		if updateErr := c.blockRun(job, run, lifecycle.Starting, err.Error()); updateErr != nil {
 			return fmt.Errorf("resolve launch secrets (%v); additionally failed to record blocked run: %w", err, updateErr)
 		}
@@ -642,6 +650,7 @@ func (c *Controller) launchLocked(ctx context.Context, job *store.Job, attempt i
 		PullPolicy: backend.PullIfNotPresent,
 	})
 	if err != nil {
+		c.metrics.ObserveLaunch(launchFailureKind(err))
 		run.Error = err.Error()
 		switch launchFailureKind(err) {
 		case "permanent":
@@ -670,6 +679,7 @@ func (c *Controller) launchLocked(ctx context.Context, job *store.Job, attempt i
 		run.HostPort = st.HostPort
 	}
 	if err := c.store.UpdateRunWithTransition(run, transitionRecord(job.ID, run.ID, lifecycle.Starting, lifecycle.Running, "launched")); err != nil {
+		c.metrics.ObserveLaunch("record_failed")
 		removeErr := c.backend.Remove(ctx, id)
 		recordErr := c.markLaunchRecordFailure(run, err)
 		if removeErr != nil {
@@ -683,6 +693,7 @@ func (c *Controller) launchLocked(ctx context.Context, job *store.Job, attempt i
 		}
 		return fmt.Errorf("record launched run: %w", err)
 	}
+	c.metrics.ObserveLaunch("success")
 	c.logf("job %s: launched run %s (container %s, attempt %d)", job.ID, run.ID, id, attempt)
 	return nil
 }

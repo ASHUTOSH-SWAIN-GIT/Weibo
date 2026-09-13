@@ -386,6 +386,71 @@ func TestDeleteJobWithDeleteDataFlag(t *testing.T) {
 	}
 }
 
+func TestMetricsEndpointAndRouteNormalization(t *testing.T) {
+	fake := backend.NewFake()
+	ctrl := control.New(control.Options{
+		Store: mustStore(t), Backend: fake, Image: "img", StopTimeout: time.Second,
+	})
+	srv := newAPIWithController(t, ctrl)
+
+	resp, _ := http.Post(srv.URL+"/jobs", "application/yaml", strings.NewReader(sdkJob))
+	var job store.Job
+	json.NewDecoder(resp.Body).Decode(&job)
+	resp.Body.Close()
+	resp, _ = http.Get(srv.URL + "/jobs/" + job.ID)
+	resp.Body.Close()
+
+	resp, err := http.Get(srv.URL + "/metrics")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	text := string(body)
+	if !strings.Contains(text, `weibo_controller_jobs{desired="running"} 1`) {
+		t.Error("metrics should report the submitted job")
+	}
+	// Route labels use mux templates, never raw IDs.
+	if !strings.Contains(text, `route="GET /jobs/{id}"`) {
+		t.Error("api requests should be labeled by route template")
+	}
+	if strings.Contains(text, job.ID) {
+		t.Error("raw job ID must not appear in metric labels")
+	}
+}
+
+func TestTargetsDiscovery(t *testing.T) {
+	fake := backend.NewFake()
+	ctrl := control.New(control.Options{
+		Store: mustStore(t), Backend: fake, Image: "img", StopTimeout: time.Second,
+	})
+	srv := newAPIWithController(t, ctrl)
+
+	resp, _ := http.Post(srv.URL+"/jobs", "application/yaml", strings.NewReader(sdkJob))
+	var job store.Job
+	json.NewDecoder(resp.Body).Decode(&job)
+	resp.Body.Close()
+
+	resp, err := http.Get(srv.URL + "/targets")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var targets []struct {
+		Targets []string          `json:"targets"`
+		Labels  map[string]string `json:"labels"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&targets); err != nil {
+		t.Fatal(err)
+	}
+	if len(targets) != 1 || targets[0].Labels["weibo_job_id"] != job.ID {
+		t.Fatalf("targets=%+v, want one for job %s", targets, job.ID)
+	}
+	if len(targets[0].Targets) != 1 || targets[0].Targets[0] == "" {
+		t.Fatalf("target address missing: %+v", targets)
+	}
+}
+
 func TestReadinessReportsBackendOutage(t *testing.T) {
 	ctrl := control.New(control.Options{
 		Store:       mustStore(t),

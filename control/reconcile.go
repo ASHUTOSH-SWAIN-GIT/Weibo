@@ -14,7 +14,13 @@ import (
 // the store — so after a controller restart, calling Reconcile re-attaches
 // to the containers the store still knows about (the store is the source
 // of truth). Safe to call repeatedly.
-func (c *Controller) Reconcile(ctx context.Context) error {
+func (c *Controller) Reconcile(ctx context.Context) (err error) {
+	start := time.Now()
+	defer func() { c.metrics.ObserveReconcile(time.Since(start), err) }()
+	return c.reconcile(ctx)
+}
+
+func (c *Controller) reconcile(ctx context.Context) error {
 	active, err := c.store.ActiveRuns()
 	if err != nil {
 		return err

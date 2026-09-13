@@ -1,0 +1,59 @@
+# Example: scrape the weibo controller with Prometheus Operator.
+#
+# The controller exposes its own metrics at GET /metrics (process health,
+# reconcile loop, launch outcomes, job/run inventory, API traffic) and
+# live-job discovery at GET /targets (Prometheus http_sd JSON).
+#
+# 1. Expose the controller through a Service carrying the selector label:
+#
+#     apiVersion: v1
+#     kind: Service
+#     metadata:
+#       name: weibo-controller
+#     spec:
+#       selector:
+#         app.kubernetes.io/name: weibo-controller
+#       ports:
+#         - name: http
+#           port: 9000
+#           targetPort: 9000
+#
+# 2. Apply this ServiceMonitor. If the controller runs with -auth-token,
+#    uncomment bearerTokenSecret and create the referenced Secret; /metrics
+#    itself is public, but /targets (used below) requires the token.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: weibo-controller
+  labels:
+    app.kubernetes.io/managed-by: weibo
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: weibo-controller
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 30s
+      scrapeTimeout: 10s
+      # bearerTokenSecret:
+      #   name: weibo-controller-token
+      #   key: token
+
+# Scrape live job agents through controller discovery. Each target is one
+# job's control surface (the agent's /metrics), labeled with weibo_job_id
+# and weibo_job_name. Targets stay stable across restarts (only the
+# address changes); stopped jobs disappear from /targets.
+#
+# Add this job to your Prometheus scrape config (or a matching ScrapeConfig
+# CR):
+#
+# - job_name: weibo-jobs
+#   http_sd_configs:
+#     - url: http://weibo-controller:9000/targets
+#       # authorization:           # only when -auth-token is set
+#       #   type: Bearer
+#       #   credentials: <token>
+#   relabel_configs:
+#     - source_labels: [weibo_job_name]
+#       target_label: job
