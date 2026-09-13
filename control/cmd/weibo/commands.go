@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/signal"
 	"text/tabwriter"
 	"time"
 )
@@ -103,18 +104,29 @@ func runStatus(args []string) int {
 	return 0
 }
 
-// runLogs prints the tail of a job's container logs.
+// runLogs prints the tail of a job's container logs, optionally following.
 func runLogs(args []string) int {
 	fs := flag.NewFlagSet("logs", flag.ContinueOnError)
 	controller, token := controllerFlags(fs)
 	tail := fs.Int("tail", 200, "number of trailing log lines")
+	follow := fs.Bool("follow", false, "stream new log output until interrupted")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
 	id := fs.Arg(0)
 	if id == "" {
-		fmt.Fprintln(os.Stderr, "usage: weibo logs <job-id> [-tail N] [flags]")
+		fmt.Fprintln(os.Stderr, "usage: weibo logs <job-id> [-tail N] [-follow] [flags]")
 		return 2
+	}
+	if *follow {
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+		defer stop()
+		if err := newClient(*controller, *token).followLogs(ctx, id, *tail, func(line string) {
+			fmt.Println(line)
+		}); err != nil && ctx.Err() == nil {
+			return fail(err)
+		}
+		return 0
 	}
 	out, err := newClient(*controller, *token).logs(context.Background(), id, *tail)
 	if err != nil {
@@ -124,6 +136,40 @@ func runLogs(args []string) int {
 	if len(out) > 0 && out[len(out)-1] != '\n' {
 		fmt.Println()
 	}
+	return 0
+}
+
+// runRuns lists every recorded attempt for a job, newest first.
+func runRuns(args []string) int {
+	fs := flag.NewFlagSet("runs", flag.ContinueOnError)
+	controller, token := controllerFlags(fs)
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	id := fs.Arg(0)
+	if id == "" {
+		fmt.Fprintln(os.Stderr, "usage: weibo runs <job-id> [flags]")
+		return 2
+	}
+	rows, err := newClient(*controller, *token).runs(context.Background(), id)
+	if err != nil {
+		return fail(err)
+	}
+	if len(rows) == 0 {
+		fmt.Println("no runs")
+		return 0
+	}
+	tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(tw, "ATTEMPT\tRUN\tPHASE\tSTARTED\tSTOPPED\tERROR")
+	for _, r := range rows {
+		stopped := "—"
+		if r.Stopped != nil {
+			stopped = r.Stopped.Local().Format(time.RFC3339)
+		}
+		fmt.Fprintf(tw, "%d\t%s\t%s\t%s\t%s\t%s\n",
+			r.Attempt, r.ID, r.Phase, r.Started.Local().Format(time.RFC3339), stopped, r.Error)
+	}
+	tw.Flush()
 	return 0
 }
 

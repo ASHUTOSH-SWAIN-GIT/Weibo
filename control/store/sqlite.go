@@ -373,6 +373,41 @@ func (s *SQLite) ListTransitions(jobID string) ([]*Transition, error) {
 		return nil, err
 	}
 	defer rows.Close()
+	return collectTransitions(rows)
+}
+
+// Transition page bounds: the default page size and the hard cap.
+const (
+	DefaultTransitionLimit = 50
+	MaxTransitionLimit     = 200
+)
+
+func (s *SQLite) ListTransitionsPaged(jobID string, beforeID int64, limit int) ([]*Transition, error) {
+	if limit <= 0 {
+		limit = DefaultTransitionLimit
+	}
+	if limit > MaxTransitionLimit {
+		limit = MaxTransitionLimit
+	}
+	var rows *sql.Rows
+	var err error
+	if beforeID > 0 {
+		rows, err = s.db.Query(
+			`SELECT id,job_id,run_id,from_p,to_p,reason,at FROM transitions
+			 WHERE job_id=? AND id < ? ORDER BY id DESC LIMIT ?`, jobID, beforeID, limit)
+	} else {
+		rows, err = s.db.Query(
+			`SELECT id,job_id,run_id,from_p,to_p,reason,at FROM transitions
+			 WHERE job_id=? ORDER BY id DESC LIMIT ?`, jobID, limit)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return collectTransitions(rows)
+}
+
+func collectTransitions(rows *sql.Rows) ([]*Transition, error) {
 	var out []*Transition
 	for rows.Next() {
 		var t Transition

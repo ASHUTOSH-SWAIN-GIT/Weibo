@@ -53,7 +53,7 @@ func (a *Agent) Run(ctx context.Context) error {
 	a.mu.Unlock()
 
 	// Surface checkpoint progress in /state (both delivery modes).
-	a.env.WithCheckpointListener(a.onCheckpoint)
+	a.env.WithCheckpointObserver(a.onCheckpointReport)
 
 	err := a.env.Execute(runCtx)
 	cancel() // release the context; harmless if already cancelled
@@ -141,18 +141,18 @@ func (a *Agent) PlanJSON() string {
 	return a.env.PlanJSON()
 }
 
-// onCheckpoint records the latest completed checkpoint. Called from the
-// engine (coordinator finalize goroutine or the uncoordinated save path);
-// must be cheap and non-blocking.
-func (a *Agent) onCheckpoint(id string) {
+// onCheckpointReport records the latest completed checkpoint. Called from
+// the engine (coordinator finalize goroutine or the uncoordinated save
+// path); must be cheap and non-blocking.
+func (a *Agent) onCheckpointReport(rep weibo.CheckpointReport) {
 	now := time.Now()
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.st.CurrentCheckpointID = id
+	a.st.CurrentCheckpointID = rep.ID
 	a.st.LastCheckpointAt = &now
 	// Keep a bounded history, newest first, so /state can show a
 	// checkpoints section without unbounded memory growth.
-	cp := Checkpoint{ID: id, CompletedAt: now}
+	cp := Checkpoint{ID: rep.ID, CompletedAt: now, DurationMs: rep.Duration.Milliseconds(), SizeBytes: rep.InlineBytes}
 	a.st.Checkpoints = append([]Checkpoint{cp}, a.st.Checkpoints...)
 	const maxCheckpoints = 10
 	if len(a.st.Checkpoints) > maxCheckpoints {

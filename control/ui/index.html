@@ -210,6 +210,11 @@ const api={
   logs:id=>authFetch('/jobs/'+id+'/logs?tail=200').then(r=>r.text()).catch(()=>''),
   history:(id,points)=>authFetch('/jobs/'+id+'/history?points='+(points||120)).then(r=>r.ok?r.json():null).catch(()=>null),
   bulkHistory:()=>authFetch('/jobs/history?points=30').then(r=>r.ok?r.json():null).catch(()=>null),
+  diagnostics:id=>authFetch('/jobs/'+id+'/diagnostics').then(r=>r.ok?r.json():null).catch(()=>null),
+  runs:id=>authFetch('/jobs/'+id+'/runs').then(r=>r.ok?r.json():null).catch(()=>null),
+  run:(id,runId)=>authFetch('/jobs/'+id+'/runs/'+runId).then(r=>r.ok?r.json():null).catch(()=>null),
+  runLogs:(id,runId)=>authFetch('/jobs/'+id+'/runs/'+runId+'/logs?tail=200').then(r=>r.text()).catch(()=>null),
+  transitions:(id,before,limit)=>authFetch('/jobs/'+id+'/transitions?limit='+(limit||10)+(before?'&before='+before:'')).then(r=>r.ok?r.json():null).catch(()=>null),
   config:()=>authFetch('/config').then(r=>r.ok?r.json():{}).catch(()=>({})),
   validate:b=>authFetch('/validate',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(b)}),
   submit:b=>authFetch('/jobs',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(b)}),
@@ -244,6 +249,8 @@ function rates(pts){
 }
 function lastRate(pts){const r=rates(pts);return r.length?r[r.length-1]:null}
 function fmtRate(v){if(v==null||isNaN(v))return'—';return v>=1000?(v/1000).toFixed(1)+'k/s':v.toFixed(1)+'/s'}
+function fmtDur(ms){if(ms==null)return'—';return ms>=1000?(ms/1000).toFixed(1)+'s':Math.round(ms)+'ms'}
+function fmtCountdown(s){if(s==null)return'—';return s<=0?'due now':'in '+Math.round(s)+'s'}
 function spark(vals,w,h){
   w=w||96;h=h||28;vals=vals||[];
   if(vals.length<2)return'<span class="faint">—</span>';
@@ -286,7 +293,8 @@ async function saveToken(){
 }
 
 const app=document.getElementById('app');let timer=null;
-function stopPoll(){if(timer){clearInterval(timer);timer=null}}
+let logStream=null; // AbortController for log follow, aborted on navigation/repoll
+function stopPoll(){if(timer){clearInterval(timer);timer=null}if(logStream){try{logStream.abort()}catch(e){}logStream=null}}
 function poll(fn,ms){stopPoll();fn();timer=setInterval(fn,ms)}
 function setConn(ok){
   const el=document.getElementById('conn');
@@ -443,6 +451,38 @@ function viewCompleted(){
 
 /* ---- Job Detail ---- */
 let detailTab='overview';
+let selRun=null,selRunJob=null; // selected previous-run id for the Runs tab
+let auditCache={job:null,items:[],next:0,done:false}; // paged audit log
+async function auditMore(id){
+  if(auditCache.done)return;
+  const p=await api.transitions(id,auditCache.next||0,10).catch(()=>null);
+  if(!p){auditCache.done=true;return}
+  auditCache.items=auditCache.items.concat(p.transitions||[]);
+  auditCache.next=p.nextBefore||0;
+  if(!auditCache.next)auditCache.done=true;
+}
+async function followLogs(id){
+  // Toggle off: abort the stream and resume polling.
+  if(logStream){try{logStream.abort()}catch(e){}logStream=null;const b=document.getElementById('followBtn');if(b)b.textContent='Follow';viewDetail(id);return}
+  stopPoll(); // freeze re-renders so the stream has a stable <pre>
+  const pre=document.getElementById('log'),btn=document.getElementById('followBtn');
+  const ac=new AbortController();logStream=ac;
+  if(btn)btn.textContent='Stop';
+  const append=t=>{if(!pre)return;const cur=pre.textContent;pre.textContent=(cur==='No output.'?'':cur)+(cur&&!cur.endsWith('\n')?'\n':'')+t+'\n';pre.scrollTop=pre.scrollHeight};
+  try{
+    // fetch (not EventSource) so the bearer token header is sent.
+    const r=await authFetch('/jobs/'+id+'/logs/stream?tail=200',{signal:ac.signal});
+    const rd=r.body.getReader();const dec=new TextDecoder();let buf='';
+    for(;;){
+      const chunk=await rd.read();
+      if(chunk.done||ac.signal.aborted)break;
+      buf+=dec.decode(chunk.value,{stream:true});
+      let i;while((i=buf.indexOf('\n'))>=0){const line=buf.slice(0,i);buf=buf.slice(i+1);
+        if(line.startsWith('data:'))append(line.slice(5).replace(/^ /,''));}
+    }
+    try{rd.cancel()}catch(e){}
+  }catch(e){if(!ac.signal.aborted&&btn)btn.textContent='Follow (error)'}
+}
 function switchTab(tab){
   detailTab=tab;
   document.querySelectorAll('.tab').forEach(t=>t.classList.toggle('on',t.dataset.tab===tab));
@@ -457,9 +497,30 @@ function viewDetail(id){
     const st=term?null:await api.state(id);const pi=(job.kind==='sdk'&&!term)?await api.describe(id):null;
     const hist=await api.history(id);const pts=(hist&&hist.points)||[];
     const grafURL=await getGrafanaURL();
+    const dg=await api.diagnostics(id);
     const logs=await api.logs(id);
+    // attempt selection + paged audit, cached across the 2s re-renders
+    if(selRunJob!==id){selRunJob=id;selRun=null;auditCache={job:id,items:[],next:0,done:false}}
+    if(!auditCache.items.length&&!auditCache.done){
+      const p=await api.transitions(id,0,10);
+      if(p){auditCache.items=p.transitions||[];auditCache.next=p.nextBefore||0;if(!auditCache.next)auditCache.done=true}
+      else auditCache.done=true;
+    }
+    const runsData=await api.runs(id);const runList=(runsData&&runsData.runs)||[];
+    const selId=selRun||(run&&run.id);
+    const selDetail=selId?await api.run(id,selId):null;
+    const selLogs=selDetail?await api.runLogs(id,selId):null;
     const M=term?{}:parseProm(await api.metrics(id)||'');
-    const trs=(d.transitions||[]).slice(-10).reverse().map(t=>`<div class="r"><b>${esc(t.to)}</b><span>${esc(t.reason||'')}</span><span class="at">${esc(fmtTime(t.at))}</span></div>`).join('')||'<div class="dim" style="padding:5px 0">No transitions.</div>';
+    // diagnostics card: failure, last activity, restart countdown, checkpoint
+    const dgCard=dg?card('Diagnostics',kv([
+      ['Failure',dg.failure?`<b>${esc(dg.failure.title)}</b><div class="dim">${esc(dg.failure.hint)}${dg.failure.message?' — '+esc(dg.failure.message):''}</div>`:`<span class="dim">none — ${esc(phase)}</span>`],
+      ['Last activity',dg.activity?esc(fmtFull(dg.activity.at))+` · in ${fmtN(dg.activity.recordsIn)} / out ${fmtN(dg.activity.recordsOut)}`:'—'],
+      ['Restart',dg.restart?esc(fmtCountdown(dg.restart.inSeconds))+` (at ${esc(fmtFull(dg.restart.scheduledAt))})`:'—'],
+      ['Checkpoint',dg.checkpoint?`<span class="id">${esc(dg.checkpoint.id)}</span> · ${esc(fmtDur(dg.checkpoint.durationMs))} · ${esc(fmtMem(dg.checkpoint.sizeBytes))}`:'—'],
+    ])):'';
+    // paged audit log, newest first, with an Older button (cursor in auditCache)
+    const trs=auditCache.items.map(t=>`<div class="r"><b>${esc(t.to)}</b><span>${esc(t.reason||'')}</span><span class="at">${esc(fmtTime(t.at))}</span></div>`).join('')||'<div class="dim" style="padding:5px 0">No transitions.</div>';
+    const lifecycleCard=card('Lifecycle',`<div class="tl">${trs}</div>`+(auditCache.done?'':`<div style="margin-top:8px"><button class="btn" onclick="auditMore('${esc(id)}')">Older</button></div>`));
 
     // stage metrics table (records in/out per stage) from Prometheus
     const so=M['weibo_stage_records_out_total']||[],si=M['weibo_stage_records_in_total']||[];
@@ -512,12 +573,13 @@ function viewDetail(id){
     const overviewPane=`
       <div class="tabpane on" data-pane="overview">
         <div class="stack">
+          ${dgCard}
           ${trendTiles}
           ${trendCard}
           ${card('Pipeline',job.kind==='sdk'?describeGraphEl(pi):graphEl(job.graph))}
           <div class="grid2">
             ${st?card('Live State',kv([['Phase',phaseEl(st.phase)],['Uptime',esc(st.uptime||'—')],['Records in',`<span class="big">${fmtN(st.recordsIn||0)}</span>`],['Records out',`<span class="big">${fmtN(st.recordsOut||0)}</span>`]])):card('Live State','<div class="empty">Not running.</div>')}
-            ${card('Lifecycle',`<div class="tl">${trs}</div>`)}
+            ${lifecycleCard}
           </div>
         </div>
       </div>`;
@@ -547,9 +609,25 @@ function viewDetail(id){
         </div>
         ${card('Checkpoint History','<table><thead><tr><th>ID</th><th>Completed At</th><th>Status</th></tr></thead><tbody>'+cpRows+'</tbody></table>')}
       </div>`;
+    // attempts: select a previous run to inspect its audit + logs
+    const runRows=runList.length?runList.map(rm=>`<tr class="row" onclick="selRun='${esc(rm.id)}'"><td class="num">${esc(rm.attempt!=null?rm.attempt:'—')}</td><td>${phaseEl(rm.phase)}</td><td class="dim">${esc(fmtTime(rm.startedAt))}</td><td class="dim">${rm.stoppedAt?esc(fmtTime(rm.stoppedAt)):'—'}</td><td class="dim">${esc((rm.error||'').slice(0,80))}</td></tr>`).join(''):'<tr><td colspan="5" class="dim">No runs recorded.</td></tr>';
+    const sel=selDetail&&selDetail.run;
+    const selPane=sel?card('Attempt '+(sel.attempt!=null?sel.attempt:'?')+' · '+sel.id,
+      kv([['Status',phaseEl(sel.phase)],['Started',esc(fmtFull(sel.startedAt))],['Stopped',sel.stoppedAt?esc(fmtFull(sel.stoppedAt)):'—'],
+        ['Error',sel.error?esc(sel.error):'<span class="faint">—</span>'],
+        ['Failure kind',sel.failureKind?esc(sel.failureKind):'<span class="faint">—</span>'],
+        ['Restart',selDetail.restart?esc(fmtCountdown(selDetail.restart.inSeconds)):'—']])
+      +`<div style="margin-top:12px">${card('Attempt transitions',(selDetail.transitions||[]).map(t=>`<div class="r"><b>${esc(t.to)}</b><span>${esc(t.reason||'')}</span><span class="at">${esc(fmtTime(t.at))}</span></div>`).join('')||'<div class="dim">No transitions.</div>')}</div>`
+      +`<div style="margin-top:12px"><div class="card"><div class="hd">Attempt logs</div><pre class="log">${esc(selLogs||'No output (container removed or never recorded).')}</pre></div></div>`
+    ):'<div class="empty">Select an attempt.</div>';
+    const runsPane=`
+      <div class="tabpane" data-pane="runs">
+        ${card('Attempts','<table><thead><tr><th class="num">#</th><th>Status</th><th>Started</th><th>Stopped</th><th>Error</th></tr></thead><tbody>'+runRows+'</tbody></table>')}
+        <div style="margin-top:12px">${selPane}</div>
+      </div>`;
     const logsPane=`
       <div class="tabpane" data-pane="logs">
-        <div class="card"><div class="hd">Logs</div><pre class="log" id="log">${esc(logs||'No output.')}</pre></div>
+        <div class="card"><div class="hd">Logs <span style="float:right"><button class="btn" id="followBtn" onclick="followLogs('${esc(id)}')">Follow</button></span></div><pre class="log" id="log">${esc(logs||'No output.')}</pre></div>
       </div>`;
     const specPane=`
       <div class="tabpane" data-pane="spec">
@@ -573,10 +651,11 @@ function viewDetail(id){
         <button class="tab ${detailTab==='overview'?'on':''}" data-tab="overview" onclick="switchTab('overview')">Overview</button>
         <button class="tab ${detailTab==='metrics'?'on':''}" data-tab="metrics" onclick="switchTab('metrics')">Metrics</button>
         <button class="tab ${detailTab==='checkpoints'?'on':''}" data-tab="checkpoints" onclick="switchTab('checkpoints')">Checkpoints</button>
+        <button class="tab ${detailTab==='runs'?'on':''}" data-tab="runs" onclick="switchTab('runs')">Runs</button>
         <button class="tab ${detailTab==='logs'?'on':''}" data-tab="logs" onclick="switchTab('logs')">Logs</button>
         <button class="tab ${detailTab==='spec'?'on':''}" data-tab="spec" onclick="switchTab('spec')">Manifest</button>
       </div>
-      ${overviewPane}${metricsPane}${checkpointsPane}${logsPane}${specPane}`;
+      ${overviewPane}${metricsPane}${checkpointsPane}${runsPane}${logsPane}${specPane}`;
     switchTab(detailTab);
     const lg=document.getElementById('log');if(lg)lg.scrollTop=lg.scrollHeight;
   },2000);

@@ -127,6 +127,10 @@ type Store interface {
 
 	AppendTransition(t *Transition) error
 	ListTransitions(jobID string) ([]*Transition, error)
+	// ListTransitionsPaged returns a job's transitions newest-first for
+	// audit paging: rows with id < beforeID (beforeID <= 0 starts from
+	// the newest), at most limit rows (limit <= 0 defaults, capped).
+	ListTransitionsPaged(jobID string, beforeID int64, limit int) ([]*Transition, error)
 
 	Close() error
 }

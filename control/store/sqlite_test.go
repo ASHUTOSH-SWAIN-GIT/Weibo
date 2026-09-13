@@ -245,6 +245,48 @@ func TestPruneTerminalRuns(t *testing.T) {
 	}
 }
 
+func TestTransitionsPaged(t *testing.T) {
+	s := open(t)
+	j := &store.Job{ID: "j", Name: "n", Spec: "x", Desired: store.DesiredRunning, Created: time.Now(), Updated: time.Now()}
+	s.CreateJob(j)
+	for _, to := range []string{"a", "b", "c", "d", "e"} {
+		if err := s.AppendTransition(&store.Transition{JobID: "j", To: to, From: "prev", At: time.Now()}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Newest-first page of 2.
+	page, err := s.ListTransitionsPaged("j", 0, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page) != 2 || page[0].To != "e" || page[1].To != "d" {
+		t.Fatalf("page=%+v", page)
+	}
+	// Cursor continues before the last seen id.
+	next, err := s.ListTransitionsPaged("j", page[1].ID, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(next) != 3 || next[0].To != "c" || next[2].To != "a" {
+		t.Fatalf("next=%+v", next)
+	}
+	// Exhausted cursor.
+	empty, err := s.ListTransitionsPaged("j", next[2].ID, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(empty) != 0 {
+		t.Fatalf("exhausted=%+v", empty)
+	}
+	// Limits are defaulted and capped, never an error.
+	if _, err := s.ListTransitionsPaged("j", 0, 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ListTransitionsPaged("j", 0, 100000); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestTransitions(t *testing.T) {
 	s := open(t)
 	j := &store.Job{ID: "j", Name: "n", Spec: "x", Desired: store.DesiredRunning, Created: time.Now(), Updated: time.Now()}

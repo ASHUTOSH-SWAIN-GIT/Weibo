@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/ASHUTOSH-SWAIN-GIT/weibo"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/checkpoint"
 	"github.com/ASHUTOSH-SWAIN-GIT/weibo/jobagent"
 	"github.com/ASHUTOSH-SWAIN-GIT/weibo/sink"
 	"github.com/ASHUTOSH-SWAIN-GIT/weibo/source"
@@ -132,6 +133,32 @@ func TestAgent_SavepointRequest(t *testing.T) {
 	}
 	if a.State().Phase != jobagent.PhaseFinished {
 		t.Errorf("phase after savepoint: %q", a.State().Phase)
+	}
+}
+
+// A checkpointed run records duration and inline size on every completed
+// checkpoint, in both the agent state and the served /state.
+func TestAgent_CheckpointReport(t *testing.T) {
+	env := weibo.NewEnv().
+		FromSource(source.FromSlices([]string{"a", "b", "c"}, []string{"1", "2", "3"})).
+		ToSink(sink.NewBlackholeSink()).
+		WithCheckpointing(10*time.Millisecond, checkpoint.NewFileStorage(t.TempDir()))
+
+	a := jobagent.New(env)
+	if err := a.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	st := a.State()
+	if len(st.Checkpoints) == 0 {
+		t.Fatal("expected completed checkpoints")
+	}
+	for _, cp := range st.Checkpoints {
+		if cp.DurationMs < 0 {
+			t.Errorf("checkpoint %s has negative duration: %d", cp.ID, cp.DurationMs)
+		}
+		if cp.SizeBytes <= 0 {
+			t.Errorf("checkpoint %s has no inline size: %d", cp.ID, cp.SizeBytes)
+		}
 	}
 }
 

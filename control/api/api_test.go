@@ -1,12 +1,14 @@
 package api_test
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -563,6 +565,236 @@ func TestUIServesHistoryHooks(t *testing.T) {
 		if !strings.Contains(html, want) {
 			t.Errorf("dashboard missing history hook %q", want)
 		}
+	}
+}
+
+func TestUIServesDiagnosticsHooks(t *testing.T) {
+	srv := newAPI(t)
+	resp, err := http.Get(srv.URL + "/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	html := string(body)
+	for _, want := range []string{"diagnostics", "followLogs", "auditMore", "/runs/", "logs/stream", "Older", "Attempts"} {
+		if !strings.Contains(html, want) {
+			t.Errorf("dashboard missing diagnostics hook %q", want)
+		}
+	}
+}
+
+func TestDiagnosticsEndpoint(t *testing.T) {
+	fake := backend.NewFake()
+	ctrl := control.New(control.Options{
+		Store: mustStore(t), Backend: fake, Image: "img", StopTimeout: time.Second,
+	})
+	srv := newAPIWithController(t, ctrl)
+
+	resp, _ := http.Post(srv.URL+"/jobs", "application/yaml", strings.NewReader(sdkJob))
+	var job store.Job
+	json.NewDecoder(resp.Body).Decode(&job)
+	resp.Body.Close()
+	ctrl.History().Add(job.ID, control.Sample{
+		At: time.Now().UTC(), Phase: "running", RecordsOut: 8,
+		CheckpointID: "cp-1", CheckpointDurationMs: 250, CheckpointSizeBytes: 1024,
+	})
+
+	resp, err := http.Get(srv.URL + "/jobs/" + job.ID + "/diagnostics")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var d struct {
+		Phase      string `json:"phase"`
+		Checkpoint *struct {
+			ID         string `json:"id"`
+			DurationMs int64  `json:"durationMs"`
+			SizeBytes  int64  `json:"sizeBytes"`
+		} `json:"checkpoint"`
+		Activity *struct {
+			RecordsOut int64 `json:"recordsOut"`
+		} `json:"activity"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&d); err != nil {
+		t.Fatal(err)
+	}
+	if d.Phase != "running" || d.Checkpoint == nil || d.Checkpoint.DurationMs != 250 || d.Activity == nil {
+		t.Fatalf("diagnostics=%+v", d)
+	}
+
+	resp404, err := http.Get(srv.URL + "/jobs/nope/diagnostics")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp404.Body.Close()
+	if resp404.StatusCode != http.StatusNotFound {
+		t.Fatalf("unknown job diagnostics: got %d, want 404", resp404.StatusCode)
+	}
+}
+
+func TestRunsEndpoints(t *testing.T) {
+	fake := backend.NewFake()
+	ctrl := control.New(control.Options{
+		Store: mustStore(t), Backend: fake, Image: "img", StopTimeout: time.Second,
+	})
+	srv := newAPIWithController(t, ctrl)
+
+	resp, _ := http.Post(srv.URL+"/jobs", "application/yaml", strings.NewReader(sdkJob))
+	var job store.Job
+	json.NewDecoder(resp.Body).Decode(&job)
+	resp.Body.Close()
+	first := latestRun(t, srv, job.ID)
+	if _, err := http.Post(srv.URL+"/jobs/"+job.ID+"/restart", "", nil); err != nil {
+		t.Fatal(err)
+	}
+
+	// List: newest first.
+	resp, err := http.Get(srv.URL + "/jobs/" + job.ID + "/runs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var list struct {
+		Runs []store.Run `json:"runs"`
+	}
+	json.NewDecoder(resp.Body).Decode(&list)
+	resp.Body.Close()
+	if len(list.Runs) != 2 || list.Runs[0].ID == first.ID {
+		t.Fatalf("runs=%+v", list.Runs)
+	}
+
+	// Get: run detail with audit transitions.
+	resp, err = http.Get(srv.URL + "/jobs/" + job.ID + "/runs/" + first.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var detail struct {
+		Run         store.Run `json:"run"`
+		Transitions []any     `json:"transitions"`
+	}
+	json.NewDecoder(resp.Body).Decode(&detail)
+	resp.Body.Close()
+	if detail.Run.ID != first.ID || len(detail.Transitions) == 0 {
+		t.Fatalf("run detail=%+v", detail)
+	}
+
+	// Unknown run is 404, even with a valid job.
+	resp404, err := http.Get(srv.URL + "/jobs/" + job.ID + "/runs/nope")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp404.Body.Close()
+	if resp404.StatusCode != http.StatusNotFound {
+		t.Fatalf("unknown run: got %d, want 404", resp404.StatusCode)
+	}
+}
+
+func latestRun(t *testing.T, srv *httptest.Server, jobID string) store.Run {
+	t.Helper()
+	resp, err := http.Get(srv.URL + "/jobs/" + jobID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var d struct {
+		LatestRun *store.Run `json:"latestRun"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&d); err != nil {
+		t.Fatal(err)
+	}
+	return *d.LatestRun
+}
+
+func TestTransitionsPagingEndpoint(t *testing.T) {
+	fake := backend.NewFake()
+	ctrl := control.New(control.Options{
+		Store: mustStore(t), Backend: fake, Image: "img", StopTimeout: time.Second,
+	})
+	srv := newAPIWithController(t, ctrl)
+
+	resp, _ := http.Post(srv.URL+"/jobs", "application/yaml", strings.NewReader(sdkJob))
+	var job store.Job
+	json.NewDecoder(resp.Body).Decode(&job)
+	resp.Body.Close()
+	if _, err := http.Post(srv.URL+"/jobs/"+job.ID+"/restart", "", nil); err != nil {
+		t.Fatal(err)
+	}
+
+	get := func(q string) (int, int64) {
+		resp, err := http.Get(srv.URL + "/jobs/" + job.ID + "/transitions" + q)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		var out struct {
+			Transitions []struct {
+				ID int64 `json:"id"`
+			} `json:"transitions"`
+			NextBefore int64 `json:"nextBefore"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+			t.Fatal(err)
+		}
+		return len(out.Transitions), out.NextBefore
+	}
+	n, next := get("?limit=2")
+	if n != 2 || next == 0 {
+		t.Fatalf("page1: n=%d next=%d", n, next)
+	}
+	n2, next2 := get("?limit=100&before="+strconv.FormatInt(next, 10))
+	if n2 == 0 {
+		t.Fatalf("page2: n=%d next=%d", n2, next2)
+	}
+	n3, _ := get("?limit=100&before=" + strconv.FormatInt(next2, 10))
+	if n3 != 0 {
+		t.Fatalf("page3 should be exhausted, got %d", n3)
+	}
+	if total := n + n2 + n3; total < 4 {
+		t.Fatalf("paged walk covered %d transitions, want >= 4", total)
+	}
+}
+
+func TestLogsStream(t *testing.T) {
+	fake := backend.NewFake()
+	ctrl := control.New(control.Options{
+		Store: mustStore(t), Backend: fake, Image: "img", StopTimeout: time.Second,
+	})
+	srv := newAPIWithController(t, ctrl)
+
+	resp, _ := http.Post(srv.URL+"/jobs", "application/yaml", strings.NewReader(sdkJob))
+	var job store.Job
+	json.NewDecoder(resp.Body).Decode(&job)
+	resp.Body.Close()
+	run := latestRun(t, srv, job.ID)
+	fake.SetLogs(run.ContainerID, "line one\nline two\n")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+"/jobs/"+job.ID+"/logs/stream?tail=200", nil)
+	resp, err := srv.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if ct := resp.Header.Get("Content-Type"); ct != "text/event-stream" {
+		t.Fatalf("content-type=%q", ct)
+	}
+	// The initial burst ("data: line one", "data: line two", blank) is
+	// sent immediately; read exactly it, then cancel so the handler's
+	// 2s poll loop exits.
+	br := bufio.NewReader(resp.Body)
+	var burst []string
+	for len(burst) < 3 {
+		line, err := br.ReadString('\n')
+		burst = append(burst, line)
+		if err != nil {
+			break
+		}
+	}
+	cancel()
+	text := strings.Join(burst, "")
+	if !strings.Contains(text, "data: line one") || !strings.Contains(text, "data: line two") {
+		t.Fatalf("stream missing initial burst: %q", text)
 	}
 }
 

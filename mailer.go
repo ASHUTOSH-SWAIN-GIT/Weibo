@@ -77,6 +77,17 @@ type StreamExecutionEnv struct {
 	// and must not mutate pipeline state.
 	checkpointListener func(id string)
 
+	// checkpointObserver, if set, is called with a full CheckpointReport
+	// (duration + inline size) on the same completions. Prefer it over
+	// checkpointListener for new supervisors.
+	checkpointObserver func(CheckpointReport)
+
+	// checkpointMeta tracks per-checkpoint diagnostics: barrier-injection
+	// time (for duration) and inline snapshot bytes (for size), keyed by
+	// checkpoint ID and consumed on completion. Bounded like barrierSnaps.
+	checkpointMeta   map[string]checkpointMeta
+	checkpointMetaMu sync.Mutex
+
 	// stateFactory creates per-owner state backends for stateful
 	// operators (WithStateBackend). Nil = operators keep their
 	// self-created in-memory backends.
@@ -160,6 +171,27 @@ func (env *StreamExecutionEnv) WithCheckpointHook(fn func(checkpoint.Step, strin
 	return env
 }
 
+// CheckpointReport describes one completed checkpoint for diagnostics:
+// how long barrier injection → completion took, and how many inline
+// snapshot bytes the checkpoint carries. InlineBytes counts serialized
+// operator + source payloads only — native state directories (Pebble
+// hard-links) and sink transaction payloads are excluded, so it is exact
+// for in-memory state and a lower bound otherwise.
+type CheckpointReport struct {
+	ID          string
+	Duration    time.Duration
+	InlineBytes int64
+}
+
+// checkpointMeta is the per-checkpoint diagnostic state behind a
+// CheckpointReport: when the barrier was injected, and the inline
+// snapshot bytes assembled at completion.
+type checkpointMeta struct {
+	startedAt   time.Time
+	inlineBytes int64
+	haveBytes   bool
+}
+
 // WithCheckpointListener registers an observer called with the
 // checkpoint ID whenever a checkpoint completes — covering both the
 // uncoordinated (at-least-once) and coordinated (exactly-once) paths.
@@ -170,12 +202,91 @@ func (env *StreamExecutionEnv) WithCheckpointListener(fn func(id string)) *Strea
 	return env
 }
 
-// notifyCheckpoint fires the optional checkpoint listener. A no-op when
+// WithCheckpointObserver registers an observer called with a full
+// CheckpointReport whenever a checkpoint completes (same coverage as
+// WithCheckpointListener, plus duration and inline size). Prefer it for
+// new supervisors; the callback must not block and must not mutate
+// pipeline state.
+func (env *StreamExecutionEnv) WithCheckpointObserver(fn func(CheckpointReport)) *StreamExecutionEnv {
+	env.checkpointObserver = fn
+	return env
+}
+
+// noteCheckpointStart records a barrier-injection timestamp for a
+// checkpoint ID. Called on every injection path (periodic, shutdown,
+// end-of-stream).
+func (env *StreamExecutionEnv) noteCheckpointStart(id string) {
+	env.checkpointMetaMu.Lock()
+	defer env.checkpointMetaMu.Unlock()
+	if env.checkpointMeta == nil {
+		env.checkpointMeta = make(map[string]checkpointMeta)
+	}
+	if len(env.checkpointMeta) > 16 {
+		for stale := range env.checkpointMeta {
+			if stale != id {
+				delete(env.checkpointMeta, stale)
+				break
+			}
+		}
+	}
+	m := env.checkpointMeta[id]
+	m.startedAt = time.Now()
+	env.checkpointMeta[id] = m
+}
+
+// addCheckpointBytes accumulates inline snapshot bytes for a checkpoint
+// ID: source offset payloads (at injection) plus operator snapshots (at
+// completion). Both completion paths contribute, so the total covers the
+// full inline payload.
+func (env *StreamExecutionEnv) addCheckpointBytes(id string, n int64) {
+	env.checkpointMetaMu.Lock()
+	defer env.checkpointMetaMu.Unlock()
+	if env.checkpointMeta == nil {
+		env.checkpointMeta = make(map[string]checkpointMeta)
+	}
+	m := env.checkpointMeta[id]
+	m.inlineBytes += n
+	m.haveBytes = true
+	env.checkpointMeta[id] = m
+}
+
+// snapBytes totals the payload bytes of one operator-snapshot map.
+func snapBytes(snaps map[string][]byte) int64 {
+	var total int64
+	for _, b := range snaps {
+		total += int64(len(b))
+	}
+	return total
+}
+
+// notifyCheckpoint fires the optional checkpoint observers. A no-op when
 // none is registered.
 func (env *StreamExecutionEnv) notifyCheckpoint(id string) {
-	if env.checkpointListener != nil {
-		env.checkpointListener(id)
+	if env.checkpointObserver != nil || env.checkpointListener != nil {
+		report := CheckpointReport{ID: id}
+		env.checkpointMetaMu.Lock()
+		if m, ok := env.checkpointMeta[id]; ok {
+			delete(env.checkpointMeta, id)
+			if !m.startedAt.IsZero() {
+				report.Duration = time.Since(m.startedAt)
+			}
+			if m.haveBytes {
+				report.InlineBytes = m.inlineBytes
+			}
+		}
+		env.checkpointMetaMu.Unlock()
+		if env.checkpointObserver != nil {
+			env.checkpointObserver(report)
+		}
+		if env.checkpointListener != nil {
+			env.checkpointListener(id)
+		}
+		return
 	}
+	// No observers: still drop the metadata so it cannot accumulate.
+	env.checkpointMetaMu.Lock()
+	delete(env.checkpointMeta, id)
+	env.checkpointMetaMu.Unlock()
 }
 
 // FromSource sets the data source for the pipeline and returns a Stream
@@ -626,6 +737,9 @@ func (env *StreamExecutionEnv) injectBarriers(ctx, hardCtx context.Context, sour
 // aligned offset map under the given checkpoint ID, using the shared versioned
 // source-position format.
 func (env *StreamExecutionEnv) registerAlignedOffsets(id string, offsets map[source.PositionKey]int64) {
+	// Every injection funnels through here (periodic, shutdown,
+	// end-of-stream), so it is also the duration start point.
+	env.noteCheckpointStart(id)
 	var data []byte
 	var err error
 	if _, topicAware := env.source.(source.PositionedCheckpointSource); topicAware {
@@ -644,6 +758,7 @@ func (env *StreamExecutionEnv) registerAlignedOffsets(id string, offsets map[sou
 	if err != nil {
 		return
 	}
+	env.addCheckpointBytes(id, int64(len(data)))
 	// Coordinated mode: the coordinator owns pending checkpoints.
 	if env.coord != nil {
 		env.coord.OnBarrierInjected(id, data)
@@ -744,6 +859,7 @@ func (env *StreamExecutionEnv) collectSnapshots(checkpointID string) (map[string
 	env.workerMu.Unlock()
 
 	dirs := extractStateDirs(snaps)
+	env.addCheckpointBytes(checkpointID, snapBytes(snaps))
 	return snaps, dirs
 }
 

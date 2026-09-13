@@ -68,6 +68,12 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /jobs/{id}/history", s.history)
 	mux.HandleFunc("GET /jobs/history", s.bulkHistory)
 	mux.HandleFunc("GET /config", s.config)
+	mux.HandleFunc("GET /jobs/{id}/diagnostics", s.diagnostics)
+	mux.HandleFunc("GET /jobs/{id}/runs", s.runs)
+	mux.HandleFunc("GET /jobs/{id}/runs/{runId}", s.runDetail)
+	mux.HandleFunc("GET /jobs/{id}/runs/{runId}/logs", s.runLogs)
+	mux.HandleFunc("GET /jobs/{id}/transitions", s.transitions)
+	mux.HandleFunc("GET /jobs/{id}/logs/stream", s.logsStream)
 	return s.auth(s.instrument(mux))
 }
 
@@ -87,7 +93,9 @@ func (s *Server) instrument(next http.Handler) http.Handler {
 	})
 }
 
-// statusRecorder captures the status code for metrics.
+// statusRecorder captures the status code for metrics. It forwards Flush
+// so streaming handlers (SSE log follow) keep working behind the metrics
+// middleware.
 type statusRecorder struct {
 	http.ResponseWriter
 	status int
@@ -96,6 +104,12 @@ type statusRecorder struct {
 func (r *statusRecorder) WriteHeader(status int) {
 	r.status = status
 	r.ResponseWriter.WriteHeader(status)
+}
+
+func (r *statusRecorder) Flush() {
+	if f, ok := r.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
 }
 
 // auth wraps h with shared-bearer-token enforcement. With no token
@@ -234,6 +248,183 @@ func historyPoints(r *http.Request, def int) int {
 // external Grafana base URL ("" when deep links are disabled).
 func (s *Server) config(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"grafanaUrl": s.ctrl.GrafanaURL()})
+}
+
+// diagnostics serves the assembled "why is my job (un)healthy" view:
+// failure classification, last activity, restart countdown, and latest
+// checkpoint duration/size.
+func (s *Server) diagnostics(w http.ResponseWriter, r *http.Request) {
+	d, err := s.ctrl.Diagnostics(r.PathValue("id"))
+	if err != nil {
+		writeErr(w, http.StatusNotFound, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, d)
+}
+
+// runs lists every recorded attempt for a job, newest first. Terminal
+// history is retention-bounded; the live attempt is always present.
+func (s *Server) runs(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if _, err := s.ctrl.GetJob(id); err != nil {
+		writeErr(w, http.StatusNotFound, err.Error())
+		return
+	}
+	runs, err := s.ctrl.Runs(id)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if runs == nil {
+		runs = []*store.Run{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"runs": runs})
+}
+
+// runDetail serves one attempt with its audit transitions and restart
+// countdown.
+func (s *Server) runDetail(w http.ResponseWriter, r *http.Request) {
+	d, err := s.ctrl.RunDetail(r.PathValue("id"), r.PathValue("runId"))
+	if err != nil {
+		writeErr(w, http.StatusNotFound, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, d)
+}
+
+// runLogs serves one attempt's container logs. 404 for an unknown run,
+// 410 when the container is gone (pruned by retention, or never
+// recorded) — the run row itself remains for audit.
+func (s *Server) runLogs(w http.ResponseWriter, r *http.Request) {
+	out, status, err := s.ctrl.RunLogs(r.Context(), r.PathValue("id"), r.PathValue("runId"), logTail(r))
+	if err != nil {
+		writeErr(w, status, err.Error())
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	_, _ = io.WriteString(w, out)
+}
+
+// transitions serves the paged audit log, newest first:
+// ?limit=N (default 50, max 200) and ?before=<id> (exclusive cursor).
+// The response carries nextBefore (0 when exhausted) for the More button.
+func (s *Server) transitions(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if _, err := s.ctrl.GetJob(id); err != nil {
+		writeErr(w, http.StatusNotFound, err.Error())
+		return
+	}
+	var before int64
+	if q := r.URL.Query().Get("before"); q != "" {
+		if n, err := strconv.ParseInt(q, 10, 64); err == nil && n > 0 {
+			before = n
+		}
+	}
+	limit := store.DefaultTransitionLimit
+	if q := r.URL.Query().Get("limit"); q != "" {
+		if n, err := strconv.Atoi(q); err == nil && n > 0 {
+			limit = n
+		}
+	}
+	ts, err := s.ctrl.TransitionsPaged(id, before, limit)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if ts == nil {
+		ts = []*store.Transition{}
+	}
+	var nextBefore int64
+	if len(ts) > 0 {
+		nextBefore = ts[len(ts)-1].ID
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"transitions": ts, "nextBefore": nextBefore})
+}
+
+// logsStream follows a job's latest container logs over server-sent
+// events: an initial ?tail= burst, then only new output every 2s, plus
+// heartbeat comments. It ends when the client disconnects. Deltas are
+// capped per event so one chatty poll cannot balloon memory.
+func (s *Server) logsStream(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	run, err := s.ctrl.LatestRun(id)
+	if err != nil || run == nil || run.ContainerID == "" {
+		writeErr(w, http.StatusNotFound, "no container recorded for job")
+		return
+	}
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeErr(w, http.StatusInternalServerError, "streaming unsupported")
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.WriteHeader(http.StatusOK)
+
+	send := func(text string) {
+		if len(text) > 64<<10 {
+			text = "[…truncated…]\n" + text[len(text)-64<<10:]
+		}
+		for _, line := range strings.Split(text, "\n") {
+			_, _ = io.WriteString(w, "data: "+line+"\n")
+		}
+		_, _ = io.WriteString(w, "\n")
+		flusher.Flush()
+	}
+	ctx := r.Context()
+	last, err := s.ctrl.Logs(ctx, id, logTail(r))
+	if err != nil {
+		send("log stream unavailable: " + err.Error())
+		return
+	}
+	send(last)
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			cur, err := s.ctrl.Logs(ctx, id, 0)
+			if err != nil {
+				_, _ = io.WriteString(w, ": backend error: "+singleLine(err.Error())+"\n\n")
+				flusher.Flush()
+				continue
+			}
+			switch {
+			case len(cur) > len(last) && strings.HasPrefix(cur, last):
+				send(cur[len(last):])
+			case len(cur) != len(last):
+				// Log rotated or container replaced: resend the window.
+				send(cur)
+			default:
+				_, _ = io.WriteString(w, ": ping\n\n")
+				flusher.Flush()
+			}
+			last = cur
+		}
+	}
+}
+
+func singleLine(s string) string {
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		return s[:i]
+	}
+	return s
+}
+
+// logTail parses ?tail=N for the log endpoints (default 200); values < 0
+// mean "all".
+func logTail(r *http.Request) int {
+	tail := 200
+	if t := r.URL.Query().Get("tail"); t != "" {
+		if n, err := strconv.Atoi(t); err == nil {
+			tail = n
+		}
+	}
+	return tail
 }
 
 // readWorkflow extracts a workflow doc (+ optional env) from a request:

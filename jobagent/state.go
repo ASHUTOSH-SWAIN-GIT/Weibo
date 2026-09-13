@@ -64,7 +64,13 @@ type State struct {
 }
 
 // Checkpoint is one completed checkpoint in the job's history.
+// DurationMs is barrier injection → completion; SizeBytes is the inline
+// snapshot payload (operator + source bytes, excluding native state dirs
+// and sink transaction payload — exact for in-memory state, a lower bound
+// otherwise).
 type Checkpoint struct {
 	ID          string    `json:"id"`
 	CompletedAt time.Time `json:"completedAt"`
+	DurationMs  int64     `json:"durationMs,omitempty"`
+	SizeBytes   int64     `json:"sizeBytes,omitempty"`
 }

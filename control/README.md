@@ -142,6 +142,12 @@ Notes for the Kubernetes backend:
 | `GET  /jobs/{id}/history?points=N` | Rolling history samples for one job (default 120), oldest first. |
 | `GET  /jobs/history?points=N` | Downsampled series for every job with history (default 30) — one request for the all-jobs view. |
 | `GET  /config`                | UI configuration: `{"grafanaUrl": "..."}` ("" when deep links are disabled). |
+| `GET  /jobs/{id}/diagnostics` | Assembled health view: failure classification + hint, last activity, restart countdown, latest checkpoint duration/size. |
+| `GET  /jobs/{id}/runs`        | Every recorded attempt, newest first (retention-bounded). |
+| `GET  /jobs/{id}/runs/{runId}` | One attempt with its audit transitions and restart countdown. |
+| `GET  /jobs/{id}/runs/{runId}/logs?tail=N` | That attempt's container logs (404 unknown run, 410 container removed). |
+| `GET  /jobs/{id}/transitions?limit=N&before=<id>` | Paged audit log, newest first (default 50, max 200; `nextBefore` cursor, 0 when exhausted). |
+| `GET  /jobs/{id}/logs/stream?tail=N` | Follow the latest container's logs over server-sent events (initial burst, then new output every 2s). |
 
 **Auth:** start the controller with `-auth-token <secret>` (env
 `WEIBO_AUTH_TOKEN`) to require `Authorization: Bearer <secret>` on every route
@@ -197,6 +203,21 @@ page gains a Grafana button linking to
 `{url}/d/weibo-job?var-job=<id>&var-run=<run>&from=now-1h&to=now` —
 provision a dashboard with UID `weibo-job` and `job`/`run` variables to
 receive it.
+
+## Diagnostics
+
+When a job misbehaves, `GET /jobs/{id}/diagnostics` assembles the answer
+in one call: the failure category (`launch_transient/permanent`,
+`launch_record`, `secret_blocked`, `restarting`, `run_failed`) with an
+operator hint, the last reported activity (when the agent last checked in
+plus record counters), a live restart countdown when a retry is scheduled,
+and the latest checkpoint's duration and inline size (exact for in-memory
+state, a lower bound with native Pebble state — see the engine's
+`CheckpointReport`). The dashboard renders this as a Diagnostics card, a
+Runs tab for inspecting previous attempts (audit + logs each), a Follow
+button that streams logs over server-sent events, and an Older button that
+pages the audit log. The CLI mirrors it: `weibo runs <job-id>` and
+`weibo logs <job-id> -follow`.
 
 ## Savepoints (stop-with-savepoint)
 

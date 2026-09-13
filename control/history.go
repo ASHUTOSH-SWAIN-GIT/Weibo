@@ -27,10 +27,14 @@ type Sample struct {
 	RecordsOut       int64      `json:"recordsOut"`
 	CheckpointID     string     `json:"checkpointId,omitempty"`
 	LastCheckpointAt *time.Time `json:"lastCheckpointAt,omitempty"`
-	KafkaLag         int64      `json:"kafkaLag,omitempty"`
-	EdgeQueued       int64      `json:"edgeQueued,omitempty"`
-	Errors           int64      `json:"errors,omitempty"`
-	LastError        string     `json:"lastError,omitempty"`
+	// CheckpointDurationMs is barrier injection → completion for the
+	// latest checkpoint; CheckpointSizeBytes its inline snapshot bytes.
+	CheckpointDurationMs int64  `json:"checkpointDurationMs,omitempty"`
+	CheckpointSizeBytes  int64  `json:"checkpointSizeBytes,omitempty"`
+	KafkaLag             int64  `json:"kafkaLag,omitempty"`
+	EdgeQueued           int64  `json:"edgeQueued,omitempty"`
+	Errors               int64  `json:"errors,omitempty"`
+	LastError            string `json:"lastError,omitempty"`
 }
 
 // History is a bounded in-memory rolling history per job (append-only ring
@@ -83,6 +87,18 @@ func (h *History) Drop(jobID string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	delete(h.series, jobID)
+}
+
+// Latest returns the newest sample for a job (false when none). It is
+// the "last activity" signal behind the diagnostics endpoint.
+func (h *History) Latest(jobID string) (Sample, bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	series := h.series[jobID]
+	if len(series) == 0 {
+		return Sample{}, false
+	}
+	return series[len(series)-1], true
 }
 
 // JobsWithHistory returns the IDs that currently have samples.
@@ -176,17 +192,25 @@ func (r *HistoryRecorder) sampleOnce(ctx context.Context) {
 	wg.Wait()
 }
 
+// agentCheckpoint is one entry of the agent's checkpoint list; only the
+// newest (index 0) is sampled.
+type agentCheckpoint struct {
+	DurationMs int64 `json:"durationMs"`
+	SizeBytes  int64 `json:"sizeBytes"`
+}
+
 // agentState is the subset of the job agent's /state the sampler keeps.
 // Source carries connector operational state (Kafka partition progress
 // with lag); its shape varies by connector, so it stays decoded.
 type agentState struct {
-	Phase             string     `json:"phase"`
-	RecordsIn         int64      `json:"recordsIn"`
-	RecordsOut        int64      `json:"recordsOut"`
-	CheckpointID      string     `json:"currentCheckpointId"`
-	LastCheckpointAt  *time.Time `json:"lastCheckpointAt"`
-	LastError         string     `json:"lastError"`
-	Source            any        `json:"source"`
+	Phase            string            `json:"phase"`
+	RecordsIn        int64             `json:"recordsIn"`
+	RecordsOut       int64             `json:"recordsOut"`
+	CheckpointID     string            `json:"currentCheckpointId"`
+	LastCheckpointAt *time.Time        `json:"lastCheckpointAt"`
+	LastError        string            `json:"lastError"`
+	Source           any               `json:"source"`
+	Checkpoints      []agentCheckpoint `json:"checkpoints"`
 }
 
 // scrapeTarget reads one agent's /state and /metrics into a Sample.
@@ -214,6 +238,10 @@ func (r *HistoryRecorder) scrapeTarget(ctx context.Context, addr string) (Sample
 	sample.CheckpointID = st.CheckpointID
 	sample.LastCheckpointAt = st.LastCheckpointAt
 	sample.LastError = st.LastError
+	if len(st.Checkpoints) > 0 {
+		sample.CheckpointDurationMs = st.Checkpoints[0].DurationMs
+		sample.CheckpointSizeBytes = st.Checkpoints[0].SizeBytes
+	}
 	sample.KafkaLag = sumLag(st.Source)
 
 	// Resource detail is best effort: a missing /metrics still yields a

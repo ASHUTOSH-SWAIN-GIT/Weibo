@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -193,6 +194,60 @@ func (c *client) deleteJob(ctx context.Context, id string, deleteData bool) erro
 	}
 	_, err := c.do(ctx, http.MethodDelete, "/jobs/"+url.PathEscape(id)+q, "", nil)
 	return err
+}
+
+// runRow mirrors one store.Run for the runs list.
+type runRow = store.Run
+
+// runs returns every recorded attempt for a job, newest first.
+func (c *client) runs(ctx context.Context, id string) ([]runRow, error) {
+	data, err := c.do(ctx, http.MethodGet, "/jobs/"+url.PathEscape(id)+"/runs", "", nil)
+	if err != nil {
+		return nil, err
+	}
+	var out struct {
+		Runs []runRow `json:"runs"`
+	}
+	if err := json.Unmarshal(data, &out); err != nil {
+		return nil, err
+	}
+	return out.Runs, nil
+}
+
+// followLogs streams a job's logs (SSE) to onLine until ctx is cancelled.
+// Each SSE data line is delivered; comments/heartbeats are skipped.
+func (c *client) followLogs(ctx context.Context, id string, tail int, onLine func(string)) error {
+	q := "?tail=" + strconv.Itoa(tail)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.base+"/jobs/"+url.PathEscape(id)+"/logs/stream"+q, nil)
+	if err != nil {
+		return err
+	}
+	if c.token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.token)
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("contacting controller at %s: %w", c.base, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		data, _ := io.ReadAll(resp.Body)
+		if msg := apiError(data); msg != "" {
+			return fmt.Errorf("%s (%s)", msg, resp.Status)
+		}
+		return fmt.Errorf("controller returned %s", resp.Status)
+	}
+	sc := bufio.NewScanner(resp.Body)
+	sc.Buffer(make([]byte, 64<<10), 64<<10)
+	for sc.Scan() {
+		line := sc.Text()
+		if after, ok := strings.CutPrefix(line, "data: "); ok {
+			onLine(after)
+		} else if line == "data:" {
+			onLine("")
+		}
+	}
+	return sc.Err()
 }
 
 // logs returns the last `tail` lines of the job's container logs as text.

@@ -52,6 +52,8 @@ func main() {
 		os.Exit(runSavepoint(os.Args[2:]))
 	case "delete":
 		os.Exit(runDelete(os.Args[2:]))
+	case "runs":
+		os.Exit(runRuns(os.Args[2:]))
 	case "-h", "--help", "help":
 		usage()
 	default:
@@ -74,6 +76,7 @@ Usage:
   weibo restart <job-id> [-savepoint]  Resume a job (optionally from a savepoint)
    weibo savepoint <job-id> -label N    Stop a job with a named savepoint
    weibo delete <job-id> [-delete-data]  Delete a job (optionally with its durable state)
+   weibo runs <job-id>                   List a job's recorded attempts, newest first
 
 Management commands talk to a controller over REST (env WEIBO_CONTROLLER,
 default http://localhost:9000). Run "weibo <command> -h" for flags.

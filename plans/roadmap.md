@@ -217,11 +217,24 @@ exposition-parser, history/config API, and dashboard-hook unit tests;
 sampling reuses the bounded discovery probes (8 concurrent, 15s deadline,
 5s per-target timeout).
 
-### 16. Improve diagnostic APIs
+### 16. Improve diagnostic APIs — ✅ DONE
 
-Add structured failure categories, last activity, checkpoint duration/size,
-restart countdown, bounded/followable logs, previous-run selection, and
-paginated audit history.
+**Shipped:** engine `CheckpointReport` observer (barrier injection →
+completion duration plus inline snapshot bytes on both completion paths;
+agent serves duration/size per checkpoint) with the legacy ID listener
+kept; `GET /jobs/{id}/diagnostics` assembling failure classification +
+hint, last activity (rolling history), live restart countdown, and latest
+checkpoint duration/size; `GET /jobs/{id}/runs` + `/runs/{runId}` (+
+`/logs` with 404 unknown / 410 container-removed) for previous-run
+selection; cursor-paged `GET /jobs/{id}/transitions` (`limit` default 50,
+max 200); SSE `GET /jobs/{id}/logs/stream` (tail burst, 2s suffix polls,
+capped deltas, heartbeat). Dashboard: Diagnostics card, Runs tab, Follow
+toggle (fetch streaming, so the bearer token still applies), audit Older
+button. CLI: `weibo runs`, `weibo logs -follow`.
+
+**Exit criteria:** observer duration/size, paged-transition, diagnosis,
+restart-countdown, run-logs 404/410, paging cursor, SSE burst, sampler
+checkpoint-stats, and dashboard-hook unit tests; suites green.
 
 ### 17. Add tracing and structured logging
 

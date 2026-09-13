@@ -3,6 +3,9 @@ package control
 import (
 	"context"
 	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -81,6 +84,36 @@ func TestRecorderSamplesLiveJobs(t *testing.T) {
 	series := c.history.Series(job.ID, 0)
 	if len(series) != 1 || series[0].RecordsOut != 100 {
 		t.Fatalf("series=%+v", series)
+	}
+}
+
+func TestScrapeTargetReadsCheckpointStats(t *testing.T) {
+	fake := backend.NewFake()
+	c, _ := historyController(t, fake)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/state":
+			fmt.Fprint(w, `{"phase":"running","recordsIn":10,"recordsOut":8,`+
+				`"currentCheckpointId":"cp-1","checkpoints":[{"id":"cp-1","durationMs":250,"sizeBytes":1024}],`+
+				`"source":[{"topic":"orders","partition":0,"lag":7}]}`)
+		case "/metrics":
+			fmt.Fprint(w, "weibo_edge_queue_size{edge=\"edge-0\"} 3\nweibo_stage_errors_total{stage=\"s\"} 2\n")
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	r := newHistoryRecorder(c, c.history)
+	sample, err := r.scrapeTarget(context.Background(), srv.Listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sample.CheckpointID != "cp-1" || sample.CheckpointDurationMs != 250 || sample.CheckpointSizeBytes != 1024 {
+		t.Fatalf("checkpoint stats: %+v", sample)
+	}
+	if sample.KafkaLag != 7 || sample.EdgeQueued != 3 || sample.Errors != 2 {
+		t.Fatalf("counters: %+v", sample)
 	}
 }
 
