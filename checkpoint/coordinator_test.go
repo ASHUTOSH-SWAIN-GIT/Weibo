@@ -17,6 +17,7 @@ type stubTracer struct {
 }
 
 type stubSpan struct {
+	mu    sync.Mutex
 	name  string
 	attrs []trace.Attribute
 	ended bool
@@ -34,11 +35,26 @@ func (t *stubTracer) Start(ctx context.Context, name string, attrs ...trace.Attr
 	return trace.ContextWithSpan(ctx, s), s
 }
 
-func (s *stubSpan) End()                               { s.ended = true }
-func (s *stubSpan) RecordError(err error)              { s.errs = append(s.errs, err) }
-func (s *stubSpan) SetAttributes(a ...trace.Attribute) { s.attrs = append(s.attrs, a...) }
-func (s *stubSpan) TraceID() string                    { return s.tid }
-func (s *stubSpan) SpanID() string                     { return s.sid }
+func (s *stubSpan) End() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.ended = true
+}
+
+func (s *stubSpan) RecordError(err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.errs = append(s.errs, err)
+}
+
+func (s *stubSpan) SetAttributes(a ...trace.Attribute) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.attrs = append(s.attrs, a...)
+}
+
+func (s *stubSpan) TraceID() string { return s.tid }
+func (s *stubSpan) SpanID() string  { return s.sid }
 
 // A full finalize records one ended, error-free span carrying the
 // checkpoint ID.
@@ -58,7 +74,12 @@ func TestCoordinator_FinalizeSpan(t *testing.T) {
 	deadline := time.Now().Add(5 * time.Second)
 	for {
 		tr.mu.Lock()
-		done := len(tr.spans) > 0 && tr.spans[0].ended
+		var done bool
+		if len(tr.spans) > 0 {
+			tr.spans[0].mu.Lock()
+			done = tr.spans[0].ended
+			tr.spans[0].mu.Unlock()
+		}
 		tr.mu.Unlock()
 		if done {
 			break
@@ -69,8 +90,10 @@ func TestCoordinator_FinalizeSpan(t *testing.T) {
 		time.Sleep(5 * time.Millisecond)
 	}
 	tr.mu.Lock()
-	defer tr.mu.Unlock()
 	s := tr.spans[0]
+	tr.mu.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.name != "checkpoint.finalize" {
 		t.Errorf("span name=%q", s.name)
 	}

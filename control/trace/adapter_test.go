@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
+	ctrace "github.com/ASHUTOSH-SWAIN-GIT/weibo/control/trace"
 	wtrace "github.com/ASHUTOSH-SWAIN-GIT/weibo/observability/trace"
 	teltrace "github.com/ASHUTOSH-SWAIN-GIT/weibo/telemetry/trace"
-	ctrace "github.com/ASHUTOSH-SWAIN-GIT/weibo/control/trace"
 )
 
 func TestAdaptNilIsNoop(t *testing.T) {

@@ -24,13 +24,13 @@ import (
 type ControllerMetrics struct {
 	reg *prometheus.Registry
 
-	launches           *prometheus.CounterVec // result: success|transient|permanent|blocked|record_failed
-	reconciles         *prometheus.CounterVec // result: success|error
-	reconcileDuration  prometheus.Histogram
-	sweepRemoved       prometheus.Counter
-	sweepRunningSeen   prometheus.Counter
-	apiRequests        *prometheus.CounterVec   // method, route, status
-	apiDuration        *prometheus.HistogramVec // method, route
+	launches          *prometheus.CounterVec // result: success|transient|permanent|blocked|record_failed
+	reconciles        *prometheus.CounterVec // result: success|error
+	reconcileDuration prometheus.Histogram
+	sweepRemoved      prometheus.Counter
+	sweepRunningSeen  prometheus.Counter
+	apiRequests       *prometheus.CounterVec   // method, route, status
+	apiDuration       *prometheus.HistogramVec // method, route
 }
 
 // NewControllerMetrics builds the registry, process/go collectors, and

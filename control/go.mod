@@ -143,3 +143,5 @@ require (
 )
 
 replace github.com/ASHUTOSH-SWAIN-GIT/weibo/telemetry => ../telemetry
+
+replace github.com/ASHUTOSH-SWAIN-GIT/weibo => ..

@@ -691,12 +691,14 @@ func (c *Controller) startRun(ctx context.Context, job *store.Job, attempt int, 
 	// Single-live-run fencing: never run two containers for one job at
 	// once — two live transactional producers with the same id would
 	// break exactly-once. Callers stop the prior run before relaunching.
-	prev, err := c.store.LatestRun(job.ID)
+	runs, err := c.store.ListRuns(job.ID)
 	if err != nil {
 		return err
 	}
-	if prev != nil && prev.Stopped == nil {
-		return fmt.Errorf("job %s already has an active run %s", job.ID, prev.ID)
+	for _, prev := range runs {
+		if prev.Stopped == nil {
+			return fmt.Errorf("job %s already has an active run %s", job.ID, prev.ID)
+		}
 	}
 
 	now := time.Now().UTC()

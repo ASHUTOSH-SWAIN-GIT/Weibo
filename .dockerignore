@@ -3,8 +3,12 @@
 .git
 .gitignore
 .playwright-mcp/
+.cache/
 data/
 plans/
 bench/
 Dockerfile.runner
 *.log
+coverage.out
+coverage.html
+control/control-coverage.out

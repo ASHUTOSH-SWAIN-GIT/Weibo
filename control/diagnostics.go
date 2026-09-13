@@ -121,15 +121,15 @@ type CheckpointStatus struct {
 // Diagnostics is the assembled "why is my job (un)healthy" view behind
 // GET /jobs/{id}/diagnostics.
 type Diagnostics struct {
-	JobID      string            `json:"jobId"`
-	Phase      string            `json:"phase"`
+	JobID      string             `json:"jobId"`
+	Phase      string             `json:"phase"`
 	Desired    store.DesiredState `json:"desired"`
-	Failure    *FailureDiagnosis `json:"failure,omitempty"`
-	Activity   *Activity         `json:"activity,omitempty"`
-	Restart    *RestartStatus    `json:"restart,omitempty"`
-	Checkpoint *CheckpointStatus `json:"checkpoint,omitempty"`
-	RunID      string            `json:"runId,omitempty"`
-	Attempt    int               `json:"attempt,omitempty"`
+	Failure    *FailureDiagnosis  `json:"failure,omitempty"`
+	Activity   *Activity          `json:"activity,omitempty"`
+	Restart    *RestartStatus     `json:"restart,omitempty"`
+	Checkpoint *CheckpointStatus  `json:"checkpoint,omitempty"`
+	RunID      string             `json:"runId,omitempty"`
+	Attempt    int                `json:"attempt,omitempty"`
 }
 
 // Diagnostics assembles the diagnostic view for a job: failure
