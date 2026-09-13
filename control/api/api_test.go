@@ -451,6 +451,121 @@ func TestTargetsDiscovery(t *testing.T) {
 	}
 }
 
+func TestJobHistoryDownsamples(t *testing.T) {
+	fake := backend.NewFake()
+	ctrl := control.New(control.Options{
+		Store: mustStore(t), Backend: fake, Image: "img", StopTimeout: time.Second,
+	})
+	srv := newAPIWithController(t, ctrl)
+
+	resp, _ := http.Post(srv.URL+"/jobs", "application/yaml", strings.NewReader(sdkJob))
+	var job store.Job
+	json.NewDecoder(resp.Body).Decode(&job)
+	resp.Body.Close()
+
+	for i := 0; i < 5; i++ {
+		ctrl.History().Add(job.ID, sampleAt(i))
+	}
+	resp, err := http.Get(srv.URL + "/jobs/" + job.ID + "/history?points=2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var out struct {
+		JobID  string `json:"jobId"`
+		Points []struct {
+			RecordsOut int64 `json:"recordsOut"`
+		} `json:"points"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+	if out.JobID != job.ID || len(out.Points) != 2 {
+		t.Fatalf("history=%+v", out)
+	}
+	if out.Points[0].RecordsOut != 0 || out.Points[1].RecordsOut != 400 {
+		t.Fatalf("endpoints not preserved: %+v", out.Points)
+	}
+
+	resp404, err := http.Get(srv.URL + "/jobs/nope/history")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp404.Body.Close()
+	if resp404.StatusCode != http.StatusNotFound {
+		t.Fatalf("unknown job history: got %d, want 404", resp404.StatusCode)
+	}
+}
+
+func sampleAt(i int) control.Sample {
+	return control.Sample{
+		At:         time.Now().UTC().Add(time.Duration(i) * time.Second),
+		Phase:      "running",
+		RecordsIn:  int64(i * 10),
+		RecordsOut: int64(i * 100),
+	}
+}
+
+func TestBulkHistoryAndConfig(t *testing.T) {
+	fake := backend.NewFake()
+	ctrl := control.New(control.Options{
+		Store: mustStore(t), Backend: fake, Image: "img", StopTimeout: time.Second,
+		GrafanaURL: "https://grafana.example",
+	})
+	srv := newAPIWithController(t, ctrl)
+
+	var ids []string
+	for range 2 {
+		resp, _ := http.Post(srv.URL+"/jobs", "application/yaml", strings.NewReader(sdkJob))
+		var job store.Job
+		json.NewDecoder(resp.Body).Decode(&job)
+		resp.Body.Close()
+		ids = append(ids, job.ID)
+		ctrl.History().Add(job.ID, sampleAt(0))
+	}
+	resp, err := http.Get(srv.URL + "/jobs/history?points=10")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var bulk struct {
+		Histories map[string][]any `json:"histories"`
+	}
+	json.NewDecoder(resp.Body).Decode(&bulk)
+	resp.Body.Close()
+	if len(bulk.Histories) != 2 {
+		t.Fatalf("bulk=%+v", bulk)
+	}
+
+	resp, err = http.Get(srv.URL + "/config")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cfg struct {
+		GrafanaURL string `json:"grafanaUrl"`
+	}
+	json.NewDecoder(resp.Body).Decode(&cfg)
+	resp.Body.Close()
+	if cfg.GrafanaURL != "https://grafana.example" {
+		t.Fatalf("config=%+v", cfg)
+	}
+}
+
+func TestUIServesHistoryHooks(t *testing.T) {
+	srv := newAPI(t)
+	resp, err := http.Get(srv.URL + "/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	html := string(body)
+	for _, want := range []string{"bulkHistory", "spark(", "grafanaLink", "/config", "Fleet Throughput"} {
+		if !strings.Contains(html, want) {
+			t.Errorf("dashboard missing history hook %q", want)
+		}
+	}
+}
+
 func TestReadinessReportsBackendOutage(t *testing.T) {
 	ctrl := control.New(control.Options{
 		Store:       mustStore(t),
@@ -531,7 +646,10 @@ func TestServesUI(t *testing.T) {
 			t.Errorf("dashboard missing current contract %q", required)
 		}
 	}
-	for _, removed := range []string{"Weibo Resource Model", "Grafana ↗", "Submit New Job", "type: generator"} {
+	// NOTE: "Grafana ↗" was once removed UI, but roadmap #15 reintroduced
+	// it deliberately as the external-Grafana deep link (see
+	// TestUIServesHistoryHooks), so it is no longer in this list.
+	for _, removed := range []string{"Weibo Resource Model", "Submit New Job", "type: generator"} {
 		if strings.Contains(html, removed) {
 			t.Errorf("dashboard still contains removed UI %q", removed)
 		}

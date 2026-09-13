@@ -86,6 +86,8 @@ func runDashboard(args []string) int {
 	image := fs.String("image", "weibo-runner:dev", "runner image tag")
 	dbPath := fs.String("db", "./weibo-control.db", "SQLite database path")
 	interval := fs.Duration("reconcile", 3*time.Second, "reconcile interval")
+	historyInterval := fs.Duration("history-interval", 15*time.Second, "rolling metrics history sample interval (0 disables)")
+	grafanaURL := fs.String("grafana-url", os.Getenv("WEIBO_GRAFANA_URL"), "external Grafana base URL for job/run deep links; empty disables (env WEIBO_GRAFANA_URL)")
 	noOpen := fs.Bool("no-open", false, "do not open the browser")
 	backendKind := fs.String("backend", "docker", "container backend: docker | kubernetes")
 	namespace := fs.String("namespace", "default", "kubernetes namespace (kubernetes backend)")
@@ -128,8 +130,12 @@ func runDashboard(args []string) int {
 			DefaultJobCPU:    *defaultJobCPU,
 			DefaultJobMemory: *defaultJobMemory,
 		},
-		Logf: log.Printf,
+		GrafanaURL: *grafanaURL,
+		Logf:       log.Printf,
 	})
+	if *historyInterval > 0 {
+		go ctrl.RunHistoryRecorder(ctx, *historyInterval)
+	}
 	// Recover labeled backend orphans left by crashed deletes/removes
 	// before serving. A sweep failure is logged, never fatal: the
 	// reconciler still converges live runs.

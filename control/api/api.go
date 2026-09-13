@@ -65,6 +65,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /jobs/{id}/metrics", s.proxy("/metrics"))
 	mux.HandleFunc("GET /jobs/{id}/describe", s.proxy("/describe"))
 	mux.HandleFunc("GET /jobs/{id}/plan", s.proxy("/plan"))
+	mux.HandleFunc("GET /jobs/{id}/history", s.history)
+	mux.HandleFunc("GET /jobs/history", s.bulkHistory)
+	mux.HandleFunc("GET /config", s.config)
 	return s.auth(s.instrument(mux))
 }
 
@@ -185,6 +188,52 @@ func (s *Server) targets(w http.ResponseWriter, r *http.Request) {
 		targets = []control.DiscoveryTarget{}
 	}
 	writeJSON(w, http.StatusOK, targets)
+}
+
+// history serves one job's rolling metrics history (downsampled to at
+// most ?points=N, default 120) for sparklines: raw cumulative counters
+// plus checkpoint/lag/queue/error state per point; readers derive rates
+// from counter deltas.
+func (s *Server) history(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if _, err := s.ctrl.GetJob(id); err != nil {
+		writeErr(w, http.StatusNotFound, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"jobId":   id,
+		"points":  s.ctrl.History().Series(id, historyPoints(r, 120)),
+		"samples": control.DefaultHistorySamples,
+	})
+}
+
+// bulkHistory serves downsampled series for every job that has history
+// (at most ?points=N each, default 30) — one request for the all-jobs
+// view instead of one per job.
+func (s *Server) bulkHistory(w http.ResponseWriter, r *http.Request) {
+	points := historyPoints(r, 30)
+	out := map[string]any{}
+	for _, id := range s.ctrl.History().JobsWithHistory() {
+		out[id] = s.ctrl.History().Series(id, points)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"histories": out})
+}
+
+// historyPoints parses ?points=N (def when absent); 0 means "full
+// series", and anything unparsable falls back to def.
+func historyPoints(r *http.Request, def int) int {
+	if q := r.URL.Query().Get("points"); q != "" {
+		if n, err := strconv.Atoi(q); err == nil && n >= 0 {
+			return n
+		}
+	}
+	return def
+}
+
+// config exposes controller-level UI configuration: currently just the
+// external Grafana base URL ("" when deep links are disabled).
+func (s *Server) config(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]string{"grafanaUrl": s.ctrl.GrafanaURL()})
 }
 
 // readWorkflow extracts a workflow doc (+ optional env) from a request:

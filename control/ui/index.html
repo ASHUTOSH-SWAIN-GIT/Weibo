@@ -132,6 +132,8 @@
   .bar{height:6px;background:#eef0f3;border-radius:0;overflow:hidden;min-width:220px}
   .bar span{display:block;height:100%;background:var(--accent)}
   .metric-cell{display:grid;grid-template-columns:1fr auto;gap:8px;align-items:center}.metric-cell .detail{grid-column:1/-1;color:var(--muted);font-size:12px}
+  .spark{color:var(--accent);display:inline-block;vertical-align:middle}
+  .spark-big{color:var(--accent);display:block;margin:6px 0 2px}
 
   /* weibo console */
   :root{--bg:#f8f8fa;--bg2:#111218;--card:#fff;--fg:#18191f;--muted:#686b76;--faint:#999ca6;--line:#e8e8ed;--line2:#d9dae1;--accent:#635bff;--accent-bg:#f0efff;--green:#138a5b;--amber:#b76a16;--red:#d13b4c;--blue:#635bff;--r:12px;--side-w:224px}
@@ -206,6 +208,9 @@ const api={
   plan:id=>authFetch('/jobs/'+id+'/plan').then(r=>r.ok?r.json():null).catch(()=>null),
   metrics:id=>authFetch('/jobs/'+id+'/metrics').then(r=>r.ok?r.text():null).catch(()=>null),
   logs:id=>authFetch('/jobs/'+id+'/logs?tail=200').then(r=>r.text()).catch(()=>''),
+  history:(id,points)=>authFetch('/jobs/'+id+'/history?points='+(points||120)).then(r=>r.ok?r.json():null).catch(()=>null),
+  bulkHistory:()=>authFetch('/jobs/history?points=30').then(r=>r.ok?r.json():null).catch(()=>null),
+  config:()=>authFetch('/config').then(r=>r.ok?r.json():{}).catch(()=>({})),
   validate:b=>authFetch('/validate',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(b)}),
   submit:b=>authFetch('/jobs',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(b)}),
   act:(id,a,b)=>authFetch('/jobs/'+id+'/'+a,{method:'POST',headers:b?{'content-type':'application/json'}:{},body:b?JSON.stringify(b):null}),
@@ -229,6 +234,35 @@ function parseProm(txt){
   return out;
 }
 const mv=(M,n,pred)=>{const a=M[n]||[];const f=pred?a.find(pred):a[0];return f?f.value:0};
+
+/* Rolling-history helpers: per-second out-rates from cumulative counters,
+   and a tiny inline-SVG sparkline. A missed tick just widens one interval. */
+function rates(pts){
+  const out=[];pts=pts||[];
+  for(let i=1;i<pts.length;i++){const a=pts[i-1],b=pts[i];const dt=(new Date(b.at)-new Date(a.at))/1000;if(dt>0)out.push(Math.max(0,(b.recordsOut-a.recordsOut)/dt));}
+  return out;
+}
+function lastRate(pts){const r=rates(pts);return r.length?r[r.length-1]:null}
+function fmtRate(v){if(v==null||isNaN(v))return'—';return v>=1000?(v/1000).toFixed(1)+'k/s':v.toFixed(1)+'/s'}
+function spark(vals,w,h){
+  w=w||96;h=h||28;vals=vals||[];
+  if(vals.length<2)return'<span class="faint">—</span>';
+  const mx=Math.max.apply(null,vals),mn=Math.min.apply(null,vals),rg=(mx-mn)||1;
+  const pts=vals.map((v,i)=>(i/(vals.length-1)*w).toFixed(1)+','+(h-2-((v-mn)/rg)*(h-4)).toFixed(1)).join(' ');
+  return'<svg class="spark" width="'+w+'" height="'+h+'" viewBox="0 0 '+w+' '+h+'"><polyline points="'+pts+'" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>';
+}
+/* External Grafana base URL, loaded once from /config ("" = disabled). */
+let grafanaURL=null;
+async function getGrafanaURL(){
+  if(grafanaURL!==null)return grafanaURL;
+  try{const c=await api.config();grafanaURL=(c&&c.grafanaUrl)||''}catch(e){grafanaURL=''}
+  return grafanaURL;
+}
+function grafanaLink(jobId,runId){
+  if(!grafanaURL)return'';
+  const u=grafanaURL+'/d/weibo-job?var-job='+encodeURIComponent(jobId||'')+'&var-run='+encodeURIComponent(runId||'')+'&from=now-1h&to=now';
+  return'<a class="btn" target="_blank" rel="noopener" href="'+esc(u)+'">Grafana ↗</a>';
+}
 
 function promptToken(){
   stopPoll();setConn(null);
@@ -354,6 +388,11 @@ function viewOverview(){
 
     if(!jobs.length){app.innerHTML=`<h1>Overview</h1><div class="card" style="margin-top:18px"><div class="empty">No jobs yet.<br><br><a href="#/submit" style="color:var(--accent);cursor:pointer" onclick="event.preventDefault();go('submit')">Submit one →</a></div></div>`;return}
 
+    // Fleet throughput: sum of each job's latest per-second out-rate.
+    const bulk=await api.bulkHistory();const hist=(bulk&&bulk.histories)||{};
+    let fleet=null;jobs.forEach(j=>{const r=lastRate(hist[j.id]);if(r!=null)fleet=(fleet||0)+r});
+    const trend=j=>spark(rates(hist[j.id]));
+
     const running=jobs.filter(j=>ph(j)==='running');
     const completed=jobs.filter(j=>isTerm(ph(j))).slice(-8).reverse();
 
@@ -361,10 +400,11 @@ function viewOverview(){
       <h1>Overview</h1>
       <div class="stats" style="margin:18px 0 20px">
         ${tile('Running Jobs',fmtN(n.running),n.running?'g':'')}
+        ${tile('Fleet Throughput',fmtRate(fleet),fleet?'b':'')}
         ${tile('Finished',fmtN(n.finished),'b')}
         ${tile('Failed',fmtN(n.failed),n.failed?'r':'')}
       </div>
-      ${card(running.length?'Running Jobs':'Running Jobs','<table><thead><tr><th>Job Name</th><th>Start Time</th><th>Duration</th><th>Status</th></tr></thead><tbody>'+(running.length?running.map(j=>`<tr class="row" onclick="go('overview','${esc(j.id)}')"><td class="name">${esc(j.name)}<div class="id" style="margin-top:1px">${esc(j.id)}</div></td><td class="dim">${esc(fmtTime(j.createdAt))}</td><td class="dim">—</td><td>${phaseEl(j.phase)}</td></tr>`).join(''):'<tr><td colspan="4" class="dim">No running jobs.</td></tr>')+'</tbody></table>')}
+      ${card(running.length?'Running Jobs':'Running Jobs','<table><thead><tr><th>Job Name</th><th>Start Time</th><th>Duration</th><th>Status</th><th>Trend · out/s</th></tr></thead><tbody>'+(running.length?running.map(j=>`<tr class="row" onclick="go('overview','${esc(j.id)}')"><td class="name">${esc(j.name)}<div class="id" style="margin-top:1px">${esc(j.id)}</div></td><td class="dim">${esc(fmtTime(j.createdAt))}</td><td class="dim">—</td><td>${phaseEl(j.phase)}</td><td>${trend(j)}</td></tr>`).join(''):'<tr><td colspan="5" class="dim">No running jobs.</td></tr>')+'</tbody></table>')}
       <div style="margin-top:14px">
       ${card(completed.length?'Completed Jobs':'Completed Jobs','<table><thead><tr><th>Job Name</th><th>Start Time</th><th>End Time</th><th>Status</th></tr></thead><tbody>'+(completed.length?completed.map(j=>`<tr class="row" onclick="go('overview','${esc(j.id)}')"><td class="name">${esc(j.name)}<div class="id" style="margin-top:1px">${esc(j.id)}</div></td><td class="dim">${esc(fmtTime(j.createdAt))}</td><td class="dim">${esc(fmtTime(j.updatedAt))}</td><td>${phaseEl(j.phase)}</td></tr>`).join(''):'<tr><td colspan="4" class="dim">No completed jobs.</td></tr>')+'</tbody></table>')}
       </div>`;
@@ -415,6 +455,8 @@ function viewDetail(id){
     if(d.error){app.innerHTML=`<div class="err">${esc(d.error)}</div>`;stopPoll();return}
     setConn(true);const job=d.job,run=d.latestRun,phase=(run&&run.phase)||'—',term=isTerm(phase);
     const st=term?null:await api.state(id);const pi=(job.kind==='sdk'&&!term)?await api.describe(id):null;
+    const hist=await api.history(id);const pts=(hist&&hist.points)||[];
+    const grafURL=await getGrafanaURL();
     const logs=await api.logs(id);
     const M=term?{}:parseProm(await api.metrics(id)||'');
     const trs=(d.transitions||[]).slice(-10).reverse().map(t=>`<div class="r"><b>${esc(t.to)}</b><span>${esc(t.reason||'')}</span><span class="at">${esc(fmtTime(t.at))}</span></div>`).join('')||'<div class="dim" style="padding:5px 0">No transitions.</div>';
@@ -455,10 +497,23 @@ function viewDetail(id){
         ${run&&run.hostPort?mcell('Control Port',esc(run.hostPort)):''}
       </div>`;
 
+    // rolling-history throughput + latest lag/queue/errors
+    const latest=pts.length?pts[pts.length-1]:null;
+    const trendCard=card('Throughput · records out / sec',
+      `<span class="spark-big">${spark(rates(pts),260,64)}</span><div class="dim">now ${esc(fmtRate(lastRate(pts)))} · ${pts.length} samples</div>`);
+    const trendTiles=latest?`<div class="stats" style="margin-bottom:14px">
+      ${tile('Throughput',fmtRate(lastRate(pts)),'b')}
+      ${tile('Kafka Lag',fmtN(latest.kafkaLag),latest.kafkaLag?'a':'')}
+      ${tile('Edge Queued',fmtN(latest.edgeQueued),latest.edgeQueued?'a':'')}
+      ${tile('Errors',fmtN(latest.errors),latest.errors?'r':'')}
+    </div>`:'';
+
     // tab panes
     const overviewPane=`
       <div class="tabpane on" data-pane="overview">
         <div class="stack">
+          ${trendTiles}
+          ${trendCard}
           ${card('Pipeline',job.kind==='sdk'?describeGraphEl(pi):graphEl(job.graph))}
           <div class="grid2">
             ${st?card('Live State',kv([['Phase',phaseEl(st.phase)],['Uptime',esc(st.uptime||'—')],['Records in',`<span class="big">${fmtN(st.recordsIn||0)}</span>`],['Records out',`<span class="big">${fmtN(st.recordsOut||0)}</span>`]])):card('Live State','<div class="empty">Not running.</div>')}
@@ -507,6 +562,7 @@ function viewDetail(id){
         <div><h1>${esc(job.name)}</h1><div class="id" style="margin-top:3px">${esc(job.id)}</div></div>
         ${phaseEl(phase)} ${badge(job)}
         <div class="btns" style="margin-left:auto">
+          ${grafanaLink(job.id,run&&run.id)}
           <button class="btn" ${term?'disabled':''} onclick="doSavepoint('${esc(id)}')">Savepoint</button>
           <button class="btn" onclick="doRestart('${esc(id)}')">Restart</button>
           <button class="btn danger" ${term?'disabled':''} onclick="doCancel('${esc(id)}')">Cancel</button>

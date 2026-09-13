@@ -139,6 +139,9 @@ Notes for the Kubernetes backend:
 | `GET  /readyz`                | Store/backend readiness; returns 503 when dependencies are unavailable. |
 | `GET  /metrics`               | Controller Prometheus metrics (public; aggregate counters only). |
 | `GET  /targets`               | Prometheus http_sd discovery for live job agents (auth-gated). |
+| `GET  /jobs/{id}/history?points=N` | Rolling history samples for one job (default 120), oldest first. |
+| `GET  /jobs/history?points=N` | Downsampled series for every job with history (default 30) — one request for the all-jobs view. |
+| `GET  /config`                | UI configuration: `{"grafanaUrl": "..."}` ("" when deep links are disabled). |
 
 **Auth:** start the controller with `-auth-token <secret>` (env
 `WEIBO_AUTH_TOKEN`) to require `Authorization: Bearer <secret>` on every route
@@ -175,6 +178,25 @@ enumerations (route templates, never raw paths or IDs — `/jobs/{id}`, not
 resolves at most 8 backend probes concurrently under a 15s deadline.
 `control/kubernetes-servicemonitor.yaml` is a ready ServiceMonitor plus a
 commented `weibo-jobs` scrape job using `/targets`.
+
+## Rolling history and Grafana links
+
+The controller samples every live job's agent (`/state` plus queue/error
+counters from `/metrics`) every `--history-interval` (default 15s) into a
+bounded in-memory ring (`DefaultHistorySamples` = 240 per job, about an
+hour). It is process memory only — deliberately never SQLite — so a
+controller restart starts history fresh, and job deletion drops its series.
+The dashboard renders throughput sparklines from it (fleet total on the
+Overview, per-job trend column, and a larger chart with lag/queue/error
+tiles on each job's detail page); readers derive records/sec from counter
+deltas, so a missed tick widens one interval instead of corrupting the
+series.
+
+With `--grafana-url https://grafana…` (env `WEIBO_GRAFANA_URL`), each job
+page gains a Grafana button linking to
+`{url}/d/weibo-job?var-job=<id>&var-run=<run>&from=now-1h&to=now` —
+provision a dashboard with UID `weibo-job` and `job`/`run` variables to
+receive it.
 
 ## Savepoints (stop-with-savepoint)
 

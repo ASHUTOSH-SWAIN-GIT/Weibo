@@ -199,11 +199,23 @@ most 8 concurrent backend probes under a 15s deadline. Includes
 **Exit criteria:** endpoint, route-normalization, cardinality,
 launch-kind, and discovery unit tests; k8s-tagged backend suite green.
 
-### 15. Add short metrics history and Grafana links
+### 15. Add short metrics history and Grafana links — ✅ DONE
 
-Keep bounded rolling history for throughput, failures, checkpoints, resource
-use, and Kafka lag. Add sparklines, an all-jobs view, and optional
-`--grafana-url` job/run deep links. Do not use SQLite as a long-term metrics DB.
+**Shipped:** the controller samples every live job's agent (`/state` plus
+edge-queue/error counters parsed from agent `/metrics`) on a tick
+(`--history-interval`, default 15s) into a bounded in-memory ring (240
+samples/job, ~1h; process memory only, never SQLite; dropped on job
+deletion). `GET /jobs/{id}/history` and bulk `GET /jobs/history` serve
+downsampled series; the dashboard renders a fleet-throughput tile, a
+per-job trend column, and a detail throughput chart with lag/queue/error
+tiles (rates derived client-side from counter deltas). `--grafana-url`
+(env `WEIBO_GRAFANA_URL`, exposed via `GET /config`) adds per-job deep
+links to a `weibo-job` dashboard (`var-job`/`var-run`).
+
+**Exit criteria:** ring/downsample/drop, sampler success/skip, lag and
+exposition-parser, history/config API, and dashboard-hook unit tests;
+sampling reuses the bounded discovery probes (8 concurrent, 15s deadline,
+5s per-target timeout).
 
 ### 16. Improve diagnostic APIs
 

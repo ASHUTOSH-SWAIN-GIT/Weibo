@@ -46,6 +46,14 @@ type Options struct {
 	// are pruned (backend container removed, run row + transitions
 	// deleted). Default 5 when zero; negative keeps everything.
 	TerminalRunRetention int
+	// HistorySamples bounds the in-memory rolling metrics history per
+	// job (default DefaultHistorySamples). It is process memory only,
+	// never persisted.
+	HistorySamples int
+	// GrafanaURL is the base URL of an external Grafana instance. When
+	// set, the dashboard links each job/run to a "weibo-job" dashboard
+	// with var-job/var-run variables; empty disables the links.
+	GrafanaURL           string
 	NewID                func() string        // override for deterministic tests
 	Logf                 func(string, ...any) // optional logger
 }
@@ -62,6 +70,8 @@ type Controller struct {
 	capacity    backend.CapacityConfig
 	retention   int
 	metrics     *ControllerMetrics
+	history     *History
+	grafanaURL  string
 	newID       func() string
 	logf        func(string, ...any)
 	httpc       *http.Client // talks to job agents (savepoint trigger)
@@ -116,6 +126,8 @@ func New(opts Options) *Controller {
 		c.retention = opts.TerminalRunRetention
 	}
 	c.metrics = NewControllerMetrics(c.store)
+	c.history = NewHistory(opts.HistorySamples)
+	c.grafanaURL = strings.TrimRight(strings.TrimSpace(opts.GrafanaURL), "/")
 	if c.capacity.DefaultJobCPU == "" {
 		c.capacity.DefaultJobCPU = "1"
 	}
@@ -388,7 +400,13 @@ func (c *Controller) DeleteWithOptions(ctx context.Context, jobID string, opts D
 	c.mu.Lock()
 	delete(c.secrets, jobID)
 	c.mu.Unlock()
-	return c.store.DeleteJob(jobID)
+	if err := c.store.DeleteJob(jobID); err != nil {
+		return err
+	}
+	// History is process memory only; drop it with the job so a
+	// same-ID recreate starts its series fresh.
+	c.history.Drop(jobID)
+	return nil
 }
 
 // Restart stops any live run and launches a fresh one, resetting the
@@ -486,6 +504,20 @@ func (c *Controller) Validate(doc []byte, env map[string]string) (string, compil
 // launch/reconcile/sweep counters, API observer). The api package serves
 // them at GET /metrics.
 func (c *Controller) Metrics() *ControllerMetrics { return c.metrics }
+
+// History exposes the bounded in-memory rolling metrics history,
+// sampled from live job agents. Served at GET /jobs/{id}/history.
+func (c *Controller) History() *History { return c.history }
+
+// GrafanaURL is the configured external Grafana base URL ("" when unset).
+func (c *Controller) GrafanaURL() string { return c.grafanaURL }
+
+// RunHistoryRecorder samples live jobs into the rolling history on a
+// ticker until ctx is cancelled. Call it in a goroutine from the
+// controller process, next to RunReconciler.
+func (c *Controller) RunHistoryRecorder(ctx context.Context, interval time.Duration) {
+	newHistoryRecorder(c, c.history).Run(ctx, interval)
+}
 
 // ListJobs returns all jobs, newest first.
 func (c *Controller) ListJobs() ([]*store.Job, error) { return c.store.ListJobs() }

@@ -832,6 +832,27 @@ func TestTerminalRunRetentionPrunesHistory(t *testing.T) {
 	}
 }
 
+// Deleting a job drops its in-memory history so a same-ID recreate
+// starts its series fresh (history is process memory, never the store).
+func TestDeleteDropsHistory(t *testing.T) {
+	fake := backend.NewFake()
+	c, _ := newController(t, fake, lifecycle.DefaultRestartPolicy())
+	job, err := c.Submit(context.Background(), []byte(validSDKManifest), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.History().Add(job.ID, control.Sample{At: time.Now().UTC(), Phase: "running"})
+	if len(c.History().Series(job.ID, 0)) != 1 {
+		t.Fatal("expected a history sample")
+	}
+	if err := c.Delete(context.Background(), job.ID); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if len(c.History().Series(job.ID, 0)) != 0 {
+		t.Error("job deletion should drop its history")
+	}
+}
+
 // SweepOrphans removes exited backend resources the store no longer
 // references (deleted jobs, failed removes) and reports — but never
 // touches — running unknowns.
