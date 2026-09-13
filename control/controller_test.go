@@ -386,8 +386,38 @@ func TestLaunchRemovesBackendResourceWhenPersistingContainerFails(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if run == nil || run.Phase != string(lifecycle.Starting) || run.ContainerID != "" {
-		t.Fatalf("expected only the pre-launch starting run to remain, got %+v", run)
+	if run == nil || run.Phase != string(lifecycle.Failed) || run.ContainerID != "" || run.Stopped == nil {
+		t.Fatalf("expected failed terminal run after orphan cleanup, got %+v", run)
+	}
+}
+
+func TestLaunchDoesNotCreateBackendResourceWhenStartingRunCannotPersist(t *testing.T) {
+	fake := backend.NewFake()
+	base := openStore(t)
+	st := &failCreateRunWithTransitionStore{Store: base, err: errors.New("store unavailable")}
+	c := control.New(control.Options{
+		Store:       st,
+		Backend:     fake,
+		Image:       "unused-default-image:test",
+		StopTimeout: time.Second,
+	})
+
+	job, err := c.Submit(context.Background(), []byte(validSDKManifest), nil)
+	if err == nil {
+		t.Fatal("expected submit to fail when starting run cannot be persisted")
+	}
+	if job == nil {
+		t.Fatal("job should be returned after the job row is persisted")
+	}
+	if fake.Launched() != 0 {
+		t.Fatalf("backend launch must not happen before starting run is persisted, got %d launches", fake.Launched())
+	}
+	run, err := base.LatestRun(job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run != nil {
+		t.Fatalf("failed CreateRunWithTransition should leave no run row, got %+v", run)
 	}
 }
 
@@ -451,6 +481,15 @@ type failUpdateRunWithTransitionStore struct {
 }
 
 func (s *failUpdateRunWithTransitionStore) UpdateRunWithTransition(*store.Run, *store.Transition) error {
+	return s.err
+}
+
+type failCreateRunWithTransitionStore struct {
+	store.Store
+	err error
+}
+
+func (s *failCreateRunWithTransitionStore) CreateRunWithTransition(*store.Run, *store.Transition) error {
 	return s.err
 }
 

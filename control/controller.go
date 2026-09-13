@@ -556,13 +556,31 @@ func (c *Controller) launchLocked(ctx context.Context, job *store.Job, attempt i
 	}
 	if err := c.store.UpdateRunWithTransition(run, transitionRecord(job.ID, run.ID, lifecycle.Starting, lifecycle.Running, "launched")); err != nil {
 		removeErr := c.backend.Remove(ctx, id)
+		recordErr := c.markLaunchRecordFailure(run, err)
 		if removeErr != nil {
+			if recordErr != nil {
+				return fmt.Errorf("record launched run: %w; additionally failed to remove orphaned container %s: %v; additionally failed to mark run failed: %v", err, id, removeErr, recordErr)
+			}
 			return fmt.Errorf("record launched run: %w; additionally failed to remove orphaned container %s: %v", err, id, removeErr)
+		}
+		if recordErr != nil {
+			return fmt.Errorf("record launched run: %w; removed orphaned container %s; additionally failed to mark run failed: %v", err, id, recordErr)
 		}
 		return fmt.Errorf("record launched run: %w", err)
 	}
 	c.logf("job %s: launched run %s (container %s, attempt %d)", job.ID, run.ID, id, attempt)
 	return nil
+}
+
+func (c *Controller) markLaunchRecordFailure(run *store.Run, cause error) error {
+	stopped := time.Now().UTC()
+	run.ContainerID = ""
+	run.HostPort = 0
+	run.Phase = string(lifecycle.Failed)
+	run.Error = fmt.Sprintf("failed to record launched backend resource: %v", cause)
+	run.Stopped = &stopped
+	run.RestartAt = nil
+	return c.store.UpdateRun(run)
 }
 
 // finishRun marks a run terminal in the store and logs the transition.
