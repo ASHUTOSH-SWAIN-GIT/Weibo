@@ -1,6 +1,9 @@
 package operator
 
 import (
+	"context"
+	"fmt"
+
 	"github.com/ASHUTOSH-SWAIN-GIT/weibo/state"
 	"github.com/ASHUTOSH-SWAIN-GIT/weibo/types"
 )
@@ -16,6 +19,34 @@ type Operator interface {
 
 	Process(in <-chan types.Record, out chan<- types.Record)
 }
+
+// ErrorAwareOperator is the non-panicking form of Operator. Implementations
+// return processing failures to the pipeline, which cancels the run and reports
+// the error with operator context. Process remains for backward compatibility.
+type ErrorAwareOperator interface {
+	ProcessE(ctx context.Context, in <-chan types.Record, out chan<- types.Record) error
+}
+
+// OperatorError preserves operator and record context for a processing failure.
+type OperatorError struct {
+	Operator string
+	Label    string
+	Key      []byte
+	Err      error
+}
+
+func (e *OperatorError) Error() string {
+	name := e.Operator
+	if e.Label != "" {
+		name += " " + e.Label
+	}
+	if e.Key != nil {
+		return fmt.Sprintf("operator %s failed for record key=%q: %v", name, string(e.Key), e.Err)
+	}
+	return fmt.Sprintf("operator %s failed: %v", name, e.Err)
+}
+
+func (e *OperatorError) Unwrap() error { return e.Err }
 
 // Labeled operators carry a user-provided label for display in the dashboard.
 // If no label is set, the dashboard falls back to Name().
@@ -115,6 +146,11 @@ type BarrierSnapshotter interface {
 // machinery forwards and aligns them itself.
 type SingleProcessor interface {
 	ProcessOne(r types.Record) []types.Record
+}
+
+// ErrorAwareSingleProcessor is the non-panicking form of SingleProcessor.
+type ErrorAwareSingleProcessor interface {
+	ProcessOneE(ctx context.Context, r types.Record) ([]types.Record, error)
 }
 
 // Parallel is implemented by operators that can run with multiple

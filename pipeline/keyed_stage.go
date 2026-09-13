@@ -159,10 +159,12 @@ func (s *KeyedStage) Run(runCtx, hardCtx context.Context, in <-chan types.Record
 				prev = workerCountedRead(prev, inCounter.Inc)
 			}
 
+			var opErrs []<-chan error
 			for _, clone := range chain {
 				opName := clone.Name()
 				next := make(chan types.Record, internalBuf)
-				go clone.Process(prev, next)
+				opErr := runOperator(stageCtx, clone, prev, next)
+				opErrs = append(opErrs, opErr)
 
 				outCounter := metrics.OperatorWorkerRecordsOut.WithLabelValues(opName, wLabel)
 				prev = workerTimedRead(
@@ -180,6 +182,16 @@ func (s *KeyedStage) Run(runCtx, hardCtx context.Context, in <-chan types.Record
 						for range prev {
 						}
 					}()
+					return
+				}
+			}
+			for _, opErr := range opErrs {
+				if err := <-opErr; err != nil {
+					select {
+					case errCh <- fmt.Errorf("worker %d: %w", workerID, err):
+					default:
+					}
+					stageCancel()
 					return
 				}
 			}

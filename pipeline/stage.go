@@ -239,7 +239,7 @@ func (s *ChannelStage) Run(runCtx, hardCtx context.Context, in <-chan types.Reco
 	}()
 
 	mid := make(chan types.Record, internalBuf)
-	go s.Op.Process(countedIn, mid) // Process closes mid when countedIn closes
+	opErr := runOperator(hardCtx, s.Op, countedIn, mid)
 
 	lat := newLatencyBatcher(func(avg float64) {
 		metrics.OperatorLatencySeconds.WithLabelValues(s.Label).Observe(avg)
@@ -255,6 +255,17 @@ func (s *ChannelStage) Run(runCtx, hardCtx context.Context, in <-chan types.Reco
 					for range mid {
 					}
 				}()
+				select {
+				case opRunErr := <-opErr:
+					if opRunErr != nil {
+						return opRunErr
+					}
+				default:
+				}
+				return err
+			}
+			if opRunErr := <-opErr; opRunErr != nil {
+				return fmt.Errorf("stage %s: %w", s.Name(), opRunErr)
 			}
 			return err
 		}
@@ -269,4 +280,23 @@ func (s *ChannelStage) Run(runCtx, hardCtx context.Context, in <-chan types.Reco
 			return err
 		}
 	}
+}
+
+func runOperator(ctx context.Context, op operator.Operator, in <-chan types.Record, out chan<- types.Record) <-chan error {
+	errCh := make(chan error, 1)
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				errCh <- fmt.Errorf("operator %s panicked: %v", op.Name(), r)
+			}
+			close(errCh)
+		}()
+		if eo, ok := op.(operator.ErrorAwareOperator); ok {
+			errCh <- eo.ProcessE(ctx, in, out)
+			return
+		}
+		op.Process(in, out)
+		errCh <- nil
+	}()
+	return errCh
 }

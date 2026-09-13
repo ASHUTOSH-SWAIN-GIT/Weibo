@@ -59,10 +59,12 @@ func (s *StatelessStage) runWorker(hardCtx context.Context, in <-chan types.Reco
 	// assertion, the latency batcher, and the label→counter lookup (kept as a
 	// bound Add method value) are all hot-loop-invariant.
 	sps := make([]operator.SingleProcessor, len(s.Ops))
+	esps := make([]operator.ErrorAwareSingleProcessor, len(s.Ops))
 	timers := make([]*latencyBatcher, len(s.Ops))
 	procAdd := make([]func(float64), len(s.Ops))
 	for i := range s.Ops {
 		sps[i] = s.Ops[i].(operator.SingleProcessor)
+		esps[i], _ = s.Ops[i].(operator.ErrorAwareSingleProcessor)
 		l := s.Labels[i]
 		timers[i] = newLatencyBatcher(func(avg float64) {
 			metrics.OperatorLatencySeconds.WithLabelValues(l).Observe(avg)
@@ -106,7 +108,17 @@ func (s *StatelessStage) runWorker(hardCtx context.Context, in <-chan types.Reco
 		for i, sp := range sps {
 			alt = alt[:0]
 			for _, rec := range cur {
-				alt = append(alt, sp.ProcessOne(rec)...)
+				var next []types.Record
+				var err error
+				if esps[i] != nil {
+					next, err = esps[i].ProcessOneE(hardCtx, rec)
+				} else {
+					next = sp.ProcessOne(rec)
+				}
+				if err != nil {
+					return fmt.Errorf("stage %s: %w", s.StageName, err)
+				}
+				alt = append(alt, next...)
 			}
 			timers[i].tick()
 			procAdd[i](float64(len(alt)))

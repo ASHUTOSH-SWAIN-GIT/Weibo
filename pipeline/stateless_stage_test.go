@@ -2,7 +2,9 @@ package pipeline_test
 
 import (
 	"context"
+	"errors"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -226,5 +228,30 @@ func TestStatelessStage_OperatorPanicReturnsError(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("stage.Run did not return after operator panic")
+	}
+}
+
+func TestStatelessStage_ProcessFailureReturnsError(t *testing.T) {
+	stage := &pipeline.StatelessStage{
+		StageName: "test",
+		Ops: []operator.Operator{operator.NewProcess(
+			func(types.Record) (types.Record, error) { return types.Record{}, errors.New("bad record") },
+			operator.WithProcessLabel("validate"),
+			operator.WithProcessFailurePolicy(operator.ProcFailureFail),
+		)},
+		Labels:      []string{"process"},
+		Parallelism: 1,
+	}
+	in := make(chan types.Record, 1)
+	in <- types.Record{Key: []byte("order-1")}
+	close(in)
+	out := make(chan types.Record, 1)
+
+	err := stage.Run(context.Background(), context.Background(), in, out)
+	if err == nil {
+		t.Fatal("expected process failure error")
+	}
+	if !strings.Contains(err.Error(), "validate") || !strings.Contains(err.Error(), "order-1") {
+		t.Fatalf("error missing operator/record context: %v", err)
 	}
 }

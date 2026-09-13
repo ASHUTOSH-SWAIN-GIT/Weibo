@@ -76,49 +76,86 @@ func (op *ProcessOperator) DescribeOp() OperatorMeta {
 // Process reads each record, calls the user function, and handles
 // errors according to the configured failure policy.
 func (op *ProcessOperator) Process(in <-chan types.Record, out chan<- types.Record) {
+	if err := op.ProcessE(context.Background(), in, out); err != nil {
+		panic(err)
+	}
+}
+
+func (op *ProcessOperator) ProcessE(ctx context.Context, in <-chan types.Record, out chan<- types.Record) error {
 	defer close(out)
-	for r := range in {
+	for {
+		var r types.Record
+		var ok bool
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case r, ok = <-in:
+			if !ok {
+				return nil
+			}
+		}
 		if r.IsWatermark || r.IsBarrier {
-			out <- r
+			select {
+			case out <- r:
+			case <-ctx.Done():
+				return ctx.Err()
+			}
 			continue
 		}
 		result, err := op.Fn(r)
 		if err != nil {
-			op.handleFailure(r, err)
+			if err := op.handleFailure(ctx, r, err); err != nil {
+				return err
+			}
 			continue
 		}
-		out <- result
+		select {
+		case out <- result:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 	}
 }
 
 // ProcessOne applies the user function to a single record, handling
 // errors via the configured failure policy.
 func (op *ProcessOperator) ProcessOne(r types.Record) []types.Record {
-	result, err := op.Fn(r)
+	out, err := op.ProcessOneE(context.Background(), r)
 	if err != nil {
-		op.handleFailure(r, err)
-		return nil
+		panic(err)
 	}
-	return []types.Record{result}
+	return out
 }
 
-func (op *ProcessOperator) handleFailure(r types.Record, err error) {
+func (op *ProcessOperator) ProcessOneE(ctx context.Context, r types.Record) ([]types.Record, error) {
+	result, err := op.Fn(r)
+	if err != nil {
+		if err := op.handleFailure(ctx, r, err); err != nil {
+			return nil, err
+		}
+		return nil, nil
+	}
+	return []types.Record{result}, nil
+}
+
+func (op *ProcessOperator) handleFailure(ctx context.Context, r types.Record, err error) error {
 	switch op.FailurePolicy {
 	case ProcFailureDrop:
-		return
+		return nil
 
 	case ProcFailureDLQ:
 		if op.DLQ == nil {
-			panic(fmt.Sprintf("weibo/operator: DLQ is nil for Process %q: %v", op.Label, err))
+			return &OperatorError{Operator: op.Name(), Label: op.Label, Key: r.Key, Err: fmt.Errorf("DLQ is nil: %w", err)}
 		}
-		ctx := context.Background()
 		// Attach error info to headers for the DLQ consumer.
 		r = r.WithHeader("_error", []byte(err.Error()))
 		if werr := op.DLQ.Write(ctx, r); werr != nil {
-			panic(fmt.Sprintf("weibo/operator: DLQ write failed for Process %q: %v", op.Label, werr))
+			return &OperatorError{Operator: op.Name(), Label: op.Label, Key: r.Key, Err: fmt.Errorf("DLQ write failed: %w", werr)}
 		}
+		return nil
 
 	case ProcFailureFail:
-		panic(fmt.Sprintf("weibo/operator: Process %q failed: %v (record key=%q)", op.Label, err, string(r.Key)))
+		return &OperatorError{Operator: op.Name(), Label: op.Label, Key: r.Key, Err: err}
 	}
+	return nil
 }

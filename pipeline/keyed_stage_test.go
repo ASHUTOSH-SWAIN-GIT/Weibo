@@ -2,6 +2,8 @@ package pipeline_test
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -275,5 +277,52 @@ func TestKeyedStage_ClonesCreatedEagerlyWithCallback(t *testing.T) {
 	// between planning and execution.
 	if len(registered) != 3 {
 		t.Errorf("expected 3 clones registered at construction, got %d", len(registered))
+	}
+}
+
+type failingCloneOp struct{}
+
+func (o *failingCloneOp) Name() string { return "FailingClone" }
+func (o *failingCloneOp) Clone() operator.Operator {
+	return &failingCloneOp{}
+}
+func (o *failingCloneOp) Process(in <-chan types.Record, out chan<- types.Record) {
+	if err := o.ProcessE(context.Background(), in, out); err != nil {
+		panic(err)
+	}
+}
+func (o *failingCloneOp) ProcessE(ctx context.Context, in <-chan types.Record, out chan<- types.Record) error {
+	defer close(out)
+	for r := range in {
+		if r.IsBarrier || r.IsWatermark {
+			out <- r
+			continue
+		}
+		return errors.New("clone failed")
+	}
+	return nil
+}
+
+func TestKeyedStage_ErrorAwareOperatorReturnsError(t *testing.T) {
+	kb := operator.KeyBy(func(r types.Record) []byte { return r.Key }).WithPartitions(2)
+	stage, err := pipeline.NewKeyedStage(kb, []operator.Operator{&failingCloneOp{}}, pipeline.StageHooks{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	in := make(chan types.Record, 1)
+	in <- types.Record{Key: []byte("a")}
+	close(in)
+	out := make(chan types.Record, 1)
+	errc := make(chan error, 1)
+	go func() { errc <- stage.Run(context.Background(), context.Background(), in, out) }()
+	for range out {
+	}
+	select {
+	case err := <-errc:
+		if err == nil || !strings.Contains(err.Error(), "clone failed") {
+			t.Fatalf("expected clone failure, got %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("stage.Run did not return after operator error")
 	}
 }
