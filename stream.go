@@ -168,12 +168,41 @@ func (s *Stream) Window(assigner window.WindowAssigner, label ...string) *Stream
 	return s
 }
 
+// WindowWithAllowedLateness keeps windows open for late-but-acceptable records
+// until watermark >= window_end + allowed. Records beyond that bound are
+// dropped unless a late sink is configured directly on the operator.
+func (s *Stream) WindowWithAllowedLateness(assigner window.WindowAssigner, allowed time.Duration, label ...string) *Stream {
+	op := operator.Window(assigner).WithAllowedLateness(allowed)
+	if len(label) > 0 {
+		op.Label = label[0]
+	}
+	s.env.operators = append(s.env.operators, op)
+	return s
+}
+
 // WindowWithIdleTimeout creates a window with an idle timeout.
 // If no records arrive within the timeout duration, all remaining
 // windows are fired and the pipeline stage completes. Useful for
 // infinite streams that don't receive shutdown signals.
 func (s *Stream) WindowWithIdleTimeout(assigner window.WindowAssigner, idleTimeout time.Duration, label ...string) *Stream {
 	op := operator.Window(assigner).WithIdleTimeout(idleTimeout)
+	if len(label) > 0 {
+		op.Label = label[0]
+	}
+	s.env.operators = append(s.env.operators, op)
+	return s
+}
+
+// WindowWithOptions creates a window with optional idle timeout and allowed
+// lateness. Zero values disable the corresponding option.
+func (s *Stream) WindowWithOptions(assigner window.WindowAssigner, idleTimeout, allowedLateness time.Duration, label ...string) *Stream {
+	op := operator.Window(assigner)
+	if idleTimeout > 0 {
+		op.WithIdleTimeout(idleTimeout)
+	}
+	if allowedLateness > 0 {
+		op.WithAllowedLateness(allowedLateness)
+	}
 	if len(label) > 0 {
 		op.Label = label[0]
 	}
@@ -196,6 +225,18 @@ func (s *Stream) WindowWithIdleTimeout(assigner window.WindowAssigner, idleTimeo
 //	    WindowReduce(window.NewTumbling(5*time.Minute), sumFn)
 func (s *Stream) WindowReduce(assigner window.WindowAssigner, fn operator.ReduceFn, label ...string) *Stream {
 	op := operator.Window(assigner)
+	op.Reducer = fn
+	if len(label) > 0 {
+		op.Label = label[0]
+	}
+	s.env.operators = append(s.env.operators, op)
+	return s
+}
+
+// WindowReduceWithAllowedLateness is WindowReduce with late-but-acceptable
+// updates retained until watermark >= window_end + allowed.
+func (s *Stream) WindowReduceWithAllowedLateness(assigner window.WindowAssigner, fn operator.ReduceFn, allowed time.Duration, label ...string) *Stream {
+	op := operator.Window(assigner).WithAllowedLateness(allowed)
 	op.Reducer = fn
 	if len(label) > 0 {
 		op.Label = label[0]

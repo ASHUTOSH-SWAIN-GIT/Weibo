@@ -1,8 +1,10 @@
 package operator
 
 import (
+	"context"
 	"encoding/binary"
 	"encoding/json"
+	"strconv"
 	"time"
 
 	"github.com/ASHUTOSH-SWAIN-GIT/weibo/state"
@@ -45,7 +47,12 @@ const (
 type WindowOperator struct {
 	Assigner    window.WindowAssigner
 	IdleTimeout time.Duration
-	Label       string
+	// AllowedLateness keeps window state eligible for late-but-accepted records
+	// until watermark >= window_end + AllowedLateness. Records older than
+	// current_watermark - AllowedLateness are sent to LateSink or dropped.
+	AllowedLateness time.Duration
+	LateSink        RecordSink
+	Label           string
 
 	// Reducer, when set, makes the window aggregate its buffered records
 	// internally and emit ONE result per (key, window) at window close,
@@ -105,6 +112,9 @@ func (op *WindowOperator) DescribeOp() OperatorMeta {
 	if op.IdleTimeout > 0 {
 		cfg["idle_timeout"] = op.IdleTimeout.String()
 	}
+	if op.AllowedLateness > 0 {
+		cfg["allowed_lateness"] = op.AllowedLateness.String()
+	}
 	if op.Reducer != nil {
 		cfg["reduce"] = "true"
 	}
@@ -116,11 +126,13 @@ func (op *WindowOperator) DescribeOp() OperatorMeta {
 // per-worker isolation in keyed parallel execution.
 func (op *WindowOperator) Clone() Operator {
 	return &WindowOperator{
-		Assigner:    op.Assigner,
-		IdleTimeout: op.IdleTimeout,
-		Label:       op.Label,
-		Reducer:     op.Reducer,
-		backend:     state.NewMemoryBackend(),
+		Assigner:        op.Assigner,
+		IdleTimeout:     op.IdleTimeout,
+		AllowedLateness: op.AllowedLateness,
+		LateSink:        op.LateSink,
+		Label:           op.Label,
+		Reducer:         op.Reducer,
+		backend:         state.NewMemoryBackend(),
 	}
 }
 
@@ -130,6 +142,23 @@ func (op *WindowOperator) Clone() Operator {
 // that don't receive shutdown signals.
 func (op *WindowOperator) WithIdleTimeout(d time.Duration) *WindowOperator {
 	op.IdleTimeout = d
+	return op
+}
+
+// WithAllowedLateness accepts records behind the current watermark by up to d.
+// Records older than currentWatermark-d are late side-output records.
+func (op *WindowOperator) WithAllowedLateness(d time.Duration) *WindowOperator {
+	if d < 0 {
+		d = 0
+	}
+	op.AllowedLateness = d
+	return op
+}
+
+// WithLateSink sends records that arrive after the allowed-lateness bound to a
+// side output instead of silently dropping them.
+func (op *WindowOperator) WithLateSink(s RecordSink) *WindowOperator {
+	op.LateSink = s
 	return op
 }
 
@@ -183,8 +212,8 @@ func (op *WindowOperator) Process(in <-chan types.Record, out chan<- types.Recor
 				continue
 			}
 
-			// Drop late records (timestamp below current watermark).
-			if !op.currentWatermark.IsZero() && record.Timestamp.Before(op.currentWatermark) {
+			if op.isTooLate(record.Timestamp) {
+				op.emitLate(record)
 				continue
 			}
 
@@ -195,6 +224,22 @@ func (op *WindowOperator) Process(in <-chan types.Record, out chan<- types.Recor
 			return
 		}
 	}
+}
+
+func (op *WindowOperator) isTooLate(ts time.Time) bool {
+	if op.currentWatermark.IsZero() {
+		return false
+	}
+	return ts.Before(op.currentWatermark.Add(-op.AllowedLateness))
+}
+
+func (op *WindowOperator) emitLate(r types.Record) {
+	if op.LateSink == nil {
+		return
+	}
+	r = r.WithHeader("_late_reason", []byte("event time before current watermark minus allowed lateness"))
+	r = r.WithHeader("_watermark", []byte(op.currentWatermark.Format(time.RFC3339Nano)))
+	_ = op.LateSink.Write(context.Background(), r)
 }
 
 // timerFire returns a channel that fires when the idle timer expires,
@@ -288,7 +333,8 @@ func (op *WindowOperator) handleWatermark(recState state.ListState, watermark ty
 	}
 	for _, keyStr := range recState.Keys() {
 		wk := parseWindowKey(keyStr)
-		if time.Unix(0, wk.End).UTC().After(op.currentWatermark) {
+		fireAt := time.Unix(0, wk.End).UTC().Add(op.AllowedLateness)
+		if fireAt.After(op.currentWatermark) {
 			continue // window still open
 		}
 		op.fireWindow(recState, keyStr, out)
@@ -332,14 +378,14 @@ func (op *WindowOperator) fireWindow(recState state.ListState, keyStr string, ou
 				Offset:    last.Offset,
 				Headers:   last.Headers,
 			}
-			out <- tagWithWindow(result, win)
+			out <- tagWithWindowAndLateness(result, win, op.AllowedLateness)
 		}
 		recState.Clear()
 		return
 	}
 
 	for _, rb := range entries {
-		out <- tagWithWindow(decodeRecord(rb), win)
+		out <- tagWithWindowAndLateness(decodeRecord(rb), win, op.AllowedLateness)
 	}
 	recState.Clear()
 }
@@ -489,12 +535,19 @@ func recordFromJSON(r recordJSON) types.Record {
 
 // tagWithWindow returns a copy of the record with window metadata in Headers.
 func tagWithWindow(r types.Record, win window.Window) types.Record {
-	headers := make(map[string][]byte, len(r.Headers)+2)
+	return tagWithWindowAndLateness(r, win, 0)
+}
+
+func tagWithWindowAndLateness(r types.Record, win window.Window, allowed time.Duration) types.Record {
+	headers := make(map[string][]byte, len(r.Headers)+3)
 	for k, v := range r.Headers {
 		headers[k] = v
 	}
 	headers["window_start"] = []byte(win.Start.Format(time.RFC3339Nano))
 	headers["window_end"] = []byte(win.End.Format(time.RFC3339Nano))
+	if allowed > 0 {
+		headers["window_allowed_lateness_nanos"] = []byte(strconv.FormatInt(allowed.Nanoseconds(), 10))
+	}
 	return types.Record{
 		Key:       r.Key,
 		Value:     r.Value,

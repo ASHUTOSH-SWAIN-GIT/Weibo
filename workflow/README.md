@@ -103,7 +103,7 @@ them from config over the JSON record model:
 | `setFields` | `{ sets: [{field, value}] }` |
 | `keyBy` | `{ field, partitions }` — set the keyed-state key from a record field |
 | `reduce` | `{ function: count\|sum, field }` — built-in aggregations |
-| `window` | `{ type, size, slide, gap, offset, idleTimeout }` |
+| `window` | `{ type, size, slide, gap, offset, idleTimeout, allowedLateness }` |
 
 ```yaml
 pipeline:

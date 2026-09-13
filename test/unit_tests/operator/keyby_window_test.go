@@ -1,6 +1,7 @@
 package operator_test
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -128,6 +129,53 @@ func TestWindowOperator_DropsLateRecords(t *testing.T) {
 	}
 	if lateCount != 0 {
 		t.Errorf("late record should have been dropped, but got %d", lateCount)
+	}
+}
+
+type captureLateSink struct {
+	records []types.Record
+}
+
+func (s *captureLateSink) Write(_ context.Context, r types.Record) error {
+	s.records = append(s.records, r)
+	return nil
+}
+
+func TestWindowOperator_AllowedLatenessAcceptsAndSideOutputsTooLateRecords(t *testing.T) {
+	late := &captureLateSink{}
+	op := operator.Window(window.NewTumbling(5 * time.Second)).
+		WithAllowedLateness(5 * time.Second).
+		WithLateSink(late)
+
+	in := make(chan types.Record, 20)
+	out := make(chan types.Record, 20)
+	go op.Process(in, out)
+
+	in <- types.NewWatermark(time.Unix(15, 0))
+	// Within allowed lateness: 12 >= 15-5, accepted into [10,15).
+	in <- types.Record{Key: []byte("k1"), Value: []byte("accepted-late"), Timestamp: time.Unix(12, 0)}
+	// Beyond allowed lateness: 8 < 15-5, side-output/drop.
+	in <- types.Record{Key: []byte("k1"), Value: []byte("too-late"), Timestamp: time.Unix(8, 0)}
+	in <- types.NewWatermark(time.Unix(20, 0))
+	close(in)
+
+	var accepted int
+	for r := range out {
+		if !r.IsWatermark && !r.IsBarrier && string(r.Value) == "accepted-late" {
+			accepted++
+			if string(r.Headers["window_allowed_lateness_nanos"]) == "" {
+				t.Fatal("window output missing allowed-lateness metadata")
+			}
+		}
+	}
+	if accepted != 1 {
+		t.Fatalf("expected accepted late record to fire once, got %d", accepted)
+	}
+	if len(late.records) != 1 || string(late.records[0].Value) != "too-late" {
+		t.Fatalf("expected too-late record in side output, got %+v", late.records)
+	}
+	if string(late.records[0].Headers["_late_reason"]) == "" {
+		t.Fatal("late side-output record missing reason header")
 	}
 }
 

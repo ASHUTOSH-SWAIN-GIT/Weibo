@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ASHUTOSH-SWAIN-GIT/weibo/workflow"
 )
@@ -128,6 +129,10 @@ func TestValidate_WindowDurations(t *testing.T) {
 	wf2 := validEO(t)
 	wf2.Pipeline[2].Window = &workflow.WindowConfig{Type: "tumbling"} // size 0
 	mustContain(t, errmsg(t, wf2), "window size must be greater than zero")
+
+	wf3 := validEO(t)
+	wf3.Pipeline[2].Window.AllowedLateness = workflow.Duration(-time.Second)
+	mustContain(t, errmsg(t, wf3), "allowed lateness must be non-negative")
 }
 
 func TestValidate_Partitions(t *testing.T) {

@@ -73,10 +73,7 @@ func applyOperator(stream *weibo.Stream, op workflow.Operator) (*weibo.Stream, e
 		if err != nil {
 			return nil, err
 		}
-		if op.Window.IdleTimeout > 0 {
-			return stream.WindowWithIdleTimeout(assigner, op.Window.IdleTimeout.Std(), op.ID), nil
-		}
-		return stream.Window(assigner, op.ID), nil
+		return stream.WindowWithOptions(assigner, op.Window.IdleTimeout.Std(), op.Window.AllowedLateness.Std(), op.ID), nil
 
 	case op.Map != nil, op.FlatMap != nil, op.Process != nil:
 		return nil, fmt.Errorf("ref-based operators (map/flatMap/process) require a function registry, which the declarative compiler does not provide")

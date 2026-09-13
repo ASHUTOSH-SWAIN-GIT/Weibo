@@ -2,6 +2,7 @@ package operator
 
 import (
 	"encoding/json"
+	"strconv"
 	"strings"
 	"time"
 
@@ -62,7 +63,8 @@ type ReduceOperator struct {
 
 	// windowFrontier is the highest window_end observed on an incoming
 	// record — the watermark-derived boundary below which every window
-	// has closed. It drives state eviction; see evictClosedWindows.
+	// has closed plus allowed lateness. It drives state eviction; see
+	// evictClosedWindows.
 	// RAM-only: after a restore it rebuilds from the first windowed
 	// record, which also sweeps any stale entries the checkpoint carried.
 	windowFrontier time.Time
@@ -178,12 +180,35 @@ func (op *ReduceOperator) advanceWindowFrontier(vs state.ValueState, r types.Rec
 		return // non-windowed reduce: state is per-key and lives forever
 	}
 	end, err := time.Parse(time.RFC3339Nano, string(raw))
-	if err != nil || !end.After(op.windowFrontier) {
+	if err != nil {
 		return
 	}
-	op.windowFrontier = end
+	allowed := windowAllowedLateness(r)
+	// A window ending at E can still receive accepted late records until
+	// watermark reaches E+allowed. Observing a fired record whose end is F
+	// proves watermark >= F, so only windows with E+allowed <= F are stale.
+	frontier := end.Add(-allowed)
+	if allowed > 0 {
+		frontier = frontier.Add(time.Nanosecond) // make end==F-allowed stale with strict Before()
+	}
+	if !frontier.After(op.windowFrontier) {
+		return
+	}
+	op.windowFrontier = frontier
 	op.evictClosedWindows(vs)
 	vs.SetKey(StateKey(r)) // eviction re-scoped vs; restore the caller's key
+}
+
+func windowAllowedLateness(r types.Record) time.Duration {
+	raw, ok := r.Headers["window_allowed_lateness_nanos"]
+	if !ok {
+		return 0
+	}
+	n, err := strconv.ParseInt(string(raw), 10, 64)
+	if err != nil || n <= 0 {
+		return 0
+	}
+	return time.Duration(n)
 }
 
 // evictClosedWindows drops every per-(key, window) entry whose window

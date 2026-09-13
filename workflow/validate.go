@@ -381,6 +381,9 @@ func (v *validator) sinkConfig(path string, snk SinkSpec) {
 }
 
 func (v *validator) windowConfig(path string, w *WindowConfig) {
+	if w.AllowedLateness < 0 {
+		v.add(path+".allowedLateness", "allowed lateness must be non-negative")
+	}
 	switch w.Type {
 	case "":
 		v.add(path+".type", "a window type is required (tumbling, sliding, or session)")

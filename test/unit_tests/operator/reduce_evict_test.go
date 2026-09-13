@@ -3,6 +3,7 @@ package operator_test
 import (
 	"encoding/binary"
 	"sort"
+	"strconv"
 	"testing"
 	"time"
 
@@ -34,6 +35,12 @@ func windowed(key string, val uint64, start, end time.Time) types.Record {
 			"window_end":   []byte(end.Format(time.RFC3339Nano)),
 		},
 	}
+}
+
+func windowedWithAllowed(key string, val uint64, start, end time.Time, allowed time.Duration) types.Record {
+	r := windowed(key, val, start, end)
+	r.Headers["window_allowed_lateness_nanos"] = []byte(strconv.FormatInt(allowed.Nanoseconds(), 10))
+	return r
 }
 
 // runReduce feeds records through a ReduceOperator and returns the emitted
@@ -101,6 +108,42 @@ func TestReduce_EvictsClosedWindowState(t *testing.T) {
 	wantKey := "k1/" + w3s.Format(time.RFC3339Nano) + "/" + w3e.Format(time.RFC3339Nano)
 	if keys[0] != wantKey {
 		t.Errorf("surviving key = %q, want %q", keys[0], wantKey)
+	}
+}
+
+func TestReduce_DelaysWindowEvictionByAllowedLateness(t *testing.T) {
+	base := time.Unix(0, 0).UTC()
+	allowed := 10 * time.Second
+	w1s, w1e := base, base.Add(10*time.Second)
+	w2s, w2e := w1e, w1e.Add(10*time.Second)
+	w3s, w3e := w2e, w2e.Add(10*time.Second)
+
+	op := operator.Reduce(sumFn)
+	runReduce(op, []types.Record{
+		windowedWithAllowed("k1", 1, w1s, w1e, allowed),
+		windowedWithAllowed("k1", 2, w2s, w2e, allowed),
+	})
+	keys := stateKeys(op)
+	if len(keys) != 1 {
+		t.Fatalf("w1 should be evicted once watermark reaches w1 end + allowed lateness, keys=%v", keys)
+	}
+	w1Key := "k1/" + w1s.Format(time.RFC3339Nano) + "/" + w1e.Format(time.RFC3339Nano)
+	if keys[0] == w1Key {
+		t.Fatalf("w1 should be evicted at the lateness boundary, keys=%v", keys)
+	}
+
+	runReduce(op, []types.Record{
+		windowedWithAllowed("k1", 3, w3s, w3e, allowed),
+	})
+	keys = stateKeys(op)
+	if len(keys) != 1 {
+		t.Fatalf("expected w2 evicted and w3 retained, got %v", keys)
+	}
+	for _, k := range keys {
+		w2Key := "k1/" + w2s.Format(time.RFC3339Nano) + "/" + w2e.Format(time.RFC3339Nano)
+		if k == w2Key {
+			t.Fatalf("w2 should be evicted after allowed lateness, keys=%v", keys)
+		}
 	}
 }
 

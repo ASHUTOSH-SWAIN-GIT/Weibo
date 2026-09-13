@@ -300,6 +300,10 @@ type WindowConfig struct {
 	// (WindowWithIdleTimeout). 0 = disabled.
 	IdleTimeout Duration `yaml:"idleTimeout,omitempty" json:"idleTimeout,omitempty"`
 
+	// AllowedLateness keeps windows open for late records until
+	// watermark >= window_end + allowedLateness. 0 = strict watermark close.
+	AllowedLateness Duration `yaml:"allowedLateness,omitempty" json:"allowedLateness,omitempty"`
+
 	Label string `yaml:"label,omitempty" json:"label,omitempty"`
 }
 
