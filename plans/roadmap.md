@@ -332,31 +332,71 @@ workflow permissions, and release binary provenance attestations.
 
 ## P6 — Test, CI, and developer experience
 
-### 25. Keep local and hosted CI equivalent
+### 25. Keep local and hosted CI equivalent — ✅ DONE
 
 **Finding:** the Makefile still tests only `test/unit_tests/...`, while hosted
 CI tests all root, control, and Kubernetes-tagged packages.
 
-Update local test/race/coverage/CI targets for both modules and Kubernetes tags.
-Add checks for workflows, Dockerfiles, shell, YAML, and documentation links.
+**Shipped:** `make ci` now mirrors hosted CI step for step — build/vet/race
+tests cover root, control, *and* telemetry; `vet-kubernetes`/`test-kubernetes`
+cover the tagged controller; `test-coverage` publishes root, control (untagged
+plus kubernetes-tagged backend, merged), and telemetry profiles separately;
+new `make check-static` (`scripts/check-static.sh`, also a hosted `static`
+job) validates workflows YAML + action pinning, Dockerfiles, shell syntax,
+all YAML parsing, and docs relative links; `make vuln` runs govulncheck on
+all three modules (hosted security job matches).
 
-### 26. Add missing integration tiers
+**Exit criteria:** `make ci`, `make check-static`, and the hosted
+`build`/`fmt-vet`/`static`/`test`/`kubernetes` jobs run the same commands;
+adding a workflow/Dockerfile/shell/docs-link violation fails both locally
+and hosted.
 
-- Kafka: multi-topic recovery, transactions, auth/TLS, rebalance, broker loss,
-  and partition expansion;
-- Postgres: retry, upsert, disconnect, and shutdown flush;
-- HTTP/S3: retry/idempotency and savepoint round trips;
-- Kubernetes: kind submit/readiness/state/savepoint/restart/delete;
-- browser: dashboard lifecycle, auth, and metrics rendering.
+### 26. Add missing integration tiers — ✅ DONE
 
-Keep fake-client suites on every pull request; run fault/cluster suites on merge
-or nightly schedules.
+**Shipped:** `test/integration/` (root module) covers Kafka (multi-topic
+recovery, transaction commit/abort/absent probes, auth/TLS surface, position
+envelope, broker-loss error propagation, partition expansion, consumer-group
+rebalance), Postgres (validation, retry inserts, upsert convergence,
+disconnect cancellation, shutdown drain-and-flush), and HTTP/S3 (idempotent
+retry bodies, 4xx-no-retry + DLQ, file savepoint round trip, S3 config from
+env, live S3 round trip). Control covers Kubernetes (`backend`, kubernetes
+tag: fake-client submit/readiness/state/restart/delete plus a
+`WEIBO_RUN_KIND=1` live kind replay with logs and data-volume deletion) and
+browser (`api`: dashboard HTML hooks, auth roles, metrics cardinality and
+history rendering, plus a `WEIBO_RUN_BROWSER_URL` live replay). `TestTier_*`
+offline halves run with no services; `TestLive_*` skip unless `KAFKA_BROKERS`,
+`POSTGRES_DSN`, `SAVEPOINT_S3_BUCKET`, `WEIBO_RUN_KIND=1`, or
+`WEIBO_RUN_BROWSER_URL` is set. New `.github/workflows/integration.yml` runs
+the offline halves on every PR and the live halves (Kafka/Postgres/MinIO
+services, kind cluster, real dashboard process) on merge/nightly/
+`workflow_dispatch`. `make test-integration` / `make test-integration-live`
+wrap both modes.
 
-### 27. Add fuzzing and quality gates
+**Exit criteria:** `go test ./test/integration/` green with no env;
+each live tier skips cleanly without its backend and exercises the real
+backend on nightly; fake-client suites stay in the PR path.
 
-Fuzz workflow parsing, record paths, checkpoint/archive inputs, and API request
-decoding. Publish root/control coverage separately and gate changed-package
-regressions before adopting a global threshold.
+### 27. Add fuzzing and quality gates — ✅ DONE
+
+**Shipped:** fuzzing now covers workflow parsing, record paths
+(`FuzzRecordFieldPaths`: arbitrary docs/paths with set→get→delete→encode
+invariants), checkpoint/archive inputs (`FuzzExtractCheckpoint`: never
+panics, never escapes the state root, accepted archives restore as latest
+completed), and API request decoding (`FuzzAPIRequestDecoding` plus
+`FuzzAPIRequestBodyLimits`: deterministic decoding, oversized bodies
+rejected with 413 semantics). `scripts/fuzz-smoke.sh` (`make fuzz-smoke`,
+`FUZZTIME` overridable, 10s default) runs all eight targets and backs the
+new hosted `fuzz` CI job. Coverage is published per module (root, control
+with merged kubernetes-tagged backend, telemetry) and `scripts/check-coverage.sh`
+(`make coverage-report` / `make coverage-gate`, hosted coverage job) prints
+per-package tables plus a changed-package gate: packages with non-test
+changes must sit at or above `--min` percent (default 50; test-only changes
+skip since they can only raise coverage).
+
+**Exit criteria:** `make fuzz-smoke` green; every fuzz target has seed
+corpus and a stated invariant; the coverage gate passes on test-only PRs
+and fails with package + percentage when a touched package drops below the
+floor (verified both directions).
 
 ### 28. Clean naming and documentation drift — ✅ DONE
 
@@ -391,4 +431,4 @@ API compatibility; removed tracked generated binaries (`kafka-orders`,
    and CI hardening (#14–#28).
 5. Begin product expansion only after those foundations (#29–#33).
 
-**Next task:** #19, harden job isolation.
+**Next task:** #29, multi-stream joins (P0–P3 foundations #1–#28 complete).

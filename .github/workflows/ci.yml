@@ -40,6 +40,10 @@ jobs:
         working-directory: control
         run: go build ./...
 
+      - name: Build telemetry
+        working-directory: telemetry
+        run: go build ./...
+
   fmt-vet:
     name: fmt + vet
     runs-on: ubuntu-latest
@@ -78,6 +82,22 @@ jobs:
         working-directory: control
         run: go vet ./...
 
+      - name: Vet telemetry
+        working-directory: telemetry
+        run: go vet ./...
+
+  static:
+    name: static checks (workflows, Dockerfiles, shell, YAML, docs)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install PyYAML for YAML validation
+        run: pip install --quiet pyyaml
+
+      - name: Run repo static checks (same script as `make check-static`)
+        run: ./scripts/check-static.sh
+
   test:
     name: test (race detector)
     runs-on: ubuntu-latest
@@ -96,6 +116,13 @@ jobs:
       - name: Test controller with race detector
         working-directory: control
         run: go test -short -race ./...
+
+      - name: Test telemetry with race detector
+        working-directory: telemetry
+        run: go test -race ./...
+
+      - name: Offline integration tiers (fakes; no live backends)
+        run: go test -count=1 ./test/integration/...
 
   kubernetes:
     name: kubernetes (vet + test)
@@ -123,6 +150,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The changed-package gate diffs against origin/main.
+          fetch-depth: 0
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -144,9 +174,13 @@ jobs:
           path: coverage.out
           retention-days: 7
 
-      - name: Controller coverage
+      - name: Controller coverage (untagged + kubernetes-tagged backend)
         working-directory: control
-        run: go test -short -coverprofile=control-coverage.out -covermode=atomic ./...
+        run: |
+          go test -short -coverprofile=control-coverage.out -covermode=atomic ./...
+          go test -short -tags kubernetes -coverprofile=control-coverage-k8s.out -covermode=atomic ./backend/...
+          grep -v '^mode: ' control-coverage-k8s.out >> control-coverage.out
+          rm control-coverage-k8s.out
 
       - name: Upload controller coverage artifact
         if: always()
@@ -155,6 +189,36 @@ jobs:
           name: controller-coverage
           path: control/control-coverage.out
           retention-days: 7
+
+      - name: Telemetry coverage
+        working-directory: telemetry
+        run: go test -coverprofile=telemetry-coverage.out -covermode=atomic ./...
+
+      - name: Upload telemetry coverage artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: telemetry-coverage
+          path: telemetry/telemetry-coverage.out
+          retention-days: 7
+
+      - name: Changed-package coverage gate (roadmap #27)
+        run: ./scripts/check-coverage.sh --gate --base origin/main
+
+  fuzz:
+    name: fuzz smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.2'
+          cache: true
+
+      - name: Run every fuzz target briefly (same script as `make fuzz-smoke`)
+        run: ./scripts/fuzz-smoke.sh 10s
 
   controller-docker-integration:
     name: controller SDK Docker integration
@@ -199,6 +263,10 @@ jobs:
 
       - name: govulncheck control module
         working-directory: control
+        run: govulncheck ./...
+
+      - name: govulncheck telemetry module
+        working-directory: telemetry
         run: govulncheck ./...
 
       - name: Build runner image for scanning

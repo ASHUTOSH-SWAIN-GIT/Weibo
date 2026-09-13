@@ -1,0 +1,203 @@
+name: integration tiers
+
+# Roadmap #26: fake-client suites run on every pull request; fault/cluster
+# suites (live Kafka, Postgres, S3/MinIO, kind, real dashboard) run on
+# merge to main and nightly.
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  schedule:
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Offline half: no services, must stay green on every PR.
+  tiers-offline:
+    name: offline tiers (fakes)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.2'
+          cache: true
+
+      - name: Root integration tiers (offline)
+        run: go test -count=1 ./test/integration/...
+
+      - name: Browser tier (offline)
+        working-directory: control
+        run: go test -count=1 -run 'TestTier_Browser' ./api/...
+
+      - name: Kubernetes lifecycle tier (fake clientset)
+        working-directory: control
+        run: go test -count=1 -short -tags kubernetes -run 'TestTier_K8s' ./backend/...
+
+  # Live half: Kafka + Postgres + S3-compatible (MinIO) services.
+  tiers-live-services:
+    name: live tiers (kafka, postgres, s3)
+    if: github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    services:
+      kafka:
+        image: apache/kafka:3.7.0
+        env:
+          KAFKA_NODE_ID: '1'
+          KAFKA_PROCESS_ROLES: 'broker,controller'
+          KAFKA_CONTROLLER_QUORUM_VOTERS: '1@kafka:9093'
+          KAFKA_LISTENERS: 'PLAINTEXT://:9092,CONTROLLER://:9093'
+          KAFKA_ADVERTISED_LISTENERS: 'PLAINTEXT://localhost:9092'
+          KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: 'CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT'
+          KAFKA_CONTROLLER_LISTENER_NAMES: 'CONTROLLER'
+          KAFKA_INTER_BROKER_LISTENER_NAME: 'PLAINTEXT'
+          KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'true'
+          KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: '1'
+          KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: '1'
+          KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: '1'
+          CLUSTER_ID: 'MkU3OEVBNTcwNTJENDM2QkM0RUUxM0VCOEUwQjlGQjY='
+        ports:
+          - 9092:9092
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: weibo
+          POSTGRES_PASSWORD: weibo
+          POSTGRES_DB: weibo
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U weibo -d weibo"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+      minio:
+        image: minio/minio:latest
+        env:
+          MINIO_ROOT_USER: weibo
+          MINIO_ROOT_PASSWORD: weibominio
+        ports:
+          - 9000:9000
+        options: >-
+          --health-cmd "curl -f http://localhost:9000/minio/health/live"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+        # MinIO server command is appended after the image entrypoint args.
+        args: server /data
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.2'
+          cache: true
+
+      - name: Create MinIO bucket
+        run: |
+          curl -fsSL https://dl.min.io/client/mc/release/linux-amd64/mc -o /tmp/mc
+          chmod +x /tmp/mc
+          /tmp/mc alias set tier http://localhost:9000 weibo weibominio
+          /tmp/mc mb tier/weibo-tier || true
+
+      - name: Live Kafka tiers
+        env:
+          KAFKA_BROKERS: localhost:9092
+        run: go test -count=1 -v -run 'TestLive_Kafka' ./test/integration/...
+
+      - name: Live Postgres tiers
+        env:
+          POSTGRES_DSN: postgres://weibo:weibo@localhost:5432/weibo?sslmode=disable
+        run: go test -count=1 -v -run 'TestLive_Postgres' ./test/integration/...
+
+      - name: Live S3 savepoint tier
+        env:
+          SAVEPOINT_S3_BUCKET: weibo-tier
+          SAVEPOINT_S3_ENDPOINT: http://localhost:9000
+          SAVEPOINT_S3_PATH_STYLE: 'true'
+          AWS_ACCESS_KEY_ID: weibo
+          AWS_SECRET_ACCESS_KEY: weibominio
+          AWS_REGION: us-east-1
+        run: go test -count=1 -v -run 'TestLive_S3' ./test/integration/...
+
+  # Live kind tier: real cluster lifecycle (submit/readiness/state/restart/delete).
+  tiers-live-kind:
+    name: live tier (kind)
+    if: github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.2'
+          cache: true
+          cache-dependency-path: control/go.sum
+
+      - name: Create kind cluster
+        uses: helm/kind-action@v1.14.0
+        with:
+          cluster_name: weibo-tier
+
+      - name: Build and load SDK fixture image
+        run: |
+          docker build -f examples/sdk-demo/Dockerfile.integration -t weibo-sdk-demo:test .
+          kind load docker-image weibo-sdk-demo:test --name weibo-tier
+
+      - name: Kind lifecycle tier
+        working-directory: control
+        env:
+          WEIBO_RUN_KIND: '1'
+        run: go test -count=1 -v -tags kubernetes -run 'TestTier_K8sLiveKind' ./backend/...
+
+  # Live browser tier: HTTP contract against a real dashboard process.
+  tiers-live-browser:
+    name: live tier (dashboard)
+    if: github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.2'
+          cache: true
+          cache-dependency-path: control/go.sum
+
+      - name: Start dashboard
+        working-directory: control
+        env:
+          WEIBO_AUTH_TOKEN: tier-token
+        run: |
+          go build -tags kubernetes -o /tmp/weibo-tier ./cmd/weibo
+          /tmp/weibo-tier dashboard -addr 127.0.0.1:18080 -no-open -db /tmp/weibo-tier.db \
+            -history-interval 2s > /tmp/weibo-tier.log 2>&1 &
+          echo $! > /tmp/weibo-tier.pid
+          for i in $(seq 1 30); do
+            curl -fsS http://127.0.0.1:18080/livez >/dev/null 2>&1 && break
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:18080/livez
+
+      - name: Browser tier against live dashboard
+        working-directory: control
+        env:
+          WEIBO_RUN_BROWSER_URL: http://127.0.0.1:18080
+          WEIBO_BROWSER_TOKEN: tier-token
+        run: go test -count=1 -v -run 'TestTier_BrowserAgainstLiveURL' ./api/...
+
+      - name: Stop dashboard
+        if: always()
+        run: |
+          kill "$(cat /tmp/weibo-tier.pid)" 2>/dev/null || true
+          tail -20 /tmp/weibo-tier.log || true
