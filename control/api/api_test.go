@@ -13,6 +13,7 @@ import (
 	"github.com/ASHUTOSH-SWAIN-GIT/weibo/control"
 	"github.com/ASHUTOSH-SWAIN-GIT/weibo/control/api"
 	"github.com/ASHUTOSH-SWAIN-GIT/weibo/control/backend"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/control/lifecycle"
 	"github.com/ASHUTOSH-SWAIN-GIT/weibo/control/store"
 )
 
@@ -23,14 +24,26 @@ image: registry.example/orders:v1
 
 func newAPI(t *testing.T) *httptest.Server {
 	t.Helper()
+	return newAPIWithController(t, control.New(control.Options{
+		Store:       mustStore(t),
+		Backend:     backend.NewFake(),
+		Image:       "img",
+		StopTimeout: time.Second,
+	}))
+}
+
+func mustStore(t *testing.T) store.Store {
+	t.Helper()
 	st, err := store.OpenSQLite(":memory:")
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { st.Close() })
-	ctrl := control.New(control.Options{
-		Store: st, Backend: backend.NewFake(), Image: "img", StopTimeout: time.Second,
-	})
+	return st
+}
+
+func newAPIWithController(t *testing.T, ctrl *control.Controller) *httptest.Server {
+	t.Helper()
 	srv := httptest.NewServer(api.NewServer(ctrl, "").Handler())
 	t.Cleanup(srv.Close)
 	return srv
@@ -222,6 +235,58 @@ func TestSubmitJSONEnvelopeWithEnvRefs(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("submit json envRefs: got %d", resp.StatusCode)
+	}
+}
+
+func TestSubmitLaunchFailureExposesRetryMetadata(t *testing.T) {
+	fake := backend.NewFake()
+	fake.LaunchErr = backend.TransientLaunchErrorf("temporary backend unavailable")
+	ctrl := control.New(control.Options{
+		Store:       mustStore(t),
+		Backend:     fake,
+		Image:       "img",
+		Restart:     lifecycle.RestartPolicy{MaxAttempts: 2, BaseBackoff: time.Minute},
+		StopTimeout: time.Second,
+	})
+	srv := newAPIWithController(t, ctrl)
+
+	resp, err := http.Post(srv.URL+"/jobs", "application/yaml", strings.NewReader(sdkJob))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("submit with transient launch failure: got %d, want 202", resp.StatusCode)
+	}
+	var accepted struct {
+		Job     store.Job `json:"job"`
+		Warning string    `json:"warning"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&accepted); err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if accepted.Job.ID == "" || !strings.Contains(accepted.Warning, "launch") {
+		t.Fatalf("accepted response missing job/warning: %+v", accepted)
+	}
+
+	resp, err = http.Get(srv.URL + "/jobs/" + accepted.Job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var detail struct {
+		LatestRun *store.Run `json:"latestRun"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&detail); err != nil {
+		t.Fatal(err)
+	}
+	if detail.LatestRun == nil {
+		t.Fatal("missing latestRun")
+	}
+	if detail.LatestRun.Phase != string(lifecycle.Restarting) ||
+		detail.LatestRun.FailureKind != store.FailureLaunchTransient ||
+		detail.LatestRun.RestartAt == nil {
+		t.Fatalf("retry metadata not exposed: %+v", detail.LatestRun)
 	}
 }
 

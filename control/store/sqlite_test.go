@@ -112,7 +112,7 @@ func TestRunsAndActive(t *testing.T) {
 		t.Fatalf("LatestRun on fresh job: r=%v err=%v", r, err)
 	}
 
-	r1 := &store.Run{ID: "r1", JobID: "j", ContainerID: "c1", HostPort: 32000, Phase: "running", Attempt: 1, Started: time.Now()}
+	r1 := &store.Run{ID: "r1", JobID: "j", ContainerID: "c1", HostPort: 32000, Phase: "running", Attempt: 1, Error: "temporary backend unavailable", FailureKind: store.FailureLaunchTransient, Started: time.Now()}
 	if err := s.CreateRun(r1); err != nil {
 		t.Fatal(err)
 	}
@@ -123,6 +123,9 @@ func TestRunsAndActive(t *testing.T) {
 	}
 	if active[0].HostPort != 32000 {
 		t.Errorf("host port not persisted: %d", active[0].HostPort)
+	}
+	if active[0].FailureKind != store.FailureLaunchTransient {
+		t.Errorf("failure kind not persisted: %q", active[0].FailureKind)
 	}
 
 	// Terminate r1: it leaves the active set.

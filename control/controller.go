@@ -534,7 +534,13 @@ func (c *Controller) launchLocked(ctx context.Context, job *store.Job, attempt i
 	})
 	if err != nil {
 		run.Error = err.Error()
-		if retryableLaunchFailure(err) && c.restart.ShouldRestart(lifecycle.Failed, run.Attempt) {
+		switch launchFailureKind(err) {
+		case "permanent":
+			run.FailureKind = store.FailureLaunchPermanent
+		default:
+			run.FailureKind = store.FailureLaunchTransient
+		}
+		if run.FailureKind == store.FailureLaunchTransient && c.restart.ShouldRestart(lifecycle.Failed, run.Attempt) {
 			if updateErr := c.scheduleRestartFrom(job, run, lifecycle.Starting, err.Error()); updateErr != nil {
 				return fmt.Errorf("launch failed (%v); additionally failed to schedule retry: %w", err, updateErr)
 			}
@@ -578,6 +584,7 @@ func (c *Controller) markLaunchRecordFailure(run *store.Run, cause error) error 
 	run.HostPort = 0
 	run.Phase = string(lifecycle.Failed)
 	run.Error = fmt.Sprintf("failed to record launched backend resource: %v", cause)
+	run.FailureKind = store.FailureLaunchRecord
 	run.Stopped = &stopped
 	run.RestartAt = nil
 	return c.store.UpdateRun(run)
@@ -595,6 +602,7 @@ func (c *Controller) finishRun(run *store.Run, from, to lifecycle.Phase, reason 
 func (c *Controller) blockRun(job *store.Job, run *store.Run, from lifecycle.Phase, reason string) error {
 	run.Phase = string(lifecycle.Blocked)
 	run.Error = reason
+	run.FailureKind = store.FailureSecretBlocked
 	run.RestartAt = nil
 	return c.store.UpdateRunWithTransition(run, transitionRecord(job.ID, run.ID, from, lifecycle.Blocked, reason))
 }

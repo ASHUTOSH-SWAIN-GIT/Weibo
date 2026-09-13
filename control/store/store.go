@@ -69,10 +69,22 @@ type Run struct {
 	Phase       string     `json:"phase"`
 	Attempt     int        `json:"attempt"`
 	Error       string     `json:"error,omitempty"`
+	FailureKind string     `json:"failureKind,omitempty"`
 	Started     time.Time  `json:"startedAt"`
 	Stopped     *time.Time `json:"stoppedAt,omitempty"`
 	RestartAt   *time.Time `json:"restartAt,omitempty"`
 }
+
+// Run failure categories exposed through the API. These are intentionally
+// coarse and non-secret: callers can decide whether a run is retrying because
+// infrastructure is unavailable, failed permanently because the request/image
+// is invalid, or was blocked waiting for external configuration.
+const (
+	FailureLaunchTransient = "launch_transient"
+	FailureLaunchPermanent = "launch_permanent"
+	FailureLaunchRecord    = "launch_record"
+	FailureSecretBlocked   = "secret_blocked"
+)
 
 // Transition is an append-only lifecycle audit record.
 type Transition struct {

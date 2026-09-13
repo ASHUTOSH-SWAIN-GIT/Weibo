@@ -564,6 +564,9 @@ func TestInitialLaunchFailureRetriesOnReconcile(t *testing.T) {
 	if run.Phase != string(lifecycle.Restarting) || run.RestartAt == nil || run.Stopped != nil {
 		t.Fatalf("initial launch failure was not scheduled for retry: %+v", run)
 	}
+	if run.FailureKind != store.FailureLaunchTransient {
+		t.Fatalf("failure kind: got %q, want %q", run.FailureKind, store.FailureLaunchTransient)
+	}
 	if fake.Launched() != 0 {
 		t.Fatalf("failed launch should not create a container, got %d", fake.Launched())
 	}
@@ -598,6 +601,9 @@ func TestInitialPermanentLaunchFailureDoesNotRetry(t *testing.T) {
 	}
 	if run.Phase != string(lifecycle.Failed) || run.RestartAt != nil || run.Stopped == nil {
 		t.Fatalf("permanent launch failure should be terminal: %+v", run)
+	}
+	if run.FailureKind != store.FailureLaunchPermanent {
+		t.Fatalf("failure kind: got %q, want %q", run.FailureKind, store.FailureLaunchPermanent)
 	}
 	if err := c.Reconcile(context.Background()); err != nil {
 		t.Fatal(err)

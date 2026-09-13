@@ -168,6 +168,28 @@ same namespace an S3 bucket gives across hosts — an S3 blobstore drops in for
 P6 without touching the savepoint code). The workflow must have checkpointing
 enabled (`env.checkpointing`).
 
+## Launch failures and retries
+
+Submit validates the workflow before any backend resource is created. If the
+spec or SDK manifest is invalid, `POST /jobs` returns `400` and no job is
+recorded.
+
+If validation succeeds but the backend cannot start the first container, the
+job is recorded and the response is `202 Accepted` with a warning. The latest
+run explains what happens next:
+
+- `phase: "restarting"` with `failureKind: "launch_transient"` and `restartAt`
+  means the controller persisted a retry time and the reconciler will launch a
+  fresh run after backoff.
+- `phase: "failed"` with `failureKind: "launch_permanent"` means the failure is
+  not expected to recover automatically, such as an invalid or inaccessible
+  image reference.
+- `phase: "blocked"` with `failureKind: "secret_blocked"` means durable secret
+  references could not be resolved; no container is launched until they resolve.
+
+The controller persists this state, so restart/backoff decisions survive a
+controller process restart.
+
 ## Exactly-once across restarts
 
 Two safeguards keep exactly-once intact when a job restarts:

@@ -53,6 +53,7 @@ var migrations = []string{
 	`ALTER TABLE jobs ADD COLUMN image TEXT NOT NULL DEFAULT ''`,
 	`ALTER TABLE jobs ADD COLUMN secret_refs TEXT NOT NULL DEFAULT '{}'`,
 	`ALTER TABLE runs ADD COLUMN restart_at TEXT`,
+	`ALTER TABLE runs ADD COLUMN failure_kind TEXT NOT NULL DEFAULT ''`,
 	`CREATE UNIQUE INDEX IF NOT EXISTS idx_runs_one_active_per_job ON runs(job_id) WHERE stopped_at IS NULL`,
 }
 
@@ -78,6 +79,7 @@ CREATE TABLE IF NOT EXISTS runs (
     phase        TEXT NOT NULL,
     attempt      INTEGER NOT NULL,
     error        TEXT,
+    failure_kind TEXT NOT NULL DEFAULT '',
     started_at   TEXT NOT NULL,
     stopped_at   TEXT,
     restart_at   TEXT
@@ -205,9 +207,9 @@ func (s *SQLite) CreateRunWithTransition(r *Run, t *Transition) error {
 
 func insertRun(db execer, r *Run) error {
 	_, err := db.Exec(
-		`INSERT INTO runs (id,job_id,container_id,host_port,phase,attempt,error,started_at,stopped_at,restart_at)
-		 VALUES (?,?,?,?,?,?,?,?,?,?)`,
-		r.ID, r.JobID, r.ContainerID, r.HostPort, r.Phase, r.Attempt, r.Error,
+		`INSERT INTO runs (id,job_id,container_id,host_port,phase,attempt,error,failure_kind,started_at,stopped_at,restart_at)
+		 VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+		r.ID, r.JobID, r.ContainerID, r.HostPort, r.Phase, r.Attempt, r.Error, r.FailureKind,
 		r.Started.Format(rfc), nullTime(r.Stopped), nullTime(r.RestartAt))
 	return err
 }
@@ -240,9 +242,9 @@ func (s *SQLite) UpdateRunWithTransition(r *Run, t *Transition) error {
 
 func updateRun(db execer, r *Run) error {
 	res, err := db.Exec(
-		`UPDATE runs SET container_id=?, host_port=?, phase=?, attempt=?, error=?, stopped_at=?, restart_at=?
+		`UPDATE runs SET container_id=?, host_port=?, phase=?, attempt=?, error=?, failure_kind=?, stopped_at=?, restart_at=?
 		 WHERE id=?`,
-		r.ContainerID, r.HostPort, r.Phase, r.Attempt, r.Error, nullTime(r.Stopped), nullTime(r.RestartAt), r.ID)
+		r.ContainerID, r.HostPort, r.Phase, r.Attempt, r.Error, r.FailureKind, nullTime(r.Stopped), nullTime(r.RestartAt), r.ID)
 	if err != nil {
 		return err
 	}
@@ -319,7 +321,7 @@ func (s *SQLite) Close() error { return s.db.Close() }
 
 // --- scanning helpers ---
 
-const runCols = `SELECT id,job_id,container_id,host_port,phase,attempt,error,started_at,stopped_at,restart_at FROM runs`
+const runCols = `SELECT id,job_id,container_id,host_port,phase,attempt,error,failure_kind,started_at,stopped_at,restart_at FROM runs`
 
 type scanner interface {
 	Scan(dest ...any) error
@@ -356,7 +358,7 @@ func scanRun(sc scanner) (*Run, error) {
 	var hostPort sql.NullInt64
 	var started string
 	var stopped, restartAt sql.NullString
-	if err := sc.Scan(&r.ID, &r.JobID, &containerID, &hostPort, &r.Phase, &r.Attempt, &errStr, &started, &stopped, &restartAt); err != nil {
+	if err := sc.Scan(&r.ID, &r.JobID, &containerID, &hostPort, &r.Phase, &r.Attempt, &errStr, &r.FailureKind, &started, &stopped, &restartAt); err != nil {
 		return nil, err
 	}
 	r.ContainerID, r.Error = containerID.String, errStr.String

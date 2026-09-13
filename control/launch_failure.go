@@ -13,9 +13,19 @@ func retryableLaunchFailure(err error) bool {
 	if err == nil {
 		return false
 	}
+	return launchFailureKind(err) == "transient"
+}
+
+func launchFailureKind(err error) string {
+	if err == nil {
+		return ""
+	}
 	var classified permanentLaunchFailure
 	if errors.As(err, &classified) {
-		return !classified.IsPermanentLaunchFailure()
+		if classified.IsPermanentLaunchFailure() {
+			return "permanent"
+		}
+		return "transient"
 	}
 	msg := strings.ToLower(err.Error())
 	for _, marker := range []string{
@@ -27,8 +37,8 @@ func retryableLaunchFailure(err error) bool {
 		"no such image",
 	} {
 		if strings.Contains(msg, marker) {
-			return false
+			return "permanent"
 		}
 	}
-	return true
+	return "transient"
 }
