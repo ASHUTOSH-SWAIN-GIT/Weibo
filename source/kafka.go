@@ -138,6 +138,19 @@ func (k *KafkaSource) Run(ctx context.Context, out chan<- types.Record) error {
 	return k.runOnce(ctx, out)
 }
 
+// SourceCapabilities declares the optional source contracts KafkaSource
+// supports. The runtime uses this for upfront compatibility checks.
+func (k *KafkaSource) SourceCapabilities() Capabilities {
+	return Capabilities{
+		CheckpointOffsets:     true,
+		PositionedCheckpoints: true,
+		Drain:                 true,
+		CommitOffsets:         true,
+		OperationalState:      true,
+		Describe:              true,
+	}
+}
+
 // runOnce is the core fetch loop without watermark injection.
 //
 // In parallel mode the partitionManager owns the per-partition readers,
@@ -420,6 +433,7 @@ var (
 	_ OffsetCommitter            = (*KafkaSource)(nil)
 	_ Drainable                  = (*KafkaSource)(nil)
 	_ Describable                = (*KafkaSource)(nil)
+	_ CapabilityProvider         = (*KafkaSource)(nil)
 	_ Source                     = (*kafkaSourceRunner)(nil)
 )
 

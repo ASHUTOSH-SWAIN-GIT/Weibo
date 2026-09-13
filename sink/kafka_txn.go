@@ -500,6 +500,14 @@ func allMarkerPartitionsDone(boundaries map[int32]int64, positions map[int32]int
 	return true
 }
 
+// SinkCapabilities declares the optional sink contracts TxnKafkaSink supports.
+func (s *TxnKafkaSink) SinkCapabilities() Capabilities {
+	return Capabilities{
+		CoordinatedCheckpoints: true,
+		Describe:               true,
+	}
+}
+
 // Describe returns dashboard metadata.
 func (s *TxnKafkaSink) Describe() SinkInfo {
 	props := map[string]string{
@@ -519,7 +527,8 @@ func (s *TxnKafkaSink) Describe() SinkInfo {
 
 // Compile-time checks.
 var (
-	_ Sink             = (*TxnKafkaSink)(nil)
-	_ CheckpointedSink = (*TxnKafkaSink)(nil)
-	_ Describable      = (*TxnKafkaSink)(nil)
+	_ Sink               = (*TxnKafkaSink)(nil)
+	_ CheckpointedSink   = (*TxnKafkaSink)(nil)
+	_ Describable        = (*TxnKafkaSink)(nil)
+	_ CapabilityProvider = (*TxnKafkaSink)(nil)
 )

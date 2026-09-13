@@ -224,13 +224,21 @@ func (env *StreamExecutionEnv) Execute(ctx context.Context) error {
 	// Coordinated (exactly-once) mode is active when the sink stages
 	// its output transactionally. It requires checkpointing and a
 	// resumable source — refuse half-configured setups.
+	sourceCaps := source.CapabilitiesOf(env.source)
+	sinkCaps := sink.CapabilitiesOf(env.sink)
 	coordinatedSink, coordinated := env.sink.(sink.CheckpointedSink)
-	if coordinated {
+	if sinkCaps.CoordinatedCheckpoints {
+		if !coordinated {
+			return fmt.Errorf("weibo: sink declares coordinated checkpoints but does not implement sink.CheckpointedSink")
+		}
 		if env.checkpointStorage == nil || env.checkpointInterval <= 0 {
 			return fmt.Errorf("weibo: a CheckpointedSink requires WithCheckpointing(interval, storage)")
 		}
+		if !sourceCaps.CheckpointOffsets {
+			return fmt.Errorf("weibo: exactly-once requires a source with CheckpointOffsets capability (source.CheckpointSource)")
+		}
 		if _, ok := env.source.(source.CheckpointSource); !ok {
-			return fmt.Errorf("weibo: exactly-once requires a source that supports offset checkpointing (source.CheckpointSource)")
+			return fmt.Errorf("weibo: source declares CheckpointOffsets but does not implement source.CheckpointSource")
 		}
 	}
 

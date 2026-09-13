@@ -13,6 +13,44 @@ type Sink interface {
 	Write(ctx context.Context, in <-chan types.Record) error
 }
 
+// Capabilities describes optional sink behaviours that affect runtime
+// validation and delivery guarantees. New sinks should implement
+// CapabilityProvider explicitly; existing sinks are still supported because
+// CapabilitiesOf derives values from legacy optional interfaces.
+type Capabilities struct {
+	// CoordinatedCheckpoints means the sink participates in checkpoint
+	// coordination, usually by staging output transactionally until commit.
+	CoordinatedCheckpoints bool
+
+	// Describe means the sink exposes dashboard metadata.
+	Describe bool
+}
+
+// CapabilityProvider is implemented by sinks that explicitly declare their
+// optional behaviours.
+type CapabilityProvider interface {
+	SinkCapabilities() Capabilities
+}
+
+// CapabilitiesOf returns a sink's declared capabilities plus any capabilities
+// implied by the legacy optional interfaces it implements.
+func CapabilitiesOf(sk Sink) Capabilities {
+	var caps Capabilities
+	if sk == nil {
+		return caps
+	}
+	if p, ok := sk.(CapabilityProvider); ok {
+		caps = p.SinkCapabilities()
+	}
+	if _, ok := sk.(CheckpointedSink); ok {
+		caps.CoordinatedCheckpoints = true
+	}
+	if _, ok := sk.(Describable); ok {
+		caps.Describe = true
+	}
+	return caps
+}
+
 // CheckpointedSink is a Sink that participates in coordinated
 // exactly-once checkpoints. Output between two checkpoint barriers is
 // staged (e.g. in a Kafka transaction) and becomes visible only when

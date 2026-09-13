@@ -89,6 +89,71 @@ type Source interface {
 	Run(ctx context.Context, out chan<- types.Record) error
 }
 
+// Capabilities describes optional source behaviours that the runtime can
+// validate before a pipeline starts. Implementing this is preferred for new
+// connectors because it makes delivery guarantees explicit, but existing
+// connectors remain compatible: CapabilitiesOf derives these values from the
+// legacy optional interfaces below.
+type Capabilities struct {
+	// CheckpointOffsets means the source can persist and restore its read
+	// position via CheckpointSource.
+	CheckpointOffsets bool
+
+	// PositionedCheckpoints means checkpoint positions carry source identity
+	// in addition to partition identity via PositionedCheckpointSource.
+	PositionedCheckpoints bool
+
+	// Drain means the source can flush pending local work before shutdown.
+	Drain bool
+
+	// CommitOffsets means the source can externally commit checkpointed
+	// offsets after a coordinated checkpoint completes.
+	CommitOffsets bool
+
+	// OperationalState means the source exposes read-only live status.
+	OperationalState bool
+
+	// Describe means the source exposes dashboard metadata.
+	Describe bool
+}
+
+// CapabilityProvider is implemented by sources that explicitly declare their
+// optional behaviours.
+type CapabilityProvider interface {
+	SourceCapabilities() Capabilities
+}
+
+// CapabilitiesOf returns a source's declared capabilities plus any capabilities
+// implied by the legacy optional interfaces it implements.
+func CapabilitiesOf(src Source) Capabilities {
+	var caps Capabilities
+	if src == nil {
+		return caps
+	}
+	if p, ok := src.(CapabilityProvider); ok {
+		caps = p.SourceCapabilities()
+	}
+	if _, ok := src.(CheckpointSource); ok {
+		caps.CheckpointOffsets = true
+	}
+	if _, ok := src.(PositionedCheckpointSource); ok {
+		caps.PositionedCheckpoints = true
+	}
+	if _, ok := src.(Drainable); ok {
+		caps.Drain = true
+	}
+	if _, ok := src.(OffsetCommitter); ok {
+		caps.CommitOffsets = true
+	}
+	if _, ok := src.(OperationalStateProvider); ok {
+		caps.OperationalState = true
+	}
+	if _, ok := src.(Describable); ok {
+		caps.Describe = true
+	}
+	return caps
+}
+
 // OperationalStateProvider exposes a concurrent-safe, read-only snapshot for
 // the job agent's /state endpoint.
 type OperationalStateProvider interface {

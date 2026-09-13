@@ -17,6 +17,21 @@ import (
 	"github.com/ASHUTOSH-SWAIN-GIT/weibo/types"
 )
 
+type noCheckpointSource struct {
+	records []types.Record
+}
+
+func (s noCheckpointSource) Run(ctx context.Context, out chan<- types.Record) error {
+	for _, record := range s.records {
+		select {
+		case out <- record:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return nil
+}
+
 // ---------------------------------------------------------------------------
 // fakeTxnSink — an in-memory CheckpointedSink modeling a transactional
 // broker: staged output becomes visible only on Commit; the marker set
@@ -539,5 +554,21 @@ func TestExactlyOnce_RequiresCheckpointing(t *testing.T) {
 
 	if err := env.Execute(context.Background()); err == nil {
 		t.Fatal("expected configuration error for CheckpointedSink without WithCheckpointing")
+	}
+}
+
+func TestExactlyOnce_RequiresCheckpointCapableSource(t *testing.T) {
+	sk := newFakeTxnSink()
+	env := weibo.NewEnv().
+		WithCheckpointing(5*time.Millisecond, checkpoint.NewFileStorage(t.TempDir()))
+	env.FromSource(noCheckpointSource{records: []types.Record{{Key: []byte("k"), Value: []byte("v")}}}).
+		ToSink(sk)
+
+	err := env.Execute(context.Background())
+	if err == nil {
+		t.Fatal("expected configuration error for transactional sink with non-checkpointable source")
+	}
+	if !strings.Contains(err.Error(), "CheckpointOffsets capability") {
+		t.Fatalf("error = %v, want CheckpointOffsets capability", err)
 	}
 }
