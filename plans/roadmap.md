@@ -424,7 +424,14 @@ API compatibility; removed tracked generated binaries (`kafka-orders`,
     checkpoints, and exposes both parents into `join-0` in the runtime plan
     graph. Declarative workflows support both multiplexed `source:` joins and
     native named `sources:` workflows whose first operator is `type: join`.
-30. Typed `Stream[T]` API with a migration path from `[]byte` records.
+30. Typed `Stream[T]` API with a migration path from `[]byte` records —
+    ✅ DONE. Added a compatibility typed SDK layer over the existing
+    `types.Record` runtime. `FromTypedSource[T]`, `FromTypedRecords[T]`,
+    `FromTypedValues[T]`, `AsTyped[T]`, typed `Filter`/`Map`/`FlatMap`/
+    `Process`/`KeyBy`, `Untyped`, `ToTypedSink`, `TypedSinkFunc`, and
+    standalone `MapTyped[T,U]` / `FlatMapTyped[T,U]` preserve record metadata
+    while decoding from `Record.Parsed` or JSON `Record.Value` and re-encoding
+    typed outputs for existing untyped operators/sinks.
 31. User-facing keyed state/process functions with timers.
 32. Declarative function registry for map/flatMap/process references.
 33. New production connectors after capability/lifecycle contracts stabilize.
