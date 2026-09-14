@@ -434,6 +434,8 @@ type recordJSON struct {
 	Value     []byte            `json:"value,omitempty"`
 	Timestamp int64             `json:"timestamp"` // UnixNano
 	Offset    int64             `json:"offset"`
+	Partition int               `json:"partition,omitempty"`
+	Source    string            `json:"source,omitempty"`
 	Headers   map[string][]byte `json:"headers,omitempty"`
 }
 
@@ -519,6 +521,8 @@ func recordToJSON(r types.Record) recordJSON {
 		Value:     r.Value,
 		Timestamp: r.Timestamp.UnixNano(),
 		Offset:    r.Offset,
+		Partition: r.Partition,
+		Source:    r.Source,
 		Headers:   r.Headers,
 	}
 }
@@ -529,6 +533,8 @@ func recordFromJSON(r recordJSON) types.Record {
 		Value:     r.Value,
 		Timestamp: time.Unix(0, r.Timestamp).UTC(),
 		Offset:    r.Offset,
+		Partition: r.Partition,
+		Source:    r.Source,
 		Headers:   r.Headers,
 	}
 }

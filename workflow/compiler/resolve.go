@@ -19,15 +19,21 @@ func resolveSecrets(wf *workflow.Workflow, r secrets.SecretResolver) (*workflow.
 	out := *wf
 
 	if out.Source.Kafka != nil {
-		k := *out.Source.Kafka
-		if k.SASL != nil {
-			sasl, err := resolveSASL(r, k.SASL)
+		src, err := resolveSourceSecrets(out.Source, r)
+		if err != nil {
+			return nil, err
+		}
+		out.Source = src
+	}
+	if len(out.Sources) > 0 {
+		out.Sources = append([]workflow.NamedSourceSpec(nil), out.Sources...)
+		for i := range out.Sources {
+			src, err := resolveSourceSecrets(out.Sources[i].Source, r)
 			if err != nil {
 				return nil, err
 			}
-			k.SASL = sasl
+			out.Sources[i].Source = src
 		}
-		out.Source.Kafka = &k
 	}
 
 	switch out.Sink.Type {
@@ -68,6 +74,22 @@ func resolveSecrets(wf *workflow.Workflow, r secrets.SecretResolver) (*workflow.
 	}
 
 	return &out, nil
+}
+
+func resolveSourceSecrets(src workflow.SourceSpec, r secrets.SecretResolver) (workflow.SourceSpec, error) {
+	if src.Kafka == nil {
+		return src, nil
+	}
+	k := *src.Kafka
+	if k.SASL != nil {
+		sasl, err := resolveSASL(r, k.SASL)
+		if err != nil {
+			return src, err
+		}
+		k.SASL = sasl
+	}
+	src.Kafka = &k
+	return src, nil
 }
 
 func resolveOne(r secrets.SecretResolver, field, value string) (string, error) {

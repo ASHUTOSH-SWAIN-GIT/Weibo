@@ -18,6 +18,11 @@ import (
 // configurable env buffer size instead.
 const internalBuf = 256
 
+// InternalBufferCapacity exposes the internal stage buffer size to package
+// integration code that needs to bridge existing channel-based stages. It is
+// not a tuning knob; public edge capacity is configured on StreamExecutionEnv.
+func InternalBufferCapacity() int { return internalBuf }
+
 // Stage is one execution unit of a pipeline. Stages run concurrently,
 // connected by bounded edges.
 //

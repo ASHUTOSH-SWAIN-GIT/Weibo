@@ -89,6 +89,33 @@ func (s *Stream) KeyBy(fn operator.KeySelector, label ...string) *Stream {
 	return s
 }
 
+// JoinWithin joins two logical streams multiplexed through this stream.
+// Records are assigned to sides using Record.Source, so a source such as a
+// multi-topic Kafka source can emit orders with Source="orders" and payments
+// with Source="payments". Records with the same key join when their event
+// timestamps are within d of each other. Watermarks are aligned by taking the
+// slower side before forwarding.
+func (s *Stream) JoinWithin(leftSource, rightSource string, d time.Duration, fn operator.JoinFn, label ...string) *Stream {
+	op := operator.JoinWithin(leftSource, rightSource, d, fn)
+	if len(label) > 0 {
+		op.Label = label[0]
+	}
+	s.env.operators = append(s.env.operators, op)
+	return s
+}
+
+// IntervalJoin joins two logical streams with asymmetric event-time bounds:
+// for left record L and right record R with the same key, R must fall in
+// [L.Timestamp-before, L.Timestamp+after].
+func (s *Stream) IntervalJoin(leftSource, rightSource string, before, after time.Duration, fn operator.JoinFn, label ...string) *Stream {
+	op := operator.IntervalJoin(leftSource, rightSource, before, after, fn)
+	if len(label) > 0 {
+		op.Label = label[0]
+	}
+	s.env.operators = append(s.env.operators, op)
+	return s
+}
+
 // WithPartitions sets the number of keyed workers for the most
 // recently added KeyBy operator. Must be called directly after KeyBy.
 func (s *Stream) WithPartitions(n int) *Stream {

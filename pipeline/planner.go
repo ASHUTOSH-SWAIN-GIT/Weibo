@@ -77,6 +77,13 @@ func (h StageHooks) wireNativeSnapshot(op operator.Operator, ownerID string) {
 	})
 }
 
+// WireNativeSnapshot injects native checkpoint wiring for a manually-built
+// stage. BuildPlan calls the unexported form internally; the engine uses this
+// when constructing native two-input join stages outside the linear planner.
+func (h StageHooks) WireNativeSnapshot(op operator.Operator, ownerID string) {
+	h.wireNativeSnapshot(op, ownerID)
+}
+
 // assignBackend injects an engine-created state backend into op when
 // both the operator and the configuration support it.
 func (h StageHooks) assignBackend(op operator.Operator, ownerID string) error {
@@ -90,6 +97,13 @@ func (h StageHooks) assignBackend(op operator.Operator, ownerID string) error {
 	}
 	sc.SetStateBackend(b)
 	return nil
+}
+
+// AssignBackend injects the configured state backend for a manually-built
+// stage. BuildPlan calls the unexported form internally; the engine uses this
+// for native two-input join stages.
+func (h StageHooks) AssignBackend(op operator.Operator, ownerID string) error {
+	return h.assignBackend(op, ownerID)
 }
 
 // BuildPlan groups the flat operator list into execution stages:

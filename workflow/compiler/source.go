@@ -168,7 +168,7 @@ func compileTLS(t *workflow.TLSSpec) auth.TLSConfig {
 func compileRecords(recs []workflow.RecordSpec) []types.Record {
 	out := make([]types.Record, len(recs))
 	for i, r := range recs {
-		out[i] = types.Record{Key: []byte(r.Key), Value: []byte(r.Value)}
+		out[i] = types.Record{Key: []byte(r.Key), Value: []byte(r.Value), Source: r.Source}
 	}
 	return out
 }

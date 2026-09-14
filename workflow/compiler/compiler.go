@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/ASHUTOSH-SWAIN-GIT/weibo"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/source"
 	"github.com/ASHUTOSH-SWAIN-GIT/weibo/workflow"
 	"github.com/ASHUTOSH-SWAIN-GIT/weibo/workflow/secrets"
 )
@@ -93,32 +94,26 @@ func (c *Compiler) CompileWorkflow(spec *workflow.WorkflowSpec) (*CompiledWorkfl
 		return nil, fmt.Errorf("compiler: resolve secrets: %w", err)
 	}
 
-	// 3. Create source (no connection for consumer-group Kafka / test sources).
-	src, err := CompileSource(resolved.Source)
-	if err != nil {
-		return nil, err
-	}
-
-	// 4. Create env with runtime config (job-isolated state/checkpoints).
+	// 3. Create env with runtime config (job-isolated state/checkpoints).
 	env, err := CompileRuntime(resolved.Name, c.BaseDataDir, resolved.Env)
 	if err != nil {
 		return nil, err
 	}
 
-	// 5. Apply operators in order onto the source stream.
-	stream, err := applyOperators(env, src, resolved.Pipeline)
+	// 4. Create source(s) and apply operators.
+	stream, err := c.compileStream(env, resolved)
 	if err != nil {
 		return nil, err
 	}
 
-	// 6. Create sink and terminate the pipeline.
+	// 5. Create sink and terminate the pipeline.
 	snk, err := CompileSink(resolved.Sink)
 	if err != nil {
 		return nil, err
 	}
 	stream.ToSink(snk)
 
-	// 7. Return the executable environment + description.
+	// 6. Return the executable environment + description.
 	return &CompiledWorkflow{
 		Env:           env,
 		Name:          resolved.Name,
@@ -128,16 +123,57 @@ func (c *Compiler) CompileWorkflow(spec *workflow.WorkflowSpec) (*CompiledWorkfl
 	}, nil
 }
 
+func (c *Compiler) compileStream(env *weibo.StreamExecutionEnv, wf *workflow.Workflow) (*weibo.Stream, error) {
+	if len(wf.Sources) == 0 {
+		src, err := CompileSource(wf.Source)
+		if err != nil {
+			return nil, err
+		}
+		return applyOperators(env, src, wf.Pipeline)
+	}
+	if len(wf.Pipeline) == 0 || wf.Pipeline[0].Join == nil {
+		return nil, fmt.Errorf("compiler: multi-source workflows must start with a join operator")
+	}
+	named := make(map[string]source.Source, len(wf.Sources))
+	for _, srcSpec := range wf.Sources {
+		src, err := CompileSource(srcSpec.Source)
+		if err != nil {
+			return nil, fmt.Errorf("compiler: source %q: %w", srcSpec.Name, err)
+		}
+		named[srcSpec.Name] = src
+	}
+	j := wf.Pipeline[0].Join
+	left := named[j.LeftSource]
+	right := named[j.RightSource]
+	if left == nil || right == nil {
+		return nil, fmt.Errorf("compiler: join references unknown source(s)")
+	}
+	var stream *weibo.Stream
+	if j.Within > 0 {
+		stream = env.JoinSourcesWithin(j.LeftSource, left, j.RightSource, right, j.Within.Std(), nil, wf.Pipeline[0].ID)
+	} else {
+		stream = env.JoinSources(j.LeftSource, left, j.RightSource, right, j.Before.Std(), j.After.Std(), nil, wf.Pipeline[0].ID)
+	}
+	return applyOperatorsToStream(stream, wf.Pipeline[1:])
+}
+
 func buildGraph(wf *workflow.Workflow) PipelineGraph {
 	nodes := make([]GraphNode, len(wf.Pipeline))
 	for i, op := range wf.Pipeline {
 		nodes[i] = GraphNode{ID: op.ID, Type: op.Type}
 	}
 	return PipelineGraph{
-		Source:    wf.Source.Type,
+		Source:    graphSource(wf),
 		Operators: nodes,
 		Sink:      wf.Sink.Type,
 	}
+}
+
+func graphSource(wf *workflow.Workflow) string {
+	if len(wf.Sources) == 0 {
+		return wf.Source.Type
+	}
+	return "multi-source"
 }
 
 func deliveryGuarantee(wf *workflow.Workflow) DeliveryGuarantee {

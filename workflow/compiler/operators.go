@@ -19,6 +19,10 @@ import (
 // require a function registry and return an error.
 func applyOperators(env *weibo.StreamExecutionEnv, src source.Source, ops []workflow.Operator) (*weibo.Stream, error) {
 	stream := env.FromSource(src)
+	return applyOperatorsToStream(stream, ops)
+}
+
+func applyOperatorsToStream(stream *weibo.Stream, ops []workflow.Operator) (*weibo.Stream, error) {
 	for i, op := range ops {
 		var err error
 		stream, err = applyOperator(stream, op)
@@ -74,6 +78,12 @@ func applyOperator(stream *weibo.Stream, op workflow.Operator) (*weibo.Stream, e
 			return nil, err
 		}
 		return stream.WindowWithOptions(assigner, op.Window.IdleTimeout.Std(), op.Window.AllowedLateness.Std(), op.ID), nil
+
+	case op.Join != nil:
+		if op.Join.Within > 0 {
+			return stream.JoinWithin(op.Join.LeftSource, op.Join.RightSource, op.Join.Within.Std(), nil, op.ID), nil
+		}
+		return stream.IntervalJoin(op.Join.LeftSource, op.Join.RightSource, op.Join.Before.Std(), op.Join.After.Std(), nil, op.ID), nil
 
 	case op.Map != nil, op.FlatMap != nil, op.Process != nil:
 		return nil, fmt.Errorf("ref-based operators (map/flatMap/process) require a function registry, which the declarative compiler does not provide")

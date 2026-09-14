@@ -80,6 +80,125 @@ func TestCompileWorkflow_GraphAndDelivery(t *testing.T) {
 	}
 }
 
+func TestCompile_DeclarativeJoin(t *testing.T) {
+	wf := &workflow.Workflow{
+		Name:    "join-orders-payments",
+		Version: "1",
+		Source: workflow.SourceSpec{
+			Type: "generator",
+			Records: []workflow.RecordSpec{
+				{Key: "o1", Source: "orders", Value: `{"order_id":"o1","amount":42}`},
+				{Key: "o1", Source: "payments", Value: `{"order_id":"o1","status":"paid"}`},
+				{Key: "o2", Source: "orders", Value: `{"order_id":"o2","amount":10}`},
+			},
+		},
+		Pipeline: []workflow.Operator{
+			{
+				ID:   "orders-with-payments",
+				Type: "join",
+				Join: &workflow.JoinConfig{
+					LeftSource:  "orders",
+					RightSource: "payments",
+					Within:      workflow.Duration(1_000_000_000),
+				},
+			},
+		},
+		Sink: workflow.SinkSpec{Type: "blackhole"},
+	}
+
+	cw, err := (&compiler.Compiler{BaseDataDir: t.TempDir()}).CompileWorkflow(wf)
+	if err != nil {
+		t.Fatalf("CompileWorkflow: %v", err)
+	}
+	if len(cw.Graph.Operators) != 1 || cw.Graph.Operators[0].Type != "join" {
+		t.Fatalf("graph operators: %+v", cw.Graph.Operators)
+	}
+
+	desc := cw.Env.DescribeJSON()
+	for _, want := range []string{"IntervalJoin", "orders", "payments"} {
+		if !strings.Contains(desc, want) {
+			t.Fatalf("pipeline description missing %q: %s", want, desc)
+		}
+	}
+	if err := cw.Env.Execute(context.Background()); err != nil {
+		t.Fatalf("Execute declarative join workflow: %v", err)
+	}
+}
+
+func TestCompile_DeclarativeMultiSourceJoin(t *testing.T) {
+	wf := &workflow.Workflow{
+		Name:    "multi-source-join",
+		Version: "1",
+		Sources: []workflow.NamedSourceSpec{
+			{
+				Name: "orders",
+				Source: workflow.SourceSpec{
+					Type: "generator",
+					Records: []workflow.RecordSpec{
+						{Key: "o1", Value: `{"order_id":"o1","amount":42}`},
+					},
+				},
+			},
+			{
+				Name: "payments",
+				Source: workflow.SourceSpec{
+					Type: "generator",
+					Records: []workflow.RecordSpec{
+						{Key: "o1", Value: `{"order_id":"o1","status":"paid"}`},
+					},
+				},
+			},
+		},
+		Pipeline: []workflow.Operator{
+			{
+				ID:   "join",
+				Type: "join",
+				Join: &workflow.JoinConfig{
+					LeftSource:  "orders",
+					RightSource: "payments",
+					Within:      workflow.Duration(1_000_000_000),
+				},
+			},
+		},
+		Sink: workflow.SinkSpec{Type: "blackhole"},
+	}
+
+	cw, err := (&compiler.Compiler{BaseDataDir: t.TempDir()}).CompileWorkflow(wf)
+	if err != nil {
+		t.Fatalf("CompileWorkflow: %v", err)
+	}
+	if cw.Graph.Source != "multi-source" {
+		t.Fatalf("graph source: got %q, want multi-source", cw.Graph.Source)
+	}
+	if err := cw.Env.Execute(context.Background()); err != nil {
+		t.Fatalf("Execute declarative multi-source join: %v", err)
+	}
+	plan := cw.Env.PlanJSON()
+	for _, want := range []string{"source-orders", "source-payments", "join-0"} {
+		if !strings.Contains(plan, want) {
+			t.Fatalf("plan missing %q: %s", want, plan)
+		}
+	}
+}
+
+func TestCompile_InvalidDeclarativeJoinRejected(t *testing.T) {
+	wf := declarativeWF()
+	wf.Pipeline = []workflow.Operator{
+		{
+			ID:   "bad-join",
+			Type: "join",
+			Join: &workflow.JoinConfig{
+				LeftSource:  "orders",
+				RightSource: "orders",
+				Within:      workflow.Duration(1_000_000_000),
+			},
+		},
+	}
+	if _, err := (&compiler.Compiler{BaseDataDir: t.TempDir()}).CompileWorkflow(wf); err == nil {
+		t.Fatal("expected invalid join configuration to be rejected")
+	}
+}
+
 func TestCompile_DeliveryGuarantees(t *testing.T) {
 	base := t.TempDir()
 

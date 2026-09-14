@@ -3,8 +3,9 @@
 // A workflow document (YAML or JSON) describes a pipeline's source,
 // ordered operators, sink, and runtime settings. Supported built-in
 // operators are fully declarative over the JSON record model: filters,
-// field projection/rename/set, key-by-field, count/sum reduce, and
-// windows compile into the same SDK objects as hand-written Go pipelines.
+// field projection/rename/set, key-by-field, count/sum reduce, windows,
+// and interval joins compile into the same SDK objects as hand-written Go
+// pipelines.
 //
 // Arbitrary Go transforms (map/flatMap/process refs) remain in the
 // schema for a future registry, but the declarative compiler rejects
@@ -30,8 +31,13 @@ type Workflow struct {
 	// apply when omitted.
 	Env *EnvSpec `yaml:"env,omitempty" json:"env,omitempty"`
 
-	// Source is where records enter the pipeline. Required.
+	// Source is where records enter the pipeline for single-input workflows.
+	// Either Source or Sources is required.
 	Source SourceSpec `yaml:"source" json:"source"`
+
+	// Sources defines named inputs for native multi-source workflows. The
+	// first pipeline operator must be a join that references two of these names.
+	Sources []NamedSourceSpec `yaml:"sources,omitempty" json:"sources,omitempty"`
 
 	// Pipeline is the ordered list of operators between source and
 	// sink. May be empty (source → sink passthrough).
@@ -100,10 +106,17 @@ type SourceSpec struct {
 	Records []RecordSpec `yaml:"records,omitempty" json:"records,omitempty"`
 }
 
+// NamedSourceSpec is one named input for a native multi-source workflow.
+type NamedSourceSpec struct {
+	Name   string     `yaml:"name" json:"name"`
+	Source SourceSpec `yaml:"source" json:"source"`
+}
+
 // RecordSpec is an inline record for slice/generator sources.
 type RecordSpec struct {
-	Key   string `yaml:"key,omitempty" json:"key,omitempty"`
-	Value string `yaml:"value" json:"value"`
+	Key    string `yaml:"key,omitempty" json:"key,omitempty"`
+	Value  string `yaml:"value" json:"value"`
+	Source string `yaml:"source,omitempty" json:"source,omitempty"`
 }
 
 // KafkaSourceSpec mirrors the KafkaSource functional options.
@@ -193,7 +206,7 @@ type Operator struct {
 
 	// Type is one of the declarative operator kinds:
 	//   filter, selectFields, renameFields, setFields, keyBy, reduce,
-	//   window (fully declarative — no user code), or
+	//   window, join (fully declarative — no user code), or
 	//   map, flatMap, process (ref-based — require a function registry,
 	//   not compilable by the declarative compiler).
 	// It must match the single config block that is set.
@@ -207,6 +220,7 @@ type Operator struct {
 	KeyBy        *KeyByConfig  `yaml:"keyBy,omitempty" json:"keyBy,omitempty"`
 	Reduce       *ReduceConfig `yaml:"reduce,omitempty" json:"reduce,omitempty"`
 	Window       *WindowConfig `yaml:"window,omitempty" json:"window,omitempty"`
+	Join         *JoinConfig   `yaml:"join,omitempty" json:"join,omitempty"`
 
 	// Ref-based (need a registered Go function; not declaratively
 	// compilable yet).
@@ -303,6 +317,26 @@ type WindowConfig struct {
 	// AllowedLateness keeps windows open for late records until
 	// watermark >= window_end + allowedLateness. 0 = strict watermark close.
 	AllowedLateness Duration `yaml:"allowedLateness,omitempty" json:"allowedLateness,omitempty"`
+
+	Label string `yaml:"label,omitempty" json:"label,omitempty"`
+}
+
+// JoinConfig configures a keyed interval join over two logical source
+// identities multiplexed through one stream. Records are matched by
+// Record.Key, and side selection comes from Record.Source. Kafka records use
+// the topic as Source; inline slice/generator records can set source directly.
+type JoinConfig struct {
+	LeftSource  string `yaml:"leftSource" json:"leftSource"`
+	RightSource string `yaml:"rightSource" json:"rightSource"`
+
+	// Within creates a symmetric interval: right timestamp is within ±Within
+	// of the left timestamp. Mutually exclusive with Before/After.
+	Within Duration `yaml:"within,omitempty" json:"within,omitempty"`
+
+	// Before/After create an asymmetric interval:
+	// left timestamp - Before <= right timestamp <= left timestamp + After.
+	Before Duration `yaml:"before,omitempty" json:"before,omitempty"`
+	After  Duration `yaml:"after,omitempty" json:"after,omitempty"`
 
 	Label string `yaml:"label,omitempty" json:"label,omitempty"`
 }

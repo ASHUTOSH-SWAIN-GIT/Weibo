@@ -412,7 +412,18 @@ API compatibility; removed tracked generated binaries (`kafka-orders`,
 
 ## P7 — Product features (after P0–P3)
 
-29. Multi-stream joins with watermark alignment and checkpointed join state.
+29. Multi-stream joins with watermark alignment and checkpointed join state —
+    ✅ DONE. Shipped `operator.IntervalJoin` / `JoinWithin` plus SDK
+    `Stream.IntervalJoin` / `JoinWithin` for multiplexed sources that tag
+    `Record.Source`. The operator buffers both sides by key in an injected
+    state backend, snapshots/restores buffered join state, aligns output
+    watermarks as `min(left,right)`, and evicts only after the aligned
+    watermark proves records can no longer match. Native two-source SDK wiring
+    supports independent sources feeding one join node via `JoinSources` /
+    `JoinSourcesWithin`, stores/restores each source offset separately in
+    checkpoints, and exposes both parents into `join-0` in the runtime plan
+    graph. Declarative workflows support both multiplexed `source:` joins and
+    native named `sources:` workflows whose first operator is `type: join`.
 30. Typed `Stream[T]` API with a migration path from `[]byte` records.
 31. User-facing keyed state/process functions with timers.
 32. Declarative function registry for map/flatMap/process references.

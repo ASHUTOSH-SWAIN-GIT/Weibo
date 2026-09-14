@@ -62,7 +62,7 @@ var (
 	supportedSinkTypes     = map[string]bool{"kafka": true, "txnKafka": true, "postgres": true, "stdout": true, "blackhole": true}
 	supportedOperatorTypes = map[string]bool{
 		"filter": true, "selectFields": true, "renameFields": true, "setFields": true,
-		"keyBy": true, "reduce": true, "window": true,
+		"keyBy": true, "reduce": true, "window": true, "join": true,
 		"map": true, "flatMap": true, "process": true,
 	}
 	supportedWindowTypes = map[string]bool{"tumbling": true, "sliding": true, "session": true}
@@ -114,6 +114,9 @@ func (o Operator) configBlocks() []string {
 	if o.Window != nil {
 		b = append(b, "window")
 	}
+	if o.Join != nil {
+		b = append(b, "join")
+	}
 	if o.Map != nil {
 		b = append(b, "map")
 	}
@@ -139,10 +142,31 @@ func (v *validator) structural(wf *Workflow) {
 		v.addf("name", "invalid workflow name %q (letters, digits, and _.- only)", wf.Name)
 	}
 
-	if wf.Source.Type == "" {
+	if wf.Source.Type != "" && len(wf.Sources) > 0 {
+		v.add("source", "source and sources are mutually exclusive")
+	}
+	if wf.Source.Type == "" && len(wf.Sources) == 0 {
 		v.add("source", "source is required")
-	} else if !supportedSourceTypes[wf.Source.Type] {
+	} else if wf.Source.Type != "" && !supportedSourceTypes[wf.Source.Type] {
 		v.addf("source.type", "unsupported source type %q", wf.Source.Type)
+	}
+	seenSources := make(map[string]int)
+	for i, src := range wf.Sources {
+		path := fmt.Sprintf("sources[%d]", i)
+		if src.Name == "" {
+			v.add(path+".name", "source name is required")
+		} else if prev, dup := seenSources[src.Name]; dup {
+			v.addf(path+".name", "duplicate source name %q (also used by sources[%d])", src.Name, prev)
+		} else if !nameRe.MatchString(src.Name) {
+			v.addf(path+".name", "invalid source name %q (letters, digits, and _.- only)", src.Name)
+		} else {
+			seenSources[src.Name] = i
+		}
+		if src.Source.Type == "" {
+			v.add(path+".source", "source configuration is required")
+		} else if !supportedSourceTypes[src.Source.Type] {
+			v.addf(path+".source.type", "unsupported source type %q", src.Source.Type)
+		}
 	}
 
 	if wf.Sink.Type == "" {
@@ -189,7 +213,12 @@ func (v *validator) structural(wf *Workflow) {
 
 func (v *validator) configuration(wf *Workflow) {
 	v.envConfig(wf.Env)
-	v.sourceConfig(wf.Source)
+	if wf.Source.Type != "" {
+		v.sourceConfig(wf.Source)
+	}
+	for i, src := range wf.Sources {
+		v.sourceConfigAt(fmt.Sprintf("sources[%d].source", i), src.Source)
+	}
 	v.sinkConfig("sink", wf.Sink)
 
 	for i, op := range wf.Pipeline {
@@ -235,6 +264,8 @@ func (v *validator) configuration(wf *Workflow) {
 			}
 		case op.Window != nil:
 			v.windowConfig(path+".window", op.Window)
+		case op.Join != nil:
+			v.joinConfig(path+".join", op.Join)
 		case op.Process != nil:
 			if op.Process.Ref == "" {
 				v.add(path+".process.ref", "a function ref is required")
@@ -287,24 +318,28 @@ func (v *validator) envConfig(env *EnvSpec) {
 }
 
 func (v *validator) sourceConfig(src SourceSpec) {
+	v.sourceConfigAt("source", src)
+}
+
+func (v *validator) sourceConfigAt(path string, src SourceSpec) {
 	if src.Type != "kafka" {
 		return // slice/generator carry inline data; nothing external to check
 	}
 	if src.Kafka == nil {
-		v.add("source.kafka", "kafka source configuration is required")
+		v.add(path+".kafka", "kafka source configuration is required")
 		return
 	}
 	if len(src.Kafka.Brokers) == 0 {
-		v.add("source.kafka.brokers", "at least one broker is required")
+		v.add(path+".kafka.brokers", "at least one broker is required")
 	}
 	if src.Kafka.Topic == "" && len(src.Kafka.Topics) == 0 {
-		v.add("source.kafka.topic", "a topic (or topics) is required")
+		v.add(path+".kafka.topic", "a topic (or topics) is required")
 	}
 	if src.Kafka.Parallel && src.Kafka.GroupID != "" {
-		v.add("source.kafka", "parallel and groupID are mutually exclusive")
+		v.add(path+".kafka", "parallel and groupID are mutually exclusive")
 	}
 	if src.Kafka.Watermark != nil && src.Kafka.Watermark.MaxOutOfOrderness <= 0 {
-		v.add("source.kafka.watermark.maxOutOfOrderness", "must be greater than zero")
+		v.add(path+".kafka.watermark.maxOutOfOrderness", "must be greater than zero")
 	}
 }
 
@@ -410,6 +445,33 @@ func (v *validator) windowConfig(path string, w *WindowConfig) {
 	}
 }
 
+func (v *validator) joinConfig(path string, j *JoinConfig) {
+	if j.LeftSource == "" {
+		v.add(path+".leftSource", "a left source is required")
+	}
+	if j.RightSource == "" {
+		v.add(path+".rightSource", "a right source is required")
+	}
+	if j.LeftSource != "" && j.LeftSource == j.RightSource {
+		v.add(path+".rightSource", "left and right sources must differ")
+	}
+	if j.Within < 0 {
+		v.add(path+".within", "within must be non-negative")
+	}
+	if j.Before < 0 {
+		v.add(path+".before", "before must be non-negative")
+	}
+	if j.After < 0 {
+		v.add(path+".after", "after must be non-negative")
+	}
+	if j.Within > 0 && (j.Before > 0 || j.After > 0) {
+		v.add(path, "within is mutually exclusive with before/after")
+	}
+	if j.Within == 0 && j.Before == 0 && j.After == 0 {
+		v.add(path, "within or before/after must be configured")
+	}
+}
+
 // ---- Pipeline ordering -----------------------------------------------------
 //
 // Note: "only stateless operators can use parallelism" is guaranteed by
@@ -418,6 +480,24 @@ func (v *validator) windowConfig(path string, w *WindowConfig) {
 // operator structurally cannot carry it, so there is no runtime check.
 
 func (v *validator) pipeline(wf *Workflow) {
+	if len(wf.Sources) > 0 {
+		if len(wf.Pipeline) == 0 || wf.Pipeline[0].Join == nil {
+			v.add("pipeline[0]", "multi-source workflows must start with a join operator")
+		} else {
+			names := make(map[string]bool, len(wf.Sources))
+			for _, src := range wf.Sources {
+				names[src.Name] = true
+			}
+			j := wf.Pipeline[0].Join
+			if !names[j.LeftSource] {
+				v.addf(`pipeline[0].join.leftSource`, "unknown source %q", j.LeftSource)
+			}
+			if !names[j.RightSource] {
+				v.addf(`pipeline[0].join.rightSource`, "unknown source %q", j.RightSource)
+			}
+		}
+	}
+
 	sawKeyBy := false         // a keyBy has appeared at all
 	sawReduceInGroup := false // a reduce has appeared since the last keyBy
 

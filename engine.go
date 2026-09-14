@@ -39,6 +39,7 @@ type StreamExecutionEnv struct {
 	source    source.Source
 	sink      sink.Sink
 	operators []operator.Operator
+	join      *nativeJoin
 
 	checkpointInterval time.Duration
 	checkpointStorage  checkpoint.Storage
@@ -112,6 +113,19 @@ type StreamExecutionEnv struct {
 	// behaves as a no-op tracer.
 	tracer trace.Tracer
 }
+
+type nativeJoin struct {
+	leftName  string
+	left      source.Source
+	rightName string
+	right     source.Source
+	op        *operator.IntervalJoinOperator
+}
+
+const (
+	nativeJoinLeftOffsetKey  = "join:left"
+	nativeJoinRightOffsetKey = "join:right"
+)
 
 // NewEnv creates a new StreamExecutionEnv.
 func NewEnv() *StreamExecutionEnv {
@@ -336,6 +350,26 @@ func (env *StreamExecutionEnv) FromSource(src source.Source) *Stream {
 	return &Stream{env: env}
 }
 
+// JoinSources wires two independent sources into one interval-join operator.
+// This is the native two-input counterpart to Stream.IntervalJoin, which joins
+// logical streams already multiplexed through one source. Records emitted by
+// either source are tagged with leftName/rightName when Source is empty, then
+// matched by key and event-time interval.
+func (env *StreamExecutionEnv) JoinSources(leftName string, left source.Source, rightName string, right source.Source, before, after time.Duration, fn operator.JoinFn, label ...string) *Stream {
+	op := operator.IntervalJoin(leftName, rightName, before, after, fn)
+	if len(label) > 0 {
+		op.Label = label[0]
+	}
+	env.join = &nativeJoin{leftName: leftName, left: left, rightName: rightName, right: right, op: op}
+	return &Stream{env: env}
+}
+
+// JoinSourcesWithin wires two independent sources into one symmetric
+// event-time interval join.
+func (env *StreamExecutionEnv) JoinSourcesWithin(leftName string, left source.Source, rightName string, right source.Source, d time.Duration, fn operator.JoinFn, label ...string) *Stream {
+	return env.JoinSources(leftName, left, rightName, right, d, d, fn, label...)
+}
+
 // SourceOperationalState returns connector-specific, read-only live state for
 // the job agent. Nil means the configured source does not expose it.
 func (env *StreamExecutionEnv) SourceOperationalState() any {
@@ -362,6 +396,9 @@ func (env *StreamExecutionEnv) SourceOperationalState() any {
 //
 // Prometheus metrics are collected automatically during execution.
 func (env *StreamExecutionEnv) Execute(ctx context.Context) error {
+	if env.join != nil {
+		return env.executeNativeJoin(ctx)
+	}
 	if env.source == nil {
 		return fmt.Errorf("weibo: no source configured, use FromSource()")
 	}
@@ -633,6 +670,338 @@ func (env *StreamExecutionEnv) Execute(ctx context.Context) error {
 	return nil
 }
 
+type joinedChannelSource struct {
+	in <-chan types.Record
+}
+
+func (s joinedChannelSource) Run(ctx context.Context, out chan<- types.Record) error {
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case r, ok := <-s.in:
+			if !ok {
+				return nil
+			}
+			select {
+			case out <- r:
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+	}
+}
+
+func (env *StreamExecutionEnv) executeNativeJoin(ctx context.Context) error {
+	if env.join.left == nil || env.join.right == nil {
+		return fmt.Errorf("weibo: join requires both sources")
+	}
+	if env.sink == nil {
+		return fmt.Errorf("weibo: no sink configured, use ToSink()")
+	}
+	if err := env.join.op.Validate(); err != nil {
+		return err
+	}
+
+	metrics.PipelineRunning.Set(1)
+	defer metrics.PipelineRunning.Set(0)
+
+	// Exactly-once multi-source offset recovery needs source-specific offset
+	// coordination. Refuse it here instead of pretending one linear source can
+	// represent both inputs.
+	if sink.CapabilitiesOf(env.sink).CoordinatedCheckpoints {
+		return fmt.Errorf("weibo: native two-source joins do not yet support coordinated transactional sinks")
+	}
+
+	env.source = nil
+	env.workerOps = nil
+	env.stateClosers = nil
+	var backendFor func(ownerID string) (state.StateBackend, error)
+	if env.stateFactory != nil {
+		backendFor = func(ownerID string) (state.StateBackend, error) {
+			b, err := env.stateFactory(ownerID)
+			if err != nil {
+				return nil, err
+			}
+			if c, ok := b.(io.Closer); ok {
+				env.stateClosers = append(env.stateClosers, c)
+			}
+			return b, nil
+		}
+	}
+	defer func() {
+		for _, c := range env.stateClosers {
+			if cerr := c.Close(); cerr != nil {
+				env.log().Warn("closing state backend", "error", cerr)
+			}
+		}
+	}()
+
+	hooks := pipeline.StageHooks{
+		OnClone: func(op operator.Operator) int {
+			env.workerMu.Lock()
+			defer env.workerMu.Unlock()
+			env.workerOps = append(env.workerOps, op)
+			return len(env.workerOps) - 1
+		},
+		OnSnapshot:      env.addBarrierSnapshot,
+		StateBackendFor: backendFor,
+		NativeStateDir:  env.nativeStateDir(),
+	}
+	if err := hooks.AssignBackend(env.join.op, "join-0"); err != nil {
+		return err
+	}
+	hooks.WireNativeSnapshot(env.join.op, "join-0")
+	if bs, ok := any(env.join.op).(operator.BarrierSnapshotter); ok && hooks.OnSnapshot != nil {
+		bs.SetBarrierSnapshot(func(id string, snap []byte, err error) {
+			if err != nil {
+				env.log().Warn("barrier snapshot failed", "owner", "join-0", "error", err)
+				return
+			}
+			hooks.OnSnapshot(id, "join-0", snap)
+		})
+	}
+
+	var savedCheckpoint *checkpoint.CheckpointData
+	if env.checkpointStorage != nil {
+		data, err := env.checkpointStorage.Load()
+		if err != nil {
+			env.log().Warn("checkpoint load failed, starting fresh", "error", err)
+		} else if data != nil {
+			savedCheckpoint = data
+			env.restoreNativeJoinSourceOffsets(data)
+		}
+	}
+
+	postPlan, err := pipeline.BuildPlan(pipeline.PlanConfig{
+		Source:       joinedChannelSource{},
+		Operators:    env.operators,
+		Labels:       env.operatorLabels(),
+		Sink:         env.sink,
+		DrainTimeout: env.shutdownTimeout,
+		StageHooks:   hooks,
+	})
+	if err != nil {
+		return err
+	}
+
+	if savedCheckpoint != nil {
+		if err := env.restoreOperatorState(savedCheckpoint, "join-0", env.join.op); err != nil {
+			return fmt.Errorf("weibo: restore join state: %w", err)
+		}
+		if err := env.restoreWorkersFromCheckpoint(savedCheckpoint); err != nil {
+			return fmt.Errorf("weibo: restore operator state: %w", err)
+		}
+	} else {
+		if err := env.resetOperatorState("join-0", env.join.op); err != nil {
+			return err
+		}
+		if err := env.resetWorkingState(); err != nil {
+			return fmt.Errorf("weibo: reset working state: %w", err)
+		}
+	}
+
+	pg := env.describeNativeJoinPlan(postPlan)
+	env.planMu.Lock()
+	env.planGraph = &pg
+	env.planMu.Unlock()
+
+	hardCtx, hardCancel := context.WithCancel(context.Background())
+	defer hardCancel()
+	pipelineDone := make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+			t := time.NewTimer(env.shutdownTimeout)
+			defer t.Stop()
+			select {
+			case <-t.C:
+				hardCancel()
+			case <-pipelineDone:
+			}
+		case <-pipelineDone:
+		}
+	}()
+
+	mux := make(chan types.Record, env.edgeCapacity)
+	joined := make(chan types.Record, env.edgeCapacity)
+	postInput := (<-chan types.Record)(joined)
+	if env.checkpointInterval > 0 {
+		postInput = env.injectBarriers(ctx, hardCtx, postInput)
+	}
+	if ss, ok := postPlan[0].(*pipeline.SourceStage); ok {
+		ss.Source = joinedChannelSource{in: postInput}
+	}
+
+	var sourceWG sync.WaitGroup
+	errCh := make(chan error, 8)
+	runSource := func(name string, src source.Source) {
+		defer sourceWG.Done()
+		if err := env.runJoinSource(ctx, hardCtx, name, src, mux); err != nil && !(errors.Is(err, context.Canceled) && ctx.Err() != nil) {
+			select {
+			case errCh <- err:
+			default:
+			}
+			hardCancel()
+		}
+	}
+	sourceWG.Add(2)
+	go runSource(env.join.leftName, env.join.left)
+	go runSource(env.join.rightName, env.join.right)
+	go func() {
+		sourceWG.Wait()
+		close(mux)
+	}()
+
+	joinErr := make(chan error, 1)
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				joinErr <- fmt.Errorf("operator %s panicked: %v", env.join.op.Name(), r)
+			}
+			close(joinErr)
+		}()
+		env.join.op.Process(mux, joined)
+		joinErr <- nil
+	}()
+
+	var stageWG sync.WaitGroup
+	env.runPlanStages(ctx, hardCtx, postPlan, postInput, errCh, &stageWG)
+	stageWG.Wait()
+	close(pipelineDone)
+	if err := <-joinErr; err != nil {
+		return err
+	}
+	select {
+	case err := <-errCh:
+		if err != nil && !errors.Is(err, context.Canceled) {
+			return err
+		}
+	default:
+	}
+	return nil
+}
+
+func (env *StreamExecutionEnv) runJoinSource(ctx, hardCtx context.Context, name string, src source.Source, out chan<- types.Record) error {
+	raw := make(chan types.Record, pipeline.InternalBufferCapacity())
+	done := make(chan error, 1)
+	go func() {
+		defer close(raw)
+		err := src.Run(ctx, raw)
+		if d, ok := src.(source.Drainable); ok {
+			flushCtx, cancel := context.WithTimeout(context.Background(), env.shutdownTimeout)
+			defer cancel()
+			if drainErr := d.Drain(flushCtx); drainErr != nil && err == nil {
+				err = fmt.Errorf("source drain: %w", drainErr)
+			}
+		}
+		done <- err
+	}()
+	for {
+		r, ok, err := recvRecordLocal(hardCtx, raw)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			err := <-done
+			if err != nil && ctx.Err() != nil && errors.Is(err, context.Canceled) {
+				return nil
+			}
+			if err != nil {
+				return fmt.Errorf("source %s: %w", name, err)
+			}
+			return nil
+		}
+		if r.Source == "" {
+			r.Source = name
+		}
+		select {
+		case out <- r:
+		case <-hardCtx.Done():
+			return hardCtx.Err()
+		}
+	}
+}
+
+func recvRecordLocal(hardCtx context.Context, in <-chan types.Record) (types.Record, bool, error) {
+	select {
+	case r, ok := <-in:
+		return r, ok, nil
+	case <-hardCtx.Done():
+		return types.Record{}, false, hardCtx.Err()
+	}
+}
+
+func (env *StreamExecutionEnv) runPlanStages(ctx, hardCtx context.Context, plan []pipeline.Stage, firstIn <-chan types.Record, errCh chan<- error, wg *sync.WaitGroup) {
+	nStages := len(plan)
+	edges := make([]*pipeline.Edge, nStages-1)
+	for i := range edges {
+		edges[i] = pipeline.NewEdge(fmt.Sprintf("join-edge-%d", i), env.edgeCapacity)
+	}
+	stop := make(chan struct{})
+	pipeline.SampleEdges(stop, edges)
+	wg.Add(nStages)
+	for i, stage := range plan {
+		var in <-chan types.Record
+		if i == 0 {
+			in = firstIn
+		} else {
+			in = edges[i-1].Ch
+		}
+		if i == nStages-1 && env.checkpointInterval > 0 {
+			if ss, ok := stage.(*pipeline.SinkStage); ok {
+				ss.OnBarrier = env.saveCheckpoint
+			}
+		}
+		var out chan<- types.Record
+		if i < len(edges) {
+			out = edges[i].Ch
+		}
+		go func(st pipeline.Stage, in <-chan types.Record, out chan<- types.Record) {
+			defer wg.Done()
+			if err := st.Run(ctx, hardCtx, in, out); err != nil {
+				select {
+				case errCh <- err:
+				default:
+				}
+			}
+		}(stage, in, out)
+	}
+	go func() {
+		wg.Wait()
+		close(stop)
+	}()
+}
+
+func (env *StreamExecutionEnv) describeNativeJoinPlan(postPlan []pipeline.Stage) pipeline.PlanGraph {
+	g := pipeline.PlanGraph{
+		Stages: []pipeline.PlanNode{
+			{Name: "source-" + env.join.leftName, Type: "source", Parallelism: 1},
+			{Name: "source-" + env.join.rightName, Type: "source", Parallelism: 1},
+			{Name: "join-0", Type: "join", Parallelism: 1, Operators: []string{env.join.op.Name()}},
+		},
+		Edges: []pipeline.PlanEdge{
+			{From: "source-" + env.join.leftName, To: "join-0", Name: "join-left"},
+			{From: "source-" + env.join.rightName, To: "join-0", Name: "join-right"},
+		},
+	}
+	post := pipeline.DescribePlan(postPlan)
+	for i, st := range post.Stages {
+		if i == 0 {
+			continue // adapter source is an implementation detail; join-0 is its source.
+		}
+		g.Stages = append(g.Stages, st)
+	}
+	for i, e := range post.Edges {
+		if i == 0 {
+			e.From = "join-0"
+		}
+		e.Name = fmt.Sprintf("join-edge-%d", i)
+		g.Edges = append(g.Edges, e)
+	}
+	return g
+}
+
 // operatorLabels returns a label string for each operator in the chain.
 // Uses the user-provided label if set, otherwise the operator type name.
 func (env *StreamExecutionEnv) operatorLabels() []string {
@@ -886,6 +1255,11 @@ func (env *StreamExecutionEnv) collectSnapshots(checkpointID string) (map[string
 	}
 
 	stateRoot := env.checkpointStorage.StateDir(checkpointID)
+	if env.join != nil {
+		if _, done := snaps["join-0"]; !done {
+			snaps["join-0"] = env.snapshotOrCheckpoint(stateRoot, "join-0", env.join.op)
+		}
+	}
 	for i, op := range env.operators {
 		key := fmt.Sprintf("op-%d", i)
 		if _, done := snaps[key]; done {
@@ -1033,6 +1407,7 @@ func (env *StreamExecutionEnv) saveCheckpoint(id string) {
 			}
 		}
 	}
+	env.addNativeJoinSourceOffsets(data)
 
 	if err := env.checkpointStorage.Save(data); err != nil {
 		span.RecordError(err)
@@ -1041,6 +1416,51 @@ func (env *StreamExecutionEnv) saveCheckpoint(id string) {
 	}
 	env.log().Debug("checkpoint saved", "checkpoint", id, "owners", len(snaps))
 	env.notifyCheckpoint(id)
+}
+
+func (env *StreamExecutionEnv) addNativeJoinSourceOffsets(data *checkpoint.CheckpointData) {
+	if env.join == nil {
+		return
+	}
+	if data.Source == nil {
+		data.Source = make(map[string][]byte)
+	}
+	if cps, ok := env.join.left.(source.CheckpointSource); ok {
+		offset, err := cps.CheckpointOffset()
+		if err != nil {
+			env.log().Warn("checkpoint left join source offset failed", "checkpoint", data.ID, "error", err)
+		} else {
+			data.Source[nativeJoinLeftOffsetKey] = offset
+		}
+	}
+	if cps, ok := env.join.right.(source.CheckpointSource); ok {
+		offset, err := cps.CheckpointOffset()
+		if err != nil {
+			env.log().Warn("checkpoint right join source offset failed", "checkpoint", data.ID, "error", err)
+		} else {
+			data.Source[nativeJoinRightOffsetKey] = offset
+		}
+	}
+}
+
+func (env *StreamExecutionEnv) restoreNativeJoinSourceOffsets(data *checkpoint.CheckpointData) {
+	if env.join == nil || data == nil {
+		return
+	}
+	if cps, ok := env.join.left.(source.CheckpointSource); ok {
+		if offsetData, exists := data.Source[nativeJoinLeftOffsetKey]; exists {
+			if err := cps.RestoreOffset(offsetData); err != nil {
+				env.log().Warn("restore left join source offset failed", "checkpoint", data.ID, "error", err)
+			}
+		}
+	}
+	if cps, ok := env.join.right.(source.CheckpointSource); ok {
+		if offsetData, exists := data.Source[nativeJoinRightOffsetKey]; exists {
+			if err := cps.RestoreOffset(offsetData); err != nil {
+				env.log().Warn("restore right join source offset failed", "checkpoint", data.ID, "error", err)
+			}
+		}
+	}
 }
 
 // restoreSourceOffset restores the source offset from a checkpoint.
