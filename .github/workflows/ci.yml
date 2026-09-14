@@ -263,7 +263,7 @@ jobs:
 
       - name: govulncheck control module
         working-directory: control
-        run: govulncheck ./...
+        run: ../scripts/govulncheck-control.sh
 
       - name: govulncheck telemetry module
         working-directory: telemetry

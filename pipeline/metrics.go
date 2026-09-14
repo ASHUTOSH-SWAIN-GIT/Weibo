@@ -77,9 +77,6 @@ func (m *stageMetrics) setWorkers(n int) func() {
 // per second until stop is closed. Size pinned at capacity identifies
 // the stage downstream of that edge as the bottleneck.
 func sampleEdges(stop <-chan struct{}, edges []*Edge) {
-	for _, e := range edges {
-		metrics.EdgeQueueCapacity.WithLabelValues(e.Name).Set(float64(cap(e.Ch)))
-	}
 	t := time.NewTicker(time.Second)
 	defer t.Stop()
 	for {
@@ -99,6 +96,9 @@ func sampleEdges(stop <-chan struct{}, edges []*Edge) {
 func SampleEdges(stop <-chan struct{}, edges []*Edge) {
 	if len(edges) == 0 {
 		return
+	}
+	for _, e := range edges {
+		metrics.EdgeQueueCapacity.WithLabelValues(e.Name).Set(float64(cap(e.Ch)))
 	}
 	go sampleEdges(stop, edges)
 }
