@@ -10,6 +10,7 @@ WORKDIR /src
 
 # Cache modules first.
 COPY go.mod go.sum ./
+COPY telemetry/go.mod telemetry/go.sum ./telemetry/
 RUN go mod download
 
 COPY . .

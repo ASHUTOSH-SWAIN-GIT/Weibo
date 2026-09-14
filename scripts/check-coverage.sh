@@ -105,7 +105,11 @@ for mod in "root:$ROOT_PROF" "control:$CONTROL_PROF"; do
     fi
     log "== $name module ($prof) =="
     package_table "$prof"
-    go tool cover -func="$prof" | tail -1
+    if [ "$name" = "control" ]; then
+        (cd control && go tool cover -func="$(basename "$prof")" | tail -1)
+    else
+        go tool cover -func="$prof" | tail -1
+    fi
 done
 [ "$fail" -ne 0 ] && exit 1
 
