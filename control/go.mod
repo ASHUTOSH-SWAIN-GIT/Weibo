@@ -1,10 +1,10 @@
 module github.com/ASHUTOSH-SWAIN-GIT/weibo/control
 
-go 1.26.2
+go 1.26.6
 
 require (
 	github.com/ASHUTOSH-SWAIN-GIT/weibo v0.8.2
-	github.com/ASHUTOSH-SWAIN-GIT/weibo/telemetry v0.0.0-00010101000000-000000000000
+	github.com/ASHUTOSH-SWAIN-GIT/weibo/telemetry v0.0.0
 	github.com/distribution/reference v0.6.0
 	github.com/docker/cli v27.5.1+incompatible
 	github.com/docker/docker v27.5.1+incompatible
@@ -125,7 +125,7 @@ require (
 	golang.org/x/time v0.9.0 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20260526163538-3dc84a4a5aaa // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260715232425-e75dac1f907d // indirect
-	google.golang.org/grpc v1.82.0 // indirect
+	google.golang.org/grpc v1.82.1 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
 	gopkg.in/evanphx/json-patch.v4 v4.12.0 // indirect
 	gopkg.in/inf.v0 v0.9.1 // indirect

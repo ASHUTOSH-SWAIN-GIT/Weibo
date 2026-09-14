@@ -442,7 +442,12 @@ API compatibility; removed tracked generated binaries (`kafka-orders`,
     `StateConfigurable`, `Snapshotable`, `BarrierSnapshotter`, and
     `NativeSnapshotter`, so it runs inside keyed workers and participates in
     memory/Pebble checkpoints.
-32. Declarative function registry for map/flatMap/process references.
+32. Declarative function registry for map/flatMap/process references —
+    ✅ DONE. Added `compiler.FunctionRegistry` with `RegisterMap`,
+    `RegisterFlatMap`, and `RegisterProcess`. Ref-based workflow operators now
+    compile when the registry supplies the named function, preserving YAML
+    `label`/`parallelism`; nil or missing registries still reject refs with a
+    clear missing-ref error.
 33. New production connectors after capability/lifecycle contracts stabilize.
 
 ---

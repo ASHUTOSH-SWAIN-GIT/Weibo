@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/ASHUTOSH-SWAIN-GIT/weibo"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/operator"
 	"github.com/ASHUTOSH-SWAIN-GIT/weibo/source"
 	"github.com/ASHUTOSH-SWAIN-GIT/weibo/types"
 	"github.com/ASHUTOSH-SWAIN-GIT/weibo/window"
@@ -13,19 +14,18 @@ import (
 	"github.com/ASHUTOSH-SWAIN-GIT/weibo/workflow/record"
 )
 
-// applyOperators applies each declarative operator to the stream in
-// order, returning the stream after the last one. Only the built-in
-// declarative operators are compilable; ref-based map/flatMap/process
-// require a function registry and return an error.
-func applyOperators(env *weibo.StreamExecutionEnv, src source.Source, ops []workflow.Operator) (*weibo.Stream, error) {
+// applyOperators applies each operator to the stream in order. Built-in
+// declarative operators need no user code; ref-based map/flatMap/process
+// resolve through the optional function registry.
+func applyOperators(env *weibo.StreamExecutionEnv, src source.Source, ops []workflow.Operator, registry *FunctionRegistry) (*weibo.Stream, error) {
 	stream := env.FromSource(src)
-	return applyOperatorsToStream(stream, ops)
+	return applyOperatorsToStream(stream, ops, registry)
 }
 
-func applyOperatorsToStream(stream *weibo.Stream, ops []workflow.Operator) (*weibo.Stream, error) {
+func applyOperatorsToStream(stream *weibo.Stream, ops []workflow.Operator, registry *FunctionRegistry) (*weibo.Stream, error) {
 	for i, op := range ops {
 		var err error
-		stream, err = applyOperator(stream, op)
+		stream, err = applyOperator(stream, op, registry)
 		if err != nil {
 			return nil, fmt.Errorf("compiler: pipeline[%d] %q: %w", i, op.ID, err)
 		}
@@ -33,7 +33,7 @@ func applyOperatorsToStream(stream *weibo.Stream, ops []workflow.Operator) (*wei
 	return stream, nil
 }
 
-func applyOperator(stream *weibo.Stream, op workflow.Operator) (*weibo.Stream, error) {
+func applyOperator(stream *weibo.Stream, op workflow.Operator, registry *FunctionRegistry) (*weibo.Stream, error) {
 	switch {
 	case op.Filter != nil:
 		fn := operators.BuildFilter(operators.FilterConfig{
@@ -85,17 +85,52 @@ func applyOperator(stream *weibo.Stream, op workflow.Operator) (*weibo.Stream, e
 		}
 		return stream.IntervalJoin(op.Join.LeftSource, op.Join.RightSource, op.Join.Before.Std(), op.Join.After.Std(), nil, op.ID), nil
 
-	case op.Map != nil, op.FlatMap != nil, op.Process != nil:
-		return nil, fmt.Errorf("ref-based operators (map/flatMap/process) require a function registry, which the declarative compiler does not provide")
+	case op.Map != nil:
+		fn, err := registry.mapFn(op.Map.Ref)
+		if err != nil {
+			return nil, err
+		}
+		return stream.Map(fn, refLabel(op.ID, op.Map)).
+			WithParallelism(parallelismOrDefault(op.Map.Parallelism)), nil
+
+	case op.FlatMap != nil:
+		fn, err := registry.flatMapFn(op.FlatMap.Ref)
+		if err != nil {
+			return nil, err
+		}
+		return stream.FlatMap(fn, refLabel(op.ID, op.FlatMap)).
+			WithParallelism(parallelismOrDefault(op.FlatMap.Parallelism)), nil
+
+	case op.Process != nil:
+		fn, err := registry.processFn(op.Process.Ref)
+		if err != nil {
+			return nil, err
+		}
+		return stream.Process(fn, operator.WithProcessLabel(refLabel(op.ID, op.Process))).
+			WithParallelism(parallelismOrDefault(op.Process.Parallelism)), nil
 
 	default:
 		return nil, fmt.Errorf("operator %q has no recognized config block", op.Type)
 	}
 }
 
+func refLabel(id string, cfg *workflow.RefConfig) string {
+	if cfg.Label != "" {
+		return cfg.Label
+	}
+	return id
+}
+
 func partitionsOrDefault(n int) int {
 	if n <= 0 {
 		return 16
+	}
+	return n
+}
+
+func parallelismOrDefault(n int) int {
+	if n <= 0 {
+		return 1
 	}
 	return n
 }

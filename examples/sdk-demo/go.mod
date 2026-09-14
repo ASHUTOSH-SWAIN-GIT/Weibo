@@ -1,6 +1,6 @@
 module weibo-sdk-demo
 
-go 1.26.2
+go 1.26.6
 
 require github.com/ASHUTOSH-SWAIN-GIT/weibo v0.8.0
 
@@ -42,8 +42,8 @@ require (
 	go.yaml.in/yaml/v2 v2.4.2 // indirect
 	golang.org/x/crypto v0.51.0 // indirect
 	golang.org/x/exp v0.0.0-20230626212559-97b1e661b5df // indirect
-	golang.org/x/sync v0.20.0 // indirect
+	golang.org/x/sync v0.22.0 // indirect
 	golang.org/x/sys v0.44.0 // indirect
-	golang.org/x/text v0.37.0 // indirect
+	golang.org/x/text v0.40.0 // indirect
 	google.golang.org/protobuf v1.36.8 // indirect
 )

@@ -2,9 +2,12 @@ package compiler_test
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
+	"sync/atomic"
 	"testing"
 
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/types"
 	"github.com/ASHUTOSH-SWAIN-GIT/weibo/workflow"
 	"github.com/ASHUTOSH-SWAIN-GIT/weibo/workflow/compiler"
 )
@@ -235,6 +238,57 @@ func TestCompile_RefOperatorRejected(t *testing.T) {
 	}
 	if _, err := c.Compile(wf); err == nil {
 		t.Fatal("expected a ref-based operator to be rejected")
+	}
+}
+
+func TestCompile_RefOperatorsWithFunctionRegistry(t *testing.T) {
+	wf := declarativeWF()
+	wf.Pipeline = []workflow.Operator{
+		{ID: "enrich", Type: "map", Map: &workflow.RefConfig{Ref: "enrich", Parallelism: 2}},
+		{ID: "duplicate", Type: "flatMap", FlatMap: &workflow.RefConfig{Ref: "duplicate"}},
+		{ID: "mark", Type: "process", Process: &workflow.RefConfig{Ref: "mark"}},
+	}
+	wf.Sink = workflow.SinkSpec{Type: "blackhole"}
+
+	var mapCount, flatMapCount, processCount atomic.Int64
+	reg := &compiler.FunctionRegistry{}
+	reg.RegisterMap("enrich", func(r types.Record) types.Record {
+		mapCount.Add(1)
+		var m map[string]any
+		_ = json.Unmarshal(r.Value, &m)
+		m["mapped"] = true
+		r.Value, _ = json.Marshal(m)
+		return r
+	})
+	reg.RegisterFlatMap("duplicate", func(r types.Record) []types.Record {
+		flatMapCount.Add(1)
+		return []types.Record{r, r}
+	})
+	reg.RegisterProcess("mark", func(r types.Record) (types.Record, error) {
+		processCount.Add(1)
+		var m map[string]any
+		_ = json.Unmarshal(r.Value, &m)
+		m["processed"] = true
+		r.Value, _ = json.Marshal(m)
+		return r, nil
+	})
+
+	c := &compiler.Compiler{BaseDataDir: t.TempDir(), Functions: reg}
+	cw, err := c.CompileWorkflow(wf)
+	if err != nil {
+		t.Fatalf("CompileWorkflow: %v", err)
+	}
+	desc := cw.Env.DescribeJSON()
+	for _, want := range []string{"Map", "FlatMap", "Process"} {
+		if !strings.Contains(desc, want) {
+			t.Fatalf("pipeline description missing %q: %s", want, desc)
+		}
+	}
+	if err := cw.Env.Execute(context.Background()); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if mapCount.Load() != 3 || flatMapCount.Load() != 3 || processCount.Load() != 6 {
+		t.Fatalf("registry call counts: map=%d flatMap=%d process=%d", mapCount.Load(), flatMapCount.Load(), processCount.Load())
 	}
 }
 

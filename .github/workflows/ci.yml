@@ -24,7 +24,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.26.2'
+          go-version: '1.26.6'
           cache: true
 
       - name: Download modules
@@ -53,7 +53,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.26.2'
+          go-version: '1.26.6'
           cache: true
 
       - name: Check formatting
@@ -107,7 +107,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.26.2'
+          go-version: '1.26.6'
           cache: true
 
       - name: Run tests with race detector
@@ -133,7 +133,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.26.2'
+          go-version: '1.26.6'
           cache: true
           cache-dependency-path: control/go.sum
 
@@ -157,7 +157,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.26.2'
+          go-version: '1.26.6'
           cache: true
 
       - name: Run tests with coverage
@@ -214,7 +214,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.26.2'
+          go-version: '1.26.6'
           cache: true
 
       - name: Run every fuzz target briefly (same script as `make fuzz-smoke`)
@@ -229,7 +229,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.26.2'
+          go-version: '1.26.6'
           cache: true
           cache-dependency-path: control/go.sum
 
@@ -252,7 +252,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.26.2'
+          go-version: '1.26.6'
           cache: true
 
       - name: Install govulncheck
@@ -282,8 +282,8 @@ jobs:
           exit-code: '1'
 
       - name: Upload container scan results
-        if: always()
-        uses: github/codeql-action/upload-sarif@v3
+        if: always() && hashFiles('trivy-results.sarif') != ''
+        uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: trivy-results.sarif
 

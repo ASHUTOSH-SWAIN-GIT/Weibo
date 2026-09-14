@@ -10,18 +10,18 @@ workflow.yaml → Parse → Validate → Resolve Secrets → Compile → Execute
 ```
 
 The workflow compiler and runner are implemented for the declarative
-built-ins described below. Ref-based `map`/`flatMap`/`process` remain
-reserved for a future function registry.
+built-ins described below. Ref-based `map`/`flatMap`/`process` can also
+compile when an embedding Go program supplies a `compiler.FunctionRegistry`.
 
-## No user code
+## No user code by default
 
 The operators are **declarative built-ins** — filtering, field
 projection/rename/set, key-by-field, and count/sum aggregation are all
 expressed as configuration over the JSON record model, so a workflow
 needs no Go functions to compile and run. The Postgres row mapping is
 likewise declarative (fixed table + field→column map). Transforms that
-genuinely need arbitrary code (`map`/`flatMap`/`process` with a `ref`)
-are reserved for a future function registry and aren't compilable yet.
+genuinely need arbitrary code can use `map`/`flatMap`/`process` with a
+`ref`, provided the compiler is given a matching function registry.
 
 ## Top-level structure
 
@@ -124,9 +124,9 @@ pipeline:
     reduce: { function: sum, field: amount }
 ```
 
-`map`, `flatMap`, and `process` exist in the schema as `ref`-based
-operators (`{ ref, label, parallelism }`) for a future function
-registry, but the declarative compiler cannot build them yet.
+`map`, `flatMap`, and `process` are `ref`-based operators
+(`{ ref, label, parallelism }`). The default compiler rejects them unless
+the caller supplies a `compiler.FunctionRegistry` with matching refs.
 
 ## Compiling and running
 
@@ -134,6 +134,20 @@ registry, but the declarative compiler cannot build them yet.
 c := &compiler.Compiler{BaseDataDir: "./data"}   // Secrets defaults to environment lookup
 env, err := c.Compile(wf)                         // validate → resolve → source → env → operators → sink
 // ... then env.Execute(ctx) to run
+```
+
+For workflows that reference Go functions:
+
+```go
+registry := &compiler.FunctionRegistry{}
+registry.RegisterMap("enrich", func(r types.Record) types.Record { return r })
+registry.RegisterFlatMap("explode", func(r types.Record) []types.Record { return []types.Record{r} })
+registry.RegisterProcess("validate", func(r types.Record) (types.Record, error) { return r, nil })
+
+c := &compiler.Compiler{
+    BaseDataDir: "./data",
+    Functions:   registry,
+}
 ```
 
 `Compile` produces a complete `*weibo.StreamExecutionEnv` **without

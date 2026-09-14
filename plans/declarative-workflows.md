@@ -27,10 +27,10 @@ config block**. No `map[string]any` anywhere — every component (source,
 each operator, sink) decodes into its own typed struct, and the strict
 decoder rejects fields that don't belong to that component.
 
-Ref-based `map`/`flatMap`/`process` remain in the schema for a future
-function registry, but the current declarative compiler rejects them.
-Consequence: a workflow is portable config over a fixed set of built-in
-building blocks, not arbitrary code.
+Ref-based `map`/`flatMap`/`process` remain in the schema and now compile
+when the embedding Go program supplies a `compiler.FunctionRegistry`.
+Without a registry, the compiler still rejects refs, so pure YAML
+workflows remain portable config over a fixed set of built-in blocks.
 
 ## Phase breakdown
 
@@ -93,16 +93,15 @@ building blocks, not arbitrary code.
   *weibo.StreamExecutionEnv` (and `CompileWorkflow → CompiledWorkflow`
   with graph + delivery guarantee). Order: validate → resolve
   connections (`${VAR}`) → source → runtime env → operators → sink.
-  Operators are now **fully declarative** (no registry): filter
+  Operators are now **fully declarative by default**: filter
   (field/op/value), selectFields, renameFields, setFields, keyBy (by
-  field), reduce (count/sum), window. Ref-based map/flatMap/process are
-  rejected (no function registry). Produces a complete pipeline without
-  starting it.
+  field), reduce (count/sum), window. Ref-based map/flatMap/process compile
+  when `compiler.FunctionRegistry` resolves their refs. Produces a complete
+  pipeline without starting it.
 
 Note: the operator schema changed from ref-based (2.3) to declarative in
-2.11, because the compiler API carries no function registry — logic must
-be expressible as config. map/flatMap/process remain in the schema as
-ref-based but are not compilable declaratively.
+2.11. As of #32, map/flatMap/process refs are compilable when the caller
+provides a function registry.
 - **2.12 Secret and environment resolution** (DONE):
   `workflow/secrets` provides `SecretResolver` plus environment-backed
   `${VAR}` resolution for sensitive fields such as Postgres DSN and

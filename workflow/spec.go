@@ -7,9 +7,9 @@
 // and interval joins compile into the same SDK objects as hand-written Go
 // pipelines.
 //
-// Arbitrary Go transforms (map/flatMap/process refs) remain in the
-// schema for a future registry, but the declarative compiler rejects
-// them today.
+// Arbitrary Go transforms (map/flatMap/process refs) are compiled when the
+// caller supplies a compiler.FunctionRegistry; otherwise they are rejected with
+// a clear missing-ref error.
 package workflow
 
 // WorkflowSpec is an alias for Workflow — the name the compiler API

@@ -21,6 +21,11 @@ type Compiler struct {
 	// BaseDataDir is the root for per-workflow state/checkpoint
 	// directories. Defaults to DefaultDataRoot ("./data").
 	BaseDataDir string
+
+	// Functions resolves ref-based map/flatMap/process operators. Nil means
+	// ref-based operators are rejected and only built-in declarative operators
+	// can compile.
+	Functions *FunctionRegistry
 }
 
 // DeliveryGuarantee is the end-to-end guarantee a compiled workflow provides.
@@ -129,7 +134,7 @@ func (c *Compiler) compileStream(env *weibo.StreamExecutionEnv, wf *workflow.Wor
 		if err != nil {
 			return nil, err
 		}
-		return applyOperators(env, src, wf.Pipeline)
+		return applyOperators(env, src, wf.Pipeline, c.Functions)
 	}
 	if len(wf.Pipeline) == 0 || wf.Pipeline[0].Join == nil {
 		return nil, fmt.Errorf("compiler: multi-source workflows must start with a join operator")
@@ -154,7 +159,7 @@ func (c *Compiler) compileStream(env *weibo.StreamExecutionEnv, wf *workflow.Wor
 	} else {
 		stream = env.JoinSources(j.LeftSource, left, j.RightSource, right, j.Before.Std(), j.After.Std(), nil, wf.Pipeline[0].ID)
 	}
-	return applyOperatorsToStream(stream, wf.Pipeline[1:])
+	return applyOperatorsToStream(stream, wf.Pipeline[1:], c.Functions)
 }
 
 func buildGraph(wf *workflow.Workflow) PipelineGraph {
