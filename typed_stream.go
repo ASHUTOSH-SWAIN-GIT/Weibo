@@ -118,6 +118,54 @@ func (s *TypedStream[T]) KeyBy(fn func(T) []byte, label ...string) *TypedStream[
 	return s
 }
 
+// ProcessKeyed applies a typed stateful function per key. Use after KeyBy to
+// get partitioned keyed execution. The context exposes raw keyed state and
+// event-time timers; typed outputs preserve input metadata.
+func (s *TypedStream[T]) ProcessKeyed(fn func(*operator.KeyedContext, T) ([]T, error), onTimer func(*operator.KeyedContext, time.Time) ([]T, error), label ...string) *TypedStream[T] {
+	rawFn := func(ctx *operator.KeyedContext, r types.Record) ([]types.Record, error) {
+		v, err := typedValue[T](r)
+		if err != nil {
+			return nil, err
+		}
+		items, err := fn(ctx, v)
+		if err != nil {
+			return nil, err
+		}
+		out := make([]types.Record, 0, len(items))
+		for _, item := range items {
+			next, err := recordWithTypedValue(r, item)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, next)
+		}
+		return out, nil
+	}
+	var rawTimer operator.TimerFn
+	if onTimer != nil {
+		rawTimer = func(ctx *operator.KeyedContext, ts time.Time) ([]types.Record, error) {
+			items, err := onTimer(ctx, ts)
+			if err != nil {
+				return nil, err
+			}
+			out := make([]types.Record, 0, len(items))
+			for _, item := range items {
+				next, err := recordWithTypedValue(types.Record{
+					Key:       ctx.Key(),
+					Timestamp: ts,
+				}, item)
+				if err != nil {
+					return nil, err
+				}
+				out = append(out, next)
+			}
+			return out, nil
+		}
+	}
+	s.stream.ProcessKeyed(rawFn, rawTimer, label...)
+	return s
+}
+
 // ToSink connects the typed stream to an existing record sink.
 func (s *TypedStream[T]) ToSink(sk sink.Sink) *StreamExecutionEnv {
 	return s.stream.ToSink(sk)

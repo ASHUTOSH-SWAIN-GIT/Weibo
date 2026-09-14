@@ -432,7 +432,16 @@ API compatibility; removed tracked generated binaries (`kafka-orders`,
     standalone `MapTyped[T,U]` / `FlatMapTyped[T,U]` preserve record metadata
     while decoding from `Record.Parsed` or JSON `Record.Value` and re-encoding
     typed outputs for existing untyped operators/sinks.
-31. User-facing keyed state/process functions with timers.
+31. User-facing keyed state/process functions with timers —
+    ✅ DONE. Added `operator.KeyedProcess` plus raw `Stream.ProcessKeyed`
+    and typed `TypedStream.ProcessKeyed` APIs. User functions get a
+    `KeyedContext` with current key/timestamp/watermark, per-key
+    `ValueState` helpers (`Get`/`Set`/`Clear`, `GetJSON`/`SetJSON`), and
+    event-time timer registration. Timers are stored in keyed state and fire
+    when watermarks pass them; the operator is `Cloneable`,
+    `StateConfigurable`, `Snapshotable`, `BarrierSnapshotter`, and
+    `NativeSnapshotter`, so it runs inside keyed workers and participates in
+    memory/Pebble checkpoints.
 32. Declarative function registry for map/flatMap/process references.
 33. New production connectors after capability/lifecycle contracts stabilize.
 

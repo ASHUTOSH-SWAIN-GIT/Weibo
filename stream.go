@@ -172,6 +172,18 @@ func (s *Stream) Reduce(fn operator.ReduceFn, label ...string) *Stream {
 	return s
 }
 
+// ProcessKeyed applies a user-defined stateful function per key. It is
+// intended to be used after KeyBy so the keyed stage isolates state by route.
+// The function can access keyed ValueState and register event-time timers.
+func (s *Stream) ProcessKeyed(fn operator.KeyedProcessFn, onTimer operator.TimerFn, label ...string) *Stream {
+	op := operator.KeyedProcess(fn, onTimer)
+	if len(label) > 0 {
+		op.Label = label[0]
+	}
+	s.env.operators = append(s.env.operators, op)
+	return s
+}
+
 // Window groups records into time-based windows. Must be used after KeyBy.
 // Records are buffered into windows, and when a watermark passes a window's
 // end time, the window fires — all its records are emitted as a single result.
