@@ -2,6 +2,8 @@ package compiler_test
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -138,6 +140,37 @@ func TestCompileSource_Generator(t *testing.T) {
 	}
 }
 
+func TestCompileSource_File(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "input.ndjson")
+	if err := os.WriteFile(path, []byte("{\"a\":1}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	src, err := compiler.CompileSource(workflow.SourceSpec{
+		Type: "file",
+		File: &workflow.FileSourceSpec{Path: path, Source: "fixture", Deserialize: "json"},
+	})
+	if err != nil {
+		t.Fatalf("CompileSource: %v", err)
+	}
+	if _, ok := src.(*source.FileSource); !ok {
+		t.Fatalf("expected *source.FileSource, got %T", src)
+	}
+	info := src.(source.Describable).Describe()
+	if info.Type != "File" || info.Props["source"] != "fixture" {
+		t.Fatalf("file describe: %+v", info)
+	}
+
+	out := make(chan types.Record, 1)
+	if err := src.Run(context.Background(), out); err != nil {
+		t.Fatal(err)
+	}
+	close(out)
+	r := <-out
+	if r.Parsed == nil || r.Source != "fixture" {
+		t.Fatalf("compiled file source did not deserialize/source-tag record: %+v", r)
+	}
+}
+
 func TestCompileSource_Errors(t *testing.T) {
 	cases := []struct {
 		name string
@@ -145,6 +178,8 @@ func TestCompileSource_Errors(t *testing.T) {
 	}{
 		{"no type", workflow.SourceSpec{}},
 		{"unsupported type", workflow.SourceSpec{Type: "rabbitmq"}},
+		{"file nil config", workflow.SourceSpec{Type: "file"}},
+		{"file no path", workflow.SourceSpec{Type: "file", File: &workflow.FileSourceSpec{}}},
 		{"kafka nil config", workflow.SourceSpec{Type: "kafka"}},
 		{"kafka no brokers", workflow.SourceSpec{Type: "kafka", Kafka: &workflow.KafkaSourceSpec{Topic: "t", GroupID: "g"}}},
 		{"kafka no topic", workflow.SourceSpec{Type: "kafka", Kafka: &workflow.KafkaSourceSpec{Brokers: []string{"b"}, GroupID: "g"}}},

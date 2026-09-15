@@ -328,18 +328,16 @@ stream.Process(func(r types.Record) (types.Record, error) {
 )
 ```
 
-Keyed state (per-key accumulators, window contents) is managed by the
-engine inside `Reduce` and `Window` — there is no user-facing state
-API yet; a Flink-style stateful ProcessFunction with direct state
-access is on the roadmap.
+Keyed state (per-key accumulators, window contents, and `ProcessKeyed`
+state/timers) is managed by the engine and participates in checkpoints.
 
 ## Declarative Workflows
 
 Common pipelines can also be defined in YAML/JSON and run without Go
 code. The declarative path supports built-in JSON-field filters,
 projection/rename/set, key-by-field keyed state, count/sum reduce,
-windows, sources, sinks, state, checkpointing, and environment-backed
-secrets.
+windows, Kafka/slice/generator/file sources, Kafka/Postgres/file/stdout/
+blackhole sinks, state, checkpointing, and environment-backed secrets.
 
 ```sh
 go run ./cmd/weibo-workflow --file examples/workflows/order-totals.yaml
@@ -431,7 +429,7 @@ All originally planned phases are implemented:
 - ✅ **Core pipeline** — Record, fluent Stream API, Map/Filter/FlatMap/Process, sources and sinks.
 - ✅ **Stateful processing** — per-key state, Reduce, `Process` with failure policies + DLQ.
 - ✅ **Windowing & watermarks** — tumbling/sliding/session windows, bounded out-of-orderness watermarks, allowed lateness, late-record side output hooks, final source-completion firing.
-- ✅ **Kafka & Postgres connectors** — multi-partition Kafka source (consumer groups, SASL/TLS, deserializers, per-partition offset checkpointing), Kafka + Postgres sinks with batching, retries, serializers, and Postgres upserts.
+- ✅ **Production connectors** — multi-partition Kafka source (consumer groups, SASL/TLS, deserializers, per-partition offset checkpointing), checkpoint-aware file source, Kafka/Postgres/HTTP/S3/file sinks with batching/retries/serializers where appropriate, and transactional Kafka output.
 - ✅ **Checkpointing & recovery** — barrier-based snapshots, file storage, restore of operator state + per-partition source offsets on restart.
 - ✅ **Keyed parallelism** — `WithPartitions(n)`: router → N stateful workers with cloned operators and isolated state; barriers/watermarks broadcast and re-aligned so checkpoints stay consistent.
 - ✅ **Stage-based execution & backpressure** — operators grouped into stages, direct function-call chaining inside a stage, bounded edges between stages, `WithParallelism(n)` for stateless workers, two-phase graceful shutdown.

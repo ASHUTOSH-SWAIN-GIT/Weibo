@@ -1,7 +1,10 @@
 package compiler_test
 
 import (
+	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/ASHUTOSH-SWAIN-GIT/weibo/sink"
@@ -92,6 +95,33 @@ func TestCompileSink_StdoutBlackhole(t *testing.T) {
 	}
 }
 
+func TestCompileSink_File(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "out.ndjson")
+	s, err := compiler.CompileSink(workflow.SinkSpec{
+		Type: "file",
+		File: &workflow.FileSinkSpec{Path: path, Serialize: "json"},
+	})
+	if err != nil {
+		t.Fatalf("CompileSink: %v", err)
+	}
+	if _, ok := s.(*sink.FileSink); !ok {
+		t.Fatalf("expected *sink.FileSink, got %T", s)
+	}
+	in := make(chan types.Record, 1)
+	in <- types.Record{Parsed: map[string]any{"ok": true}}
+	close(in)
+	if err := s.Write(context.Background(), in); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(b) != "{\"ok\":true}\n" {
+		t.Fatalf("file sink output: got %q", b)
+	}
+}
+
 func TestCompileSink_PostgresIsSideEffectFree(t *testing.T) {
 	s, err := compiler.CompileSink(workflow.SinkSpec{
 		Type: "postgres",
@@ -116,6 +146,9 @@ func TestCompileSink_Errors(t *testing.T) {
 	}{
 		{"no type", workflow.SinkSpec{}},
 		{"unsupported", workflow.SinkSpec{Type: "s3"}},
+		{"file nil config", workflow.SinkSpec{Type: "file"}},
+		{"file no path", workflow.SinkSpec{Type: "file", File: &workflow.FileSinkSpec{}}},
+		{"file bad format", workflow.SinkSpec{Type: "file", File: &workflow.FileSinkSpec{Path: "x", Serialize: "avro"}}},
 		{"kafka no brokers", workflow.SinkSpec{Type: "kafka", Kafka: &workflow.KafkaSinkSpec{Topic: "t"}}},
 		{"kafka no topic", workflow.SinkSpec{Type: "kafka", Kafka: &workflow.KafkaSinkSpec{Brokers: []string{"b"}}}},
 		{"kafka bad acks", workflow.SinkSpec{Type: "kafka", Kafka: &workflow.KafkaSinkSpec{Brokers: []string{"b"}, Topic: "t", Acks: "quorum"}}},

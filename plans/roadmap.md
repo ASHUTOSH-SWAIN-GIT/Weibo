@@ -448,7 +448,14 @@ API compatibility; removed tracked generated binaries (`kafka-orders`,
     compile when the registry supplies the named function, preserving YAML
     `label`/`parallelism`; nil or missing registries still reject refs with a
     clear missing-ref error.
-33. New production connectors after capability/lifecycle contracts stabilize.
+33. New production connectors after capability/lifecycle contracts stabilize —
+    ✅ DONE. Added a checkpoint-aware `source.FileSource` that reads one
+    record per line, records source identity/line offsets, supports
+    `CheckpointOffset`/`RestoreOffset`, and can deserialize JSON lines into
+    `Record.Parsed`. Added `sink.FileSink` for truncate/append local exports
+    with raw or JSON serialization. Declarative workflows now support
+    `source: {type: file, file: ...}` and `sink: {type: file, file: ...}`,
+    with compiler validation and runtime/compiler tests.
 
 ---
 

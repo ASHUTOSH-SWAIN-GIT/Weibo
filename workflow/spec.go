@@ -96,10 +96,11 @@ type StateSpec struct {
 // SourceSpec is a tagged union over source types. Exactly one of the
 // per-type sub-specs is set, matching Type.
 type SourceSpec struct {
-	// Type is "kafka", "slice", or "generator".
+	// Type is "kafka", "slice", "generator", or "file".
 	Type string `yaml:"type" json:"type"`
 
 	Kafka *KafkaSourceSpec `yaml:"kafka,omitempty" json:"kafka,omitempty"`
+	File  *FileSourceSpec  `yaml:"file,omitempty" json:"file,omitempty"`
 
 	// Slice / Generator carry test data inline (mainly for examples
 	// and tests). Records are raw string key/value pairs.
@@ -117,6 +118,14 @@ type RecordSpec struct {
 	Key    string `yaml:"key,omitempty" json:"key,omitempty"`
 	Value  string `yaml:"value" json:"value"`
 	Source string `yaml:"source,omitempty" json:"source,omitempty"`
+}
+
+// FileSourceSpec reads one record per line from a local file.
+type FileSourceSpec struct {
+	Path         string `yaml:"path" json:"path"`
+	Source       string `yaml:"source,omitempty" json:"source,omitempty"`
+	Deserialize  string `yaml:"deserialize,omitempty" json:"deserialize,omitempty"` // json | empty
+	MaxLineBytes int    `yaml:"maxLineBytes,omitempty" json:"maxLineBytes,omitempty"`
 }
 
 // KafkaSourceSpec mirrors the KafkaSource functional options.
@@ -346,12 +355,20 @@ type JoinConfig struct {
 // SinkSpec is a tagged union over sink types. Exactly one per-type
 // sub-spec is set, matching Type.
 type SinkSpec struct {
-	// Type is "kafka", "txnKafka", "postgres", "stdout", or "blackhole".
+	// Type is "kafka", "txnKafka", "postgres", "stdout", "blackhole", or "file".
 	Type string `yaml:"type" json:"type"`
 
 	Kafka    *KafkaSinkSpec    `yaml:"kafka,omitempty" json:"kafka,omitempty"`
 	TxnKafka *TxnKafkaSinkSpec `yaml:"txnKafka,omitempty" json:"txnKafka,omitempty"`
 	Postgres *PostgresSinkSpec `yaml:"postgres,omitempty" json:"postgres,omitempty"`
+	File     *FileSinkSpec     `yaml:"file,omitempty" json:"file,omitempty"`
+}
+
+// FileSinkSpec writes one serialized record per line to a local file.
+type FileSinkSpec struct {
+	Path      string `yaml:"path" json:"path"`
+	Append    bool   `yaml:"append,omitempty" json:"append,omitempty"`
+	Serialize string `yaml:"serialize,omitempty" json:"serialize,omitempty"` // json | empty
 }
 
 // KafkaSinkSpec mirrors the KafkaSink functional options (at-least-once).

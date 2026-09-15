@@ -38,9 +38,32 @@ func CompileSink(spec workflow.SinkSpec) (sink.Sink, error) {
 		return sink.NewStdoutSink(), nil
 	case "blackhole":
 		return sink.NewBlackholeSink(), nil
+	case "file":
+		return compileFileSink(spec.File)
 	default:
 		return nil, fmt.Errorf("compiler: unsupported sink type %q", spec.Type)
 	}
+}
+
+func compileFileSink(f *workflow.FileSinkSpec) (sink.Sink, error) {
+	if f == nil {
+		return nil, fmt.Errorf("compiler: file sink configuration is required")
+	}
+	if f.Path == "" {
+		return nil, fmt.Errorf("compiler: file sink requires a path")
+	}
+	opts := []sink.FileSinkOption{sink.FileSinkPath(f.Path)}
+	if f.Append {
+		opts = append(opts, sink.FileSinkAppend())
+	}
+	ser, err := compileSerializer(f.Serialize)
+	if err != nil {
+		return nil, err
+	}
+	if ser != nil {
+		opts = append(opts, sink.FileSinkSerialize(ser))
+	}
+	return sink.NewFileSinkE(opts...)
 }
 
 func compileKafkaSink(k *workflow.KafkaSinkSpec) (sink.Sink, error) {

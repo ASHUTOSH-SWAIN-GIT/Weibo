@@ -32,9 +32,35 @@ func CompileSource(spec workflow.SourceSpec) (source.Source, error) {
 		return source.NewSliceSource(compileRecords(spec.Records)), nil
 	case "generator":
 		return source.NewGeneratorSource(compileRecords(spec.Records)), nil
+	case "file":
+		return compileFileSource(spec.File)
 	default:
 		return nil, fmt.Errorf("compiler: unsupported source type %q", spec.Type)
 	}
+}
+
+func compileFileSource(f *workflow.FileSourceSpec) (source.Source, error) {
+	if f == nil {
+		return nil, fmt.Errorf("compiler: file source configuration is required")
+	}
+	if f.Path == "" {
+		return nil, fmt.Errorf("compiler: file source requires a path")
+	}
+	opts := []source.FileSourceOption{source.FilePath(f.Path)}
+	if f.Source != "" {
+		opts = append(opts, source.FileSourceName(f.Source))
+	}
+	if f.MaxLineBytes > 0 {
+		opts = append(opts, source.FileMaxLineBytes(f.MaxLineBytes))
+	}
+	des, err := compileDeserializer(f.Deserialize)
+	if err != nil {
+		return nil, err
+	}
+	if des != nil {
+		opts = append(opts, source.FileDeserialize(des))
+	}
+	return source.NewFileSourceE(opts...)
 }
 
 func compileKafkaSource(k *workflow.KafkaSourceSpec) (source.Source, error) {
