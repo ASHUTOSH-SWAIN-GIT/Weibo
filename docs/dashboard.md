@@ -51,7 +51,7 @@ The dashboard is a plain-JS SPA with a hash router (`#/overview`, `#/job-manager
 - **Normalization layer** — `normalizeSources / normalizeSinks / normalizeStages / normalizeOperators / normalizeCheckpoints / deriveDelivery` in `index.html`; rendering consumes models with `source` + `missingReason`, live fetches run in parallel via `Promise.all`.
 - **Tabs** (legacy detail):
   - **Overview** — pipeline DAG, Live State card (phase, uptime, records in/out) via `/jobs/{id}/state`, Lifecycle transition log.
-  - **Checkpoints** — count, last checkpoint time, current ID, checkpoint history table (from `/state`).
+  - **Checkpoints** — checkpoint health, disabled/stale/unavailable state, state backend, savepoint/restore actions, checkpoint history, and checkpointed source positions (from `/describe` + `/state`).
   - **Logs** — container logs (`/jobs/{id}/logs?tail=200`), auto-scrolled.
   - **Spec** — raw job spec YAML.
 

@@ -69,6 +69,7 @@
   .ph-finished .d{background:var(--blue)}.ph-starting .d,.ph-cancelling .d{background:var(--amber)}
   .ph-cancelled .d,.ph-submitted .d,.ph-stopped .d{background:var(--gray)}
   .ph-healthy .d{background:var(--green)}.ph-degraded .d{background:var(--amber)}.ph-unreachable .d{background:var(--red)}
+  .ph-completed .d{background:var(--blue)}.ph-disabled .d,.ph-unknown .d{background:var(--gray)}
 
   .pill{display:inline-block;padding:1px 7px;border-radius:4px;font-size:11px;background:#f3f4f6;color:var(--muted);border:1px solid var(--line);white-space:nowrap}
   .pill-sdk{background:var(--accent-bg);color:var(--accent);border-color:var(--accent-bg)}
@@ -378,6 +379,52 @@ function normalizeCheckpoints(state,job,describe){
     storage:describe&&describe.checkpoint?describe.checkpoint.storage:null,
     latest:state?{id:state.currentCheckpointId||null,at:state.lastCheckpointAt||null,ageMs}:null,
     history:cps,source:'state+describe',missingReason:!state?'state unavailable (no live agent?)':null};
+}
+function checkpointAgeLimitMs(cp){
+  const raw=cp&&cp.interval;
+  if(raw==null)return 5*60*1000;
+  if(typeof raw==='number')return Math.max(60*1000,raw*3);
+  const s=String(raw).trim().toLowerCase();
+  const m=s.match(/^(\d+(?:\.\d+)?)(ms|s|m|h)?$/);
+  if(!m)return 5*60*1000;
+  const n=Number(m[1]),u=m[2]||'ms';
+  const ms=u==='h'?n*3600000:u==='m'?n*60000:u==='s'?n*1000:n;
+  return Math.max(60*1000,ms*3);
+}
+function checkpointHealth(cp,phase){
+  const running=String(phase||'').toLowerCase()==='running';
+  if(!cp||cp.missingReason)return{state:'unreachable',label:'State unavailable',detail:cp&&cp.missingReason?cp.missingReason:'state endpoint unavailable',tone:'r'};
+  if(!cp.enabled)return{state:'disabled',label:'Checkpointing disabled',detail:'This job is configured without controller-reported checkpointing.',tone:''};
+  if(!cp.latest||!cp.latest.at)return{state:running?'degraded':'unknown',label:running?'Waiting for first checkpoint':'No checkpoint reported',detail:'Checkpointing is enabled, but no completed checkpoint has been reported yet.',tone:running?'a':''};
+  const limit=checkpointAgeLimitMs(cp);
+  if(running&&cp.latest.ageMs!=null&&cp.latest.ageMs>limit)return{state:'degraded',label:'Checkpoint stale',detail:'Last completed checkpoint is '+fmtAgo(cp.latest.ageMs)+'. Expected within roughly '+fmtDur(limit)+'.',tone:'a'};
+  return{state:'healthy',label:running?'Healthy checkpointing':'Checkpoint recorded',detail:'Latest completed checkpoint '+fmtAgo(cp.latest.ageMs)+'.',tone:'g'};
+}
+function checkpointDuration(c){
+  if(!c)return null;
+  return c.durationMs!=null?c.durationMs:c.durationMillis!=null?c.durationMillis:c.duration!=null?c.duration:null;
+}
+function checkpointStatus(c){
+  if(!c)return'completed';
+  return c.status||c.phase||c.state||'completed';
+}
+function checkpointCompletedAt(c){
+  if(!c)return null;
+  return c.completedAt||c.finishedAt||c.at||c.createdAt||null;
+}
+function checkpointSize(c){
+  if(!c)return null;
+  return c.sizeBytes!=null?c.sizeBytes:c.bytes!=null?c.bytes:null;
+}
+function checkpointPositions(state){
+  const latest=state&&Array.isArray(state.checkpoints)&&state.checkpoints.length?state.checkpoints[state.checkpoints.length-1]:null;
+  return (latest&&(latest.source||latest.sources||latest.positions))||(state&&state.source)||null;
+}
+function normalizeStateBackend(cp,describe,state){
+  const cfg=describe&&describe.checkpoint?describe.checkpoint:{};
+  const backend=cfg.backend||cfg.storage||cfg.type||(cp&&cp.storage)||null;
+  const path=cfg.path||cfg.uri||cfg.location||cfg.dir||null;
+  return{backend,path,source:describe?'describe':'state',available:!!(describe||state)};
 }
 /* Delivery guarantee derived from actual capabilities: coordinated sink
    (TxnKafka) + checkpointing => exactly-once; checkpointing + plain sink
@@ -786,17 +833,54 @@ function viewDetail(id){
     const sinksPane=`<div class="tabpane" data-pane="sinks"><div class="stack">
       ${card('Delivery guarantee',kv([['Guarantee','<b>'+esc(delivery.guarantee)+'</b>'],['Basis',esc(delivery.detail)]]))}
       ${sinkCards()}</div></div>`;
-    // checkpoint history table (from /state checkpoints)
-    const cps=(st&&st.checkpoints)||[];
-    const cpRows=cps.length?cps.map(c=>'<tr><td class="name">'+code(c.id)+'</td><td class="dim">'+esc(fmtFull(c.completedAt))+'</td><td><span class="ph ph-finished"><span class="d"></span>completed</span></td></tr>').join(''):'<tr><td colspan="3" class="dim">No checkpoints yet.</td></tr>';
+    // checkpoint/state tab: /describe checkpoint config + /state checkpoint
+    // history. Disabled checkpointing is a configured state, not a failure.
+    const cpHealth=checkpointHealth(cpModel,phase);
+    const stateBackend=normalizeStateBackend(cpModel,pi,st);
+    const cps=cpModel.history||[];
+    const cpRows=cps.length?cps.slice().reverse().map(c=>{
+      const at=checkpointCompletedAt(c),dur=checkpointDuration(c),status=checkpointStatus(c),sz=checkpointSize(c);
+      let age='—';if(at){const t=new Date(at).getTime();if(!isNaN(t))age=fmtAgo(Date.now()-t)}
+      return'<tr><td class="name">'+code(c.id)+'</td><td class="dim">'+esc(fmtFull(at))+'</td><td class="dim">'+esc(age)+'</td><td class="num">'+(dur!=null?esc(fmtDur(dur)):'—')+'</td><td class="num">'+(sz!=null?esc(fmtMem(sz)):'—')+'</td><td>'+phaseEl(status)+'</td></tr>';
+    }).join(''):'<tr><td colspan="6" class="dim">'+(cpModel.enabled?'No checkpoints have completed yet.':'Checkpointing is disabled for this job.')+'</td></tr>';
+    const pos=checkpointPositions(st);
+    const posBody=pos?'<pre class="spec">'+esc(JSON.stringify(pos,null,2))+'</pre>':'<div class="empty">No source positions are reported for the latest checkpoint.</div>';
+    const restartHint=cpModel.latest&&cpModel.latest.id?'Restart can use the latest checkpoint when the savepoint label is left blank.':'Create a savepoint first, or restart without a label only after a checkpoint exists.';
     const checkpointsPane=`
       <div class="tabpane" data-pane="checkpoints">
         <div class="stats" style="margin-bottom:14px">
+          ${tile('Health',esc(cpHealth.label),cpHealth.tone)}
           ${tile('Checkpoints',fmtN(cps.length),'b')}
-          ${tile('Last Checkpoint',st&&st.lastCheckpointAt?esc(fmtTime(st.lastCheckpointAt)):'—')}
-          ${tile('Current ID',st&&st.currentCheckpointId?'<span class="id">'+esc(st.currentCheckpointId)+'</span>':'—')}
+          ${tile('Last Checkpoint',cpModel.latest&&cpModel.latest.at?esc(fmtTime(cpModel.latest.at)):'—',cpHealth.tone)}
+          ${tile('Current ID',cpModel.latest&&cpModel.latest.id?'<span class="id">'+esc(cpModel.latest.id)+'</span>':'—')}
         </div>
-        ${card('Checkpoint History','<table><thead><tr><th>ID</th><th>Completed At</th><th>Status</th></tr></thead><tbody>'+cpRows+'</tbody></table>')}
+        <div class="grid2">
+          ${card('Checkpoint health',kv([
+            ['Status',`<span class="ph ph-${esc(cpHealth.state)}"><span class="d"></span>${esc(cpHealth.label)}</span>`],
+            ['Detail',esc(cpHealth.detail)],
+            ['Interval',cpModel.interval?esc(String(cpModel.interval)):'<span class="faint">not reported</span>'],
+            ['Source',esc(cpModel.source||'state')]
+          ]))}
+          ${card('State backend',kv([
+            ['Backend',stateBackend.backend?esc(String(stateBackend.backend)):(cpModel.enabled?'<span class="faint">not reported</span>':'<span class="faint">not configured</span>')],
+            ['Location',stateBackend.path?esc(String(stateBackend.path)):'<span class="faint">not reported</span>'],
+            ['Checkpointing',cpModel.enabled?'<span class="pill">enabled</span>':'<span class="pill">disabled</span>'],
+            ['Source',esc(stateBackend.source)]
+          ]))}
+        </div>
+        <div style="height:14px"></div>
+        ${card('Savepoints and restore',
+          `<div style="padding:16px">
+            <div class="dim" style="margin-bottom:12px">${esc(restartHint)}</div>
+            <div class="btns">
+              <button class="btn pri" ${term?'disabled':''} onclick="doSavepoint('${esc(id)}')">Create savepoint</button>
+              <button class="btn" onclick="doRestart('${esc(id)}')">Restart from savepoint / latest checkpoint</button>
+            </div>
+          </div>`)}
+        <div style="height:14px"></div>
+        ${card('Checkpoint history','<table><thead><tr><th>ID</th><th>Completed At</th><th>Age</th><th class="num">Duration</th><th class="num">Size</th><th>Status</th></tr></thead><tbody>'+cpRows+'</tbody></table>')}
+        <div style="height:14px"></div>
+        ${card('Checkpointed source positions',posBody)}
       </div>`;
     // attempts: select a previous run to inspect its audit + logs
     const runRows=runList.length?runList.map(rm=>`<tr class="row" onclick="selRun='${esc(rm.id)}'"><td class="num">${esc(rm.attempt!=null?rm.attempt:'—')}</td><td>${phaseEl(rm.phase)}</td><td class="dim">${esc(fmtTime(rm.startedAt))}</td><td class="dim">${rm.stoppedAt?esc(fmtTime(rm.stoppedAt)):'—'}</td><td class="dim">${esc((rm.error||'').slice(0,80))}</td></tr>`).join(''):'<tr><td colspan="5" class="dim">No runs recorded.</td></tr>';

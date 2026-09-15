@@ -360,7 +360,14 @@ Exit criteria:
 - No dashboard section uses guessed data when an API field is missing.
 - Missing live-agent endpoints render clearly instead of failing the whole page.
 
-### Phase D2 — Normalize dashboard models in JS
+### Phase D2 — Normalize dashboard models in JS — ✅ DONE
+
+Status:
+
+- Implemented in `control/ui/index.html` with pure normalization helpers for
+  sources, sinks, stages, operators, checkpoints, and delivery derivation.
+- Rendering consumes normalized models instead of directly mixing raw endpoint
+  payloads.
 
 Deliverables:
 
@@ -382,7 +389,13 @@ Exit criteria:
 - Every model includes `fresh`, `source`, and `missingReason` fields where
   appropriate.
 
-### Phase D3 — Minimal shell and visual system
+### Phase D3 — Minimal shell and visual system — ✅ DONE
+
+Status:
+
+- Job detail is split into Overview, Sources, Operators, Sinks, Checkpoints,
+  Runs, Logs, and Spec tabs.
+- Header includes a freshness badge based on live fetch/parse results.
 
 Deliverables:
 
@@ -408,7 +421,13 @@ Exit criteria:
 - Design stays usable at 1280px width.
 - No horizontal scrolling except for log/code blocks and large tables.
 
-### Phase D4 — Sources section
+### Phase D4 — Sources section — ✅ DONE
+
+Status:
+
+- Sources render through generic source cards.
+- Kafka partition progress remains available under Kafka-specific detail.
+- File, generator/slice, and custom sources degrade to reported fields only.
 
 Deliverables:
 
@@ -424,7 +443,13 @@ Exit criteria:
 - If `/state.source` is absent, the UI says so and keeps the rest of the page
   functional.
 
-### Phase D5 — Operators and stages section
+### Phase D5 — Operators and stages section — ✅ DONE
+
+Status:
+
+- Logical operators and runtime stages render separately.
+- Stage table includes throughput, worker, queue, and send-block/backpressure
+  signals when metrics are available.
 
 Deliverables:
 
@@ -444,7 +469,13 @@ Exit criteria:
 - Logical operators and runtime stages are not conflated.
 - A slow sink/backpressure demo clearly shows which edge/stage is blocking.
 
-### Phase D6 — Sinks section
+### Phase D6 — Sinks section — ✅ DONE
+
+Status:
+
+- Sinks render through generic sink cards with redacted destination details.
+- Delivery guarantee is derived from checkpointing plus coordinated sink
+  capability instead of trusting the raw spec string.
 
 Deliverables:
 
@@ -461,7 +492,13 @@ Exit criteria:
 - Transactional Kafka shows exactly-once only when paired with checkpointing and
   compatible source settings.
 
-### Phase D7 — Checkpoints, state, and savepoints
+### Phase D7 — Checkpoints, state, and savepoints — ✅ DONE
+
+Status:
+
+- Checkpoint tab now shows health, stale/disabled/unavailable states, backend
+  config, savepoint/restore actions, richer checkpoint history, and
+  checkpointed source positions when reported.
 
 Deliverables:
 
