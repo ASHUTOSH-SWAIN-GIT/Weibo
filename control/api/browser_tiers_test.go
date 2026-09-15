@@ -80,7 +80,10 @@ func TestTier_BrowserDashboardLifecycle(t *testing.T) {
 	} else {
 		for _, want := range []string{
 			`<title>weibo</title>`, `id="app"`,
-			`data-r="overview"`, `data-pane="metrics"`, `data-pane="runs"`,
+			`data-r="overview"`, `data-pane="sources"`, `data-pane="operators"`,
+			`data-pane="sinks"`, `data-pane="runs"`,
+			`normalizeSources`, `normalizeSinks`, `normalizeStages`,
+			`normalizeOperators`, `deriveDelivery`,
 		} {
 			if !strings.Contains(body, want) {
 				t.Errorf("dashboard missing %q", want)

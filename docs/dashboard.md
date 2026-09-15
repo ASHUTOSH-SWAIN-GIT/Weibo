@@ -43,12 +43,14 @@ The dashboard is a plain-JS SPA with a hash router (`#/overview`, `#/job-manager
 - **Container inventory** — every Docker container with image reference/ID, state, live CPU and memory, network, disk I/O, process count, and start time.
 
 ### Job detail
-- **Metadata strip** — Job Name, Job ID, Status, Type, Kind, Delivery, Created/Updated, Attempt, Started/Stopped, Control Port.
+- **Metadata strip** — Job Name, Job ID, Status, Type, Kind, Delivery, Created/Updated, Attempt, Started/Stopped, Control Port. Delivery shows the derived guarantee (coordinated sink + checkpointing ⇒ exactly-once), not the raw spec string.
+- **Freshness badge** — header shows `metrics just now / Ns ago / not reported`, from fetch time + successful parse time; terminal jobs freeze live sections.
 - **Actions** — Savepoint (prompt for label), Restart (prompt for savepoint label, blank = last checkpoint), Cancel.
 - **Pipeline graph (DAG)** — source → operators → sink nodes, color-coded by kind (source blue, sink green, keyBy/reduce accent, window amber), parallelism badge (`×N`) when present. Rendered as inline SVG.
-- **Tabs**:
+- **Tabs**: Overview (health, dataflow source → stages → sink summary, pipeline, live state, lifecycle) · Sources (generic connector card + Kafka partition table, redacted props, "not reported" fallbacks) · Operators (logical operators + runtime stages with workers/send-block/edge queue and bottleneck badge; never conflated) · Sinks (destination identity + records/errors + delivery panel) · Checkpoints · Runs · Logs · Spec.
+- **Normalization layer** — `normalizeSources / normalizeSinks / normalizeStages / normalizeOperators / normalizeCheckpoints / deriveDelivery` in `index.html`; rendering consumes models with `source` + `missingReason`, live fetches run in parallel via `Promise.all`.
+- **Tabs** (legacy detail):
   - **Overview** — pipeline DAG, Live State card (phase, uptime, records in/out) via `/jobs/{id}/state`, Lifecycle transition log.
-  - **Metrics** — stat tiles (Records read/written, Processed, Failed, Source/Sink errors) + stages table (records in/out per stage) + operators table (records processed per operator), parsed from the Prometheus exposition format served by `/jobs/{id}/metrics`.
   - **Checkpoints** — count, last checkpoint time, current ID, checkpoint history table (from `/state`).
   - **Logs** — container logs (`/jobs/{id}/logs?tail=200`), auto-scrolled.
   - **Spec** — raw job spec YAML.

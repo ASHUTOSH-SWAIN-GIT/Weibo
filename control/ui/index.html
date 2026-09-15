@@ -239,6 +239,159 @@ function parseProm(txt){
   return out;
 }
 const mv=(M,n,pred)=>{const a=M[n]||[];const f=pred?a.find(pred):a[0];return f?f.value:0};
+const mvs=(M,n,pred)=>{const a=M[n]||[];return pred?a.filter(pred):a};
+const mval=(M,n,match)=>{const a=M[n]||[];const f=a.find(x=>Object.keys(match||{}).every(k=>x.labels[k]===match[k]));return f?{value:f.value,found:true}:{value:0,found:!!a.length}};
+
+/* ---- D1/D2: normalized dashboard models ----
+   Every helper is pure: (job, describe, plan, state, metrics) -> model.
+   Models carry `source` (which API payload) and `missingReason` so the UI
+   renders "not reported" instead of inventing zeros. See plans/dashboard-revamp-roadmap.md */
+const SENSITIVE_RE=/(password|passwd|secret|token|dsn|sasl|api[_-]?key|private[_-]?key|credential|authorization|cookie)/i;
+function redactProps(props){
+  props=props||{};
+  return Object.keys(props).map(k=>{
+    if(SENSITIVE_RE.test(k))return{k,v:'• redacted •',redacted:true};
+    return{k,v:props[k],redacted:false};
+  });
+}
+function fmtAgo(ms){
+  if(ms==null)return'not reported';
+  const s=Math.round(ms/1000);
+  if(s<2)return'just now';
+  if(s<60)return s+'s ago';
+  return Math.floor(s/60)+'m ago';
+}
+function lagOf(partitions){
+  if(!Array.isArray(partitions))return null;
+  let sum=0,found=false;
+  partitions.forEach(p=>{if(p&&p.lag!=null){sum+=Number(p.lag)||0;found=true}});
+  return found?sum:null;
+}
+/* Sources: static connector metadata from /describe, live position from
+   /state.source, rates/errors from /metrics. Kafka renders a partition
+   table; file/slice/generator/custom fall back to reported fields only. */
+function normalizeSources(job,describe,plan,state,M){
+  const dSrc=describe&&describe.source;
+  if(!dSrc||!dSrc.type){
+    const stSrc=state&&state.source;
+    if(Array.isArray(stSrc)&&stSrc.length&&stSrc[0]&&stSrc[0].topic!=null)
+      return{items:[{kind:'kafka',type:'Kafka',identity:'Kafka (describe unavailable)',partitions:stSrc,lag:lagOf(stSrc),readRate:null,errors:0,missingReason:'pending describe — live position only'}],source:'state',missingReason:'pending describe'};
+    return{items:[],source:'describe',missingReason:!describe?'describe unavailable (job not running?)':'source does not expose metadata'};
+  }
+  const t=String(dSrc.type||'unknown'),tl=t.toLowerCase();
+  const props=dSrc.props||{};
+  const stSrc=state&&state.source;
+  const hasState=stSrc!=null;
+  const readM=mval(M,'weibo_records_read_total',{});
+  const errM=mval(M,'weibo_source_errors_total',{});
+  let item={type:t,props:redactProps(props),readTotal:readM.found?readM.value:null,errors:errM.found?errM.value:null,missingReason:null};
+  if(tl==='kafka'){
+    item.kind='kafka';
+    const topics=props.topics||props.topic||'—';
+    item.identity='Kafka: '+topics;
+    item.group=props.group||props.groupId||null;
+    if(Array.isArray(stSrc)){
+      item.partitions=stSrc;item.lag=lagOf(stSrc);
+    }else{item.partitions=null;item.missingReason=hasState?'source does not expose partition progress':'source position not reported (no live agent?)';}
+  }else if(tl==='file'){
+    item.kind='file';item.identity='File: '+(props.path||props.file||props.name||'—');
+    item.position=hasState?stSrc:null;
+    if(!hasState)item.missingReason='source does not expose progress';
+  }else if(tl==='slice'||tl==='generator'){
+    item.kind='generic';item.identity=t+': '+(props.name||props.source||'in-process');
+    item.position=hasState?stSrc:null;
+    if(!hasState)item.missingReason='source does not expose progress';
+  }else{
+    item.kind='custom';item.identity=t+(props.name?': '+props.name:'');
+    item.position=hasState?stSrc:null;
+    if(!hasState)item.missingReason='source does not expose progress';
+  }
+  return{items:[item],source:'describe+state+metrics',missingReason:null};
+}
+/* Sinks: static destination from /describe, records/errors from /metrics,
+   transactional detail from /state when exposed. Delivery is derived,
+   never guessed from the connector name alone (see deriveDelivery). */
+function normalizeSinks(job,describe,plan,state,M){
+  const dSink=describe&&describe.sink;
+  if(!dSink||!dSink.type)return{items:[],source:'describe',missingReason:!describe?'describe unavailable (job not running?)':'sink does not expose metadata'};
+  const t=String(dSink.type||'unknown'),tl=t.toLowerCase();
+  const props=dSink.props||{};
+  const wM=mval(M,'weibo_records_written_total',{});
+  const eM=mval(M,'weibo_sink_errors_total',{});
+  const item={type:t,props:redactProps(props),written:wM.found?wM.value:null,errors:eM.found?eM.value:null,missingReason:null};
+  if(tl==='kafka'||tl==='txkafka'||tl==='transactional'||t==='TxnKafka'){item.kind='kafka';item.identity='Kafka: '+(props.topic||'—');}
+  else if(tl==='postgres'){item.kind='postgres';item.identity='Postgres: '+(props.table||props.into||'—');}
+  else if(tl==='http'){item.kind='http';item.identity='HTTP: '+((props.host||props.url||'—').split('?')[0]);}
+  else if(tl==='s3'){item.kind='s3';item.identity='S3: '+((props.bucket||'')+(props.prefix||props.key||''));}
+  else if(tl==='file'){item.kind='file';item.identity='File: '+(props.path||props.file||'—');}
+  else if(tl==='stdout'||tl==='blackhole'){item.kind='terminal';item.identity=t;}
+  else{item.kind='custom';item.identity=t;}
+  return{items:[item],source:'describe+metrics+state',missingReason:null};
+}
+/* Runtime stages from /plan joined to stage/edge metrics. Logical
+   operators are NOT merged in — one stage can hold many operators. */
+function normalizeStages(plan,M){
+  if(!plan||!Array.isArray(plan.stages)||!plan.stages.length)
+    return{items:[],source:'plan',missingReason:!plan?'plan unavailable (job not running?)':'plan has no stages'};
+  const edges=Array.isArray(plan.edges)?plan.edges:[];
+  const items=plan.stages.map((s,i)=>{
+    const name=s.name||('stage-'+i);
+    const inM=mval(M,'weibo_stage_records_in_total',{stage:name});
+    const outM=mval(M,'weibo_stage_records_out_total',{stage:name});
+    const blkM=mval(M,'weibo_stage_send_block_seconds_total',{stage:name});
+    const wkM=mval(M,'weibo_stage_workers',{stage:name});
+    const edge=edges.find(e=>e.from===name)||edges[i]||null;
+    let q=null,qcap=null;
+    if(edge&&edge.name){
+      const qs=mval(M,'weibo_edge_queue_size',{edge:edge.name});
+      const qc=mval(M,'weibo_edge_queue_capacity',{edge:edge.name});
+      if(qs.found)q=qs.value;if(qc.found)qcap=qc.value;
+    }
+    const bottleneck=(qcap&&q!=null&&qcap>0&&q/qcap>=0.9)||(blkM.found&&blkM.value>30);
+    return{name,type:s.type||'stage',parallelism:s.parallelism||1,operators:s.operators||[],
+      inRec:inM.found?inM.value:null,outRec:outM.found?outM.value:null,
+      workers:wkM.found?wkM.value:null,sendBlockS:blkM.found?blkM.value:null,
+      edge:edge?edge.name:null,queue:q,queueCap:qcap,bottleneck:!!bottleneck,
+      metricsFound:inM.found||outM.found||wkM.found};
+  });
+  return{items,source:'plan+metrics',missingReason:null};
+}
+/* Logical operators from /describe with processed counts from metrics. */
+function normalizeOperators(job,describe,plan,state,M){
+  const ops=describe&&Array.isArray(describe.operators)?describe.operators:[];
+  if(!ops.length)return{items:[],source:'describe',missingReason:!describe?'describe unavailable (job not running?)':'no logical operators reported'};
+  const counts=M['weibo_records_processed_total']||[];
+  const items=ops.map((o,i)=>{
+    const label=o.label||o.type||('op-'+i);
+    const hit=counts.find(x=>(x.labels.operator||'')===label)||counts.find(x=>(x.labels.operator||'')===(o.type||''));
+    const stateful=/keyby|reduce|window|join|keyedprocess/i.test(String(o.type||'')+String(label||''));
+    return{label,type:o.type||'custom',config:o.config||{},processed:hit?hit.value:null,stateful,metricsFound:!!hit};
+  });
+  return{items,source:'describe+metrics',missingReason:null};
+}
+function normalizeCheckpoints(state,job,describe){
+  const enabled=!!(describe&&describe.checkpoint)||!!(state&&state.currentCheckpointId)||!!(state&&state.checkpoints&&state.checkpoints.length);
+  const cps=state&&Array.isArray(state.checkpoints)?state.checkpoints:[];
+  let ageMs=null;
+  if(state&&state.lastCheckpointAt){const t=new Date(state.lastCheckpointAt).getTime();if(!isNaN(t))ageMs=Date.now()-t;}
+  return{enabled,interval:describe&&describe.checkpoint?describe.checkpoint.interval:null,
+    storage:describe&&describe.checkpoint?describe.checkpoint.storage:null,
+    latest:state?{id:state.currentCheckpointId||null,at:state.lastCheckpointAt||null,ageMs}:null,
+    history:cps,source:'state+describe',missingReason:!state?'state unavailable (no live agent?)':null};
+}
+/* Delivery guarantee derived from actual capabilities: coordinated sink
+   (TxnKafka) + checkpointing => exactly-once; checkpointing + plain sink
+   => at-least-once; else at-most-once. Never trust the name alone. */
+function deriveDelivery(job,srcModel,sinkModel,cpModel){
+  const sinkT=sinkModel&&sinkModel.items&&sinkModel.items[0]?String(sinkModel.items[0].type||'').toLowerCase():'';
+  const coordinated=sinkT==='txkafka'||sinkT==='transactional'||sinkT.indexOf('txn')>=0;
+  const cpEnabled=!!(cpModel&&cpModel.enabled);
+  if(coordinated&&cpEnabled)return{guarantee:'exactly-once',detail:'coordinated sink + checkpointing',coordinated:true};
+  if(coordinated&&!cpEnabled)return{guarantee:'at-least-once (sink can coordinate, checkpointing off?)',detail:'coordinated sink detected; checkpoint detail unavailable',coordinated:true};
+  if(cpEnabled)return{guarantee:'at-least-once',detail:'checkpointing enabled, plain sink',coordinated:false};
+  if(job&&job.delivery)return{guarantee:String(job.delivery),detail:'controller-declared',coordinated:false};
+  return{guarantee:'at-most-once',detail:'no checkpointing reported',coordinated:false};
+}
 
 /* Rolling-history helpers: per-second out-rates from cumulative counters,
    and a tiny inline-SVG sparkline. A missed tick just widens one interval. */
@@ -494,11 +647,35 @@ function viewDetail(id){
     let d;try{d=await api.job(id)}catch(e){setConn(false);app.innerHTML='<div class="empty">Job not found.</div>';stopPoll();return}
     if(d.error){app.innerHTML=`<div class="err">${esc(d.error)}</div>`;stopPoll();return}
     setConn(true);const job=d.job,run=d.latestRun,phase=(run&&run.phase)||'—',term=isTerm(phase);
-    const st=term?null:await api.state(id);const pi=(job.kind==='sdk'&&!term)?await api.describe(id):null;
-    const hist=await api.history(id);const pts=(hist&&hist.points)||[];
-    const grafURL=await getGrafanaURL();
-    const dg=await api.diagnostics(id);
-    const logs=await api.logs(id);
+    // Parallel live fetches with fetch-time capture for the freshness
+    // indicator (roadmap: freshness = fetch time + successful parse time).
+    const t0=Date.now();
+    const [st,pi,pl,hist,dg,logsTxt,runsData,metricsTxt]=await Promise.all([
+      term?null:api.state(id), (job.kind==='sdk'&&!term)?api.describe(id):null,
+      (job.kind==='sdk'&&!term)?api.plan(id):null,
+      api.history(id).catch(()=>null), api.diagnostics(id).catch(()=>null),
+      api.logs(id).catch(()=>''),
+      api.runs(id).catch(()=>null),
+      term?null:api.metrics(id).catch(()=>null),
+    ]);
+    const stateAt=st?Date.now():null;
+    const describeAt=pi?Date.now():null;
+    let M={},metricsAt=null,metricsNote=null;
+    if(!term){
+      if(metricsTxt){try{M=parseProm(metricsTxt);metricsAt=Date.now()}catch(e){metricsNote='metrics parse failed'}}
+      else metricsNote='metrics not reported (no live agent?)';
+    }
+    const pts=((hist&&hist.points)||[]);
+    await getGrafanaURL();
+    const logs=logsTxt;
+    // Normalized models: rendering consumes these, never raw payloads.
+    const srcModel=normalizeSources(job,pi,pl,st,M);
+    const sinkModel=normalizeSinks(job,pi,pl,st,M);
+    const stageModel=normalizeStages(pl,M);
+    const opModel=normalizeOperators(job,pi,pl,st,M);
+    const cpModel=normalizeCheckpoints(st,job,pi);
+    const delivery=deriveDelivery(job,srcModel,sinkModel,cpModel);
+    const metricsAge=metricsAt!=null?Date.now()-metricsAt:(term?null:(t0?Date.now()-t0:null));
     // attempt selection + paged audit, cached across the 2s re-renders
     if(selRunJob!==id){selRunJob=id;selRun=null;auditCache={job:id,items:[],next:0,done:false}}
     if(!auditCache.items.length&&!auditCache.done){
@@ -506,11 +683,10 @@ function viewDetail(id){
       if(p){auditCache.items=p.transitions||[];auditCache.next=p.nextBefore||0;if(!auditCache.next)auditCache.done=true}
       else auditCache.done=true;
     }
-    const runsData=await api.runs(id);const runList=(runsData&&runsData.runs)||[];
+    const runList=(runsData&&runsData.runs)||[];
     const selId=selRun||(run&&run.id);
     const selDetail=selId?await api.run(id,selId):null;
     const selLogs=selDetail?await api.runLogs(id,selId):null;
-    const M=term?{}:parseProm(await api.metrics(id)||'');
     // diagnostics card: failure, last activity, restart countdown, checkpoint
     const dgCard=dg?card('Diagnostics',kv([
       ['Failure',dg.failure?`<b>${esc(dg.failure.title)}</b><div class="dim">${esc(dg.failure.hint)}${dg.failure.message?' — '+esc(dg.failure.message):''}</div>`:`<span class="dim">none — ${esc(phase)}</span>`],
@@ -522,23 +698,38 @@ function viewDetail(id){
     const trs=auditCache.items.map(t=>`<div class="r"><b>${esc(t.to)}</b><span>${esc(t.reason||'')}</span><span class="at">${esc(fmtTime(t.at))}</span></div>`).join('')||'<div class="dim" style="padding:5px 0">No transitions.</div>';
     const lifecycleCard=card('Lifecycle',`<div class="tl">${trs}</div>`+(auditCache.done?'':`<div style="margin-top:8px"><button class="btn" onclick="auditMore('${esc(id)}')">Older</button></div>`));
 
-    // stage metrics table (records in/out per stage) from Prometheus
-    const so=M['weibo_stage_records_out_total']||[],si=M['weibo_stage_records_in_total']||[];
-    const stageNames=[...new Set([...si,...so].map(x=>x.labels.stage))];
-    const stageRows=stageNames.length?stageNames.map(s=>{
-      const type=(so.find(x=>x.labels.stage===s)||si.find(x=>x.labels.stage===s)||{labels:{}}).labels.type||'';
-      const inV=mv(M,'weibo_stage_records_in_total',x=>x.labels.stage===s);
-      const outV=mv(M,'weibo_stage_records_out_total',x=>x.labels.stage===s);
-      return '<tr><td class="name">'+esc(s)+'</td><td class="dim">'+esc(type)+'</td><td class="num">'+fmtN(inV)+'</td><td class="num">'+fmtN(outV)+'</td></tr>';
-    }).join(''):'<tr><td colspan="4" class="dim">No stage metrics.</td></tr>';
-    const metricsStagesTable=card('Stages · records in / out','<table><thead><tr><th>Stage</th><th>Type</th><th class="num">In</th><th class="num">Out</th></tr></thead><tbody>'+stageRows+'</tbody></table>');
-    // operator breakdown (records processed per operator)
-    const proc=M['weibo_records_processed_total']||[];
-    const opRows=proc.length?proc.map(x=>'<tr><td class="name">'+esc(x.labels.operator||'?')+'</td><td class="num">'+fmtN(x.value)+'</td></tr>').join(''):'<tr><td colspan="2" class="dim">No operator metrics.</td></tr>';
-    const metricsOpsTable=card('Operators · records processed','<table><thead><tr><th>Operator</th><th class="num">Processed</th></tr></thead><tbody>'+opRows+'</tbody></table>');
-    const partitions=st&&Array.isArray(st.source)?st.source:[];
-    const partitionRows=partitions.length?partitions.map(p=>'<tr><td class="name">'+esc(p.topic||'—')+'</td><td class="num">'+fmtN(p.partition)+'</td><td class="num">'+fmtN(p.currentOffset)+'</td><td class="num">'+fmtN(p.checkpointOffset)+'</td><td class="num">'+fmtN(p.highWatermark)+'</td><td class="num">'+fmtN(p.lag)+'</td></tr>').join(''):'<tr><td colspan="6" class="dim">Source does not expose partition progress.</td></tr>';
-    const sourceProgressTable=card('Kafka partition progress','<table><thead><tr><th>Topic</th><th class="num">Partition</th><th class="num">Current</th><th class="num">Checkpoint</th><th class="num">High watermark</th><th class="num">Lag</th></tr></thead><tbody>'+partitionRows+'</tbody></table>');
+    // ---- Renderers over normalized models (never raw payloads) ----
+    function srcCards(){
+      if(!srcModel.items.length)return'<div class="empty">'+esc(srcModel.missingReason||'No sources reported.')+'</div>';
+      return srcModel.items.map(s=>{
+        const det=(s.props||[]).map(r=>`<dt>${esc(r.k)}</dt><dd>${r.redacted?'<span class="faint">• redacted •</span>':esc(String(r.v))}</dd>`).join('');
+        let extra='';
+        if(s.kind==='kafka'&&Array.isArray(s.partitions)){
+          extra='<table><thead><tr><th>Topic</th><th class="num">Part</th><th class="num">Current</th><th class="num">Checkpoint</th><th class="num">High wm</th><th class="num">Lag</th></tr></thead><tbody>'+
+            s.partitions.map(p=>'<tr><td class="name">'+esc(p.topic||'—')+'</td><td class="num">'+fmtN(p.partition)+'</td><td class="num">'+fmtN(p.currentOffset)+'</td><td class="num">'+fmtN(p.checkpointOffset)+'</td><td class="num">'+fmtN(p.highWatermark)+'</td><td class="num">'+fmtN(p.lag)+'</td></tr>').join('')+'</tbody></table>';
+        }else if(s.missingReason){extra='<div class="dim" style="padding:0 16px 12px">'+esc(s.missingReason)+'</div>';}
+        else if(s.position!=null){extra='<div class="dim" style="padding:0 16px 12px">position: '+esc(JSON.stringify(s.position)).slice(0,300)+'</div>';}
+        const lagBadge=s.lag!=null?`<span class="pill">${s.lag?'lag '+fmtN(s.lag):'caught up'}</span>`:'';
+        return card((s.kind==='kafka'?'Source · Kafka':s.kind==='file'?'Source · File':'Source · '+s.type)+(' '+lagBadge),
+          kv([['Identity',esc(s.identity)],['Read total',s.readTotal!=null?fmtN(s.readTotal):'<span class="faint">not reported</span>'],['Errors',s.errors!=null?fmtN(s.errors):'<span class="faint">not reported</span>']])+
+          (det?`<dl class="kv" style="padding-top:0">${det}</dl>`:'')+extra);
+      }).join('<div style="height:12px"></div>');
+    }
+    function sinkCards(){
+      if(!sinkModel.items.length)return'<div class="empty">'+esc(sinkModel.missingReason||'No sinks reported.')+'</div>';
+      return sinkModel.items.map(s=>{
+        const det=(s.props||[]).map(r=>`<dt>${esc(r.k)}</dt><dd>${r.redacted?'<span class="faint">• redacted •</span>':esc(String(r.v))}</dd>`).join('');
+        return card('Sink · '+s.type,
+          kv([['Destination',esc(s.identity)],['Written',s.written!=null?fmtN(s.written):'<span class="faint">not reported</span>'],['Errors',s.errors!=null?fmtN(s.errors):'<span class="faint">not reported</span>']])+
+          (det?`<dl class="kv" style="padding-top:0">${det}</dl>`:''));
+      }).join('<div style="height:12px"></div>');
+    }
+    function opTables(){
+      const opRows=opModel.items.length?opModel.items.map(o=>'<tr><td class="name">'+esc(o.label)+'</td><td class="dim">'+esc(o.type)+'</td><td class="num">'+(o.processed!=null?fmtN(o.processed):'<span class="faint">—</span>')+'</td><td>'+(o.stateful?'<span class="pill">stateful</span>':'<span class="faint">—</span>')+'</td></tr>').join(''):'<tr><td colspan="4" class="dim">'+esc(opModel.missingReason||'No operators.')+'</td></tr>';
+      const stRows=stageModel.items.length?stageModel.items.map(s=>'<tr><td class="name">'+esc(s.name)+'</td><td class="dim">'+esc(s.type)+'</td><td class="num">'+(s.inRec!=null?fmtN(s.inRec):'—')+'</td><td class="num">'+(s.outRec!=null?fmtN(s.outRec):'—')+'</td><td class="num">'+(s.workers!=null?fmtN(s.workers):'—')+'</td><td class="num">'+(s.sendBlockS!=null?s.sendBlockS.toFixed(1)+'s':'—')+'</td><td class="dim">'+(s.edge?esc(s.edge)+(s.queue!=null&&s.queueCap!=null?' · '+fmtN(s.queue)+'/'+fmtN(s.queueCap):''):'—')+'</td><td>'+(s.bottleneck?'<span class="pill">bottleneck?</span>':'')+'</td></tr>').join(''):'<tr><td colspan="8" class="dim">'+esc(stageModel.missingReason||'No stages.')+'</td></tr>';
+      return card('Logical operators','<table><thead><tr><th>Operator</th><th>Type</th><th class="num">Processed</th><th>State</th></tr></thead><tbody>'+opRows+'</tbody></table>')
+        +'<div style="height:12px"></div>'+card('Runtime stages · backpressure','<table><thead><tr><th>Stage</th><th>Type</th><th class="num">In</th><th class="num">Out</th><th class="num">Workers</th><th class="num">Send-block</th><th>Edge queue</th><th></th></tr></thead><tbody>'+stRows+'</tbody></table>');
+    }
 
     // compact job metadata
     const mcell=(l,v)=>`<div class="mcell"><div class="m-l">${esc(l)}</div><div class="m-v">${v||'<span class="faint">—</span>'}</div></div>`;
@@ -549,7 +740,7 @@ function viewDetail(id){
         ${mcell('Status',phaseEl(phase))}
         ${mcell('Type',badge(job)||'sdk')}
         ${mcell('Kind',esc(job.kind||'sdk'))}
-        ${mcell('Delivery',job.delivery?esc(job.delivery):null)}
+        ${mcell('Delivery','<b>'+esc(delivery.guarantee)+'</b> <span class="faint">· '+esc(delivery.detail)+'</span>')}
         ${mcell('Created',esc(fmtFull(job.createdAt)))}
         ${mcell('Updated',esc(fmtFull(job.updatedAt)))}
         ${mcell('Attempt',run?esc(run.attempt!=null?run.attempt:'—'):null)}
@@ -570,12 +761,19 @@ function viewDetail(id){
     </div>`:'';
 
     // tab panes
+    const freshBadge=term?'<span class="pill">terminal — live data frozen</span>':(metricsAt!=null?`<span class="pill">metrics ${esc(fmtAgo(metricsAge))}</span>`:`<span class="pill">${esc(metricsNote||'metrics not reported')}</span>`);
+    const srcSummary=srcModel.items.length?srcModel.items.map(s=>esc(s.identity)).join(' · '):(srcModel.missingReason||'source pending describe');
+    const sinkSummary=sinkModel.items.length?sinkModel.items.map(s=>esc(s.identity)).join(' · '):(sinkModel.missingReason||'sink pending describe');
+    const dataflowCard=card('Dataflow',
+      `<div style="padding:12px 16px" class="dim">${esc(srcSummary)} &nbsp;→&nbsp; ${opModel.items.length?opModel.items.length+' operators / ':''}${stageModel.items.length?stageModel.items.length+' stages':'pipeline'} &nbsp;→&nbsp; ${esc(sinkSummary)}</div>`+
+      `<div style="padding:0 16px 12px" class="dim">delivery: <b>${esc(delivery.guarantee)}</b> · ${esc(delivery.detail)}</div>`);
     const overviewPane=`
       <div class="tabpane on" data-pane="overview">
         <div class="stack">
           ${dgCard}
           ${trendTiles}
           ${trendCard}
+          ${dataflowCard}
           ${card('Pipeline',job.kind==='sdk'?describeGraphEl(pi):graphEl(job.graph))}
           <div class="grid2">
             ${st?card('Live State',kv([['Phase',phaseEl(st.phase)],['Uptime',esc(st.uptime||'—')],['Records in',`<span class="big">${fmtN(st.recordsIn||0)}</span>`],['Records out',`<span class="big">${fmtN(st.recordsOut||0)}</span>`]])):card('Live State','<div class="empty">Not running.</div>')}
@@ -583,20 +781,11 @@ function viewDetail(id){
           </div>
         </div>
       </div>`;
-    const metricsPane=`
-      <div class="tabpane" data-pane="metrics">
-        <div class="stats" style="margin-bottom:14px">
-          ${tile('Records read',fmtN(mv(M,'weibo_records_read_total')),'b')}
-          ${tile('Records written',fmtN(mv(M,'weibo_records_written_total')),'b')}
-          ${tile('Processed',fmtN((M['weibo_records_processed_total']||[]).reduce((s,x)=>s+x.value,0)))}
-          ${tile('Failed',fmtN(mv(M,'weibo_records_failed_total')),mv(M,'weibo_records_failed_total')?'r':'')}
-          ${tile('Source errors',fmtN(mv(M,'weibo_source_errors_total')),mv(M,'weibo_source_errors_total')?'r':'')}
-          ${tile('Sink errors',fmtN(mv(M,'weibo_sink_errors_total')),mv(M,'weibo_sink_errors_total')?'r':'')}
-        </div>
-        ${metricsStagesTable}
-        <div style="margin-top:12px">${metricsOpsTable}</div>
-        <div style="margin-top:12px">${sourceProgressTable}</div>
-      </div>`;
+    const sourcesPane=`<div class="tabpane" data-pane="sources"><div class="stack">${srcCards()}</div></div>`;
+    const operatorsPane=`<div class="tabpane" data-pane="operators"><div class="stack">${opTables()}</div></div>`;
+    const sinksPane=`<div class="tabpane" data-pane="sinks"><div class="stack">
+      ${card('Delivery guarantee',kv([['Guarantee','<b>'+esc(delivery.guarantee)+'</b>'],['Basis',esc(delivery.detail)]]))}
+      ${sinkCards()}</div></div>`;
     // checkpoint history table (from /state checkpoints)
     const cps=(st&&st.checkpoints)||[];
     const cpRows=cps.length?cps.map(c=>'<tr><td class="name">'+code(c.id)+'</td><td class="dim">'+esc(fmtFull(c.completedAt))+'</td><td><span class="ph ph-finished"><span class="d"></span>completed</span></td></tr>').join(''):'<tr><td colspan="3" class="dim">No checkpoints yet.</td></tr>';
@@ -638,7 +827,7 @@ function viewDetail(id){
       <a class="back" href="#/overview" onclick="event.preventDefault();go('overview')">← Jobs</a>
       <div class="row-head" style="margin:10px 0 18px">
         <div><h1>${esc(job.name)}</h1><div class="id" style="margin-top:3px">${esc(job.id)}</div></div>
-        ${phaseEl(phase)} ${badge(job)}
+        ${phaseEl(phase)} ${badge(job)} ${freshBadge}
         <div class="btns" style="margin-left:auto">
           ${grafanaLink(job.id,run&&run.id)}
           <button class="btn" ${term?'disabled':''} onclick="doSavepoint('${esc(id)}')">Savepoint</button>
@@ -649,13 +838,16 @@ function viewDetail(id){
       ${metaGrid}
       <div class="tabs">
         <button class="tab ${detailTab==='overview'?'on':''}" data-tab="overview" onclick="switchTab('overview')">Overview</button>
-        <button class="tab ${detailTab==='metrics'?'on':''}" data-tab="metrics" onclick="switchTab('metrics')">Metrics</button>
+        <button class="tab ${detailTab==='sources'?'on':''}" data-tab="sources" onclick="switchTab('sources')">Sources</button>
+        <button class="tab ${detailTab==='operators'?'on':''}" data-tab="operators" onclick="switchTab('operators')">Operators</button>
+        <button class="tab ${detailTab==='sinks'?'on':''}" data-tab="sinks" onclick="switchTab('sinks')">Sinks</button>
         <button class="tab ${detailTab==='checkpoints'?'on':''}" data-tab="checkpoints" onclick="switchTab('checkpoints')">Checkpoints</button>
         <button class="tab ${detailTab==='runs'?'on':''}" data-tab="runs" onclick="switchTab('runs')">Runs</button>
         <button class="tab ${detailTab==='logs'?'on':''}" data-tab="logs" onclick="switchTab('logs')">Logs</button>
-        <button class="tab ${detailTab==='spec'?'on':''}" data-tab="spec" onclick="switchTab('spec')">Manifest</button>
+        <button class="tab ${detailTab==='spec'?'on':''}" data-tab="spec" onclick="switchTab('spec')">Spec</button>
       </div>
-      ${overviewPane}${metricsPane}${checkpointsPane}${runsPane}${logsPane}${specPane}`;
+      ${overviewPane}${sourcesPane}${operatorsPane}${sinksPane}${checkpointsPane}${runsPane}${logsPane}${specPane}`;
+    if(detailTab==='metrics')detailTab='operators';
     switchTab(detailTab);
     const lg=document.getElementById('log');if(lg)lg.scrollTop=lg.scrollHeight;
   },2000);
