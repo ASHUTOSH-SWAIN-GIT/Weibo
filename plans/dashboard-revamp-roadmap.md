@@ -513,7 +513,16 @@ Exit criteria:
 - Running jobs with stale checkpoints are visibly flagged.
 - Disabled checkpointing is displayed as a configured state, not an error.
 
-### Phase D8 — Runs, diagnostics, and logs polish
+### Phase D8 — Runs, diagnostics, and logs polish — ✅ DONE
+
+Status:
+
+- Runs is now the canonical attempt explorer with selected attempt detail,
+  transitions, logs, and full lifecycle history.
+- Diagnostics are grouped into failure, activity, restart, and checkpoint signal
+  panels.
+- Logs support tail size, copy, follow/pause for live logs, and previous run
+  selection.
 
 Deliverables:
 

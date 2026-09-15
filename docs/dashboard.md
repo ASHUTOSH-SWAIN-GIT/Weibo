@@ -49,10 +49,11 @@ The dashboard is a plain-JS SPA with a hash router (`#/overview`, `#/job-manager
 - **Pipeline graph (DAG)** — source → operators → sink nodes, color-coded by kind (source blue, sink green, keyBy/reduce accent, window amber), parallelism badge (`×N`) when present. Rendered as inline SVG.
 - **Tabs**: Overview (health, dataflow source → stages → sink summary, pipeline, live state, lifecycle) · Sources (generic connector card + Kafka partition table, redacted props, "not reported" fallbacks) · Operators (logical operators + runtime stages with workers/send-block/edge queue and bottleneck badge; never conflated) · Sinks (destination identity + records/errors + delivery panel) · Checkpoints · Runs · Logs · Spec.
 - **Normalization layer** — `normalizeSources / normalizeSinks / normalizeStages / normalizeOperators / normalizeCheckpoints / deriveDelivery` in `index.html`; rendering consumes models with `source` + `missingReason`, live fetches run in parallel via `Promise.all`.
-- **Tabs** (legacy detail):
+- **Tab detail**:
   - **Overview** — pipeline DAG, Live State card (phase, uptime, records in/out) via `/jobs/{id}/state`, Lifecycle transition log.
   - **Checkpoints** — checkpoint health, disabled/stale/unavailable state, state backend, savepoint/restore actions, checkpoint history, and checkpointed source positions (from `/describe` + `/state`).
-  - **Logs** — container logs (`/jobs/{id}/logs?tail=200`), auto-scrolled.
+  - **Runs** — canonical attempt explorer with selected attempt detail, transitions, logs, restart timing, and full lifecycle history.
+  - **Logs** — live/latest logs or previous-attempt logs with tail-size selector, copy, and follow/pause for live logs.
   - **Spec** — raw job spec YAML.
 
 ### Deploy

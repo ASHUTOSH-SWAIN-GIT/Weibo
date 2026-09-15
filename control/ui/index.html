@@ -51,6 +51,7 @@
   td{padding:11px 16px;border-bottom:1px solid var(--line)}
   tr.row{cursor:pointer}
   tr.row:hover td{background:#f9fafb}
+  tr.row.sel td{background:var(--accent-bg)}
   .name{font-weight:500}
 
   /* stats grid */
@@ -80,6 +81,7 @@
   .btn.danger:hover{color:var(--red);border-color:var(--red);background:#fef2f2}
   .btn:disabled{opacity:.45;cursor:not-allowed}
   .btns{display:flex;gap:8px;flex-wrap:wrap}
+  .mini{font-family:inherit;font-size:12px;border:1px solid var(--line2);background:#fff;color:var(--fg);border-radius:7px;padding:6px 8px;margin-left:6px}
 
   .dag{overflow-x:auto;padding:16px 14px}
   .dag svg{display:block}
@@ -208,13 +210,13 @@ const api={
   describe:id=>authFetch('/jobs/'+id+'/describe').then(r=>r.ok?r.json():null).catch(()=>null),
   plan:id=>authFetch('/jobs/'+id+'/plan').then(r=>r.ok?r.json():null).catch(()=>null),
   metrics:id=>authFetch('/jobs/'+id+'/metrics').then(r=>r.ok?r.text():null).catch(()=>null),
-  logs:id=>authFetch('/jobs/'+id+'/logs?tail=200').then(r=>r.text()).catch(()=>''),
+  logs:(id,tail)=>authFetch('/jobs/'+id+'/logs?tail='+(tail||200)).then(r=>r.text()).catch(()=>''),
   history:(id,points)=>authFetch('/jobs/'+id+'/history?points='+(points||120)).then(r=>r.ok?r.json():null).catch(()=>null),
   bulkHistory:()=>authFetch('/jobs/history?points=30').then(r=>r.ok?r.json():null).catch(()=>null),
   diagnostics:id=>authFetch('/jobs/'+id+'/diagnostics').then(r=>r.ok?r.json():null).catch(()=>null),
   runs:id=>authFetch('/jobs/'+id+'/runs').then(r=>r.ok?r.json():null).catch(()=>null),
   run:(id,runId)=>authFetch('/jobs/'+id+'/runs/'+runId).then(r=>r.ok?r.json():null).catch(()=>null),
-  runLogs:(id,runId)=>authFetch('/jobs/'+id+'/runs/'+runId+'/logs?tail=200').then(r=>r.text()).catch(()=>null),
+  runLogs:(id,runId,tail)=>authFetch('/jobs/'+id+'/runs/'+runId+'/logs?tail='+(tail||200)).then(r=>r.text()).catch(()=>null),
   transitions:(id,before,limit)=>authFetch('/jobs/'+id+'/transitions?limit='+(limit||10)+(before?'&before='+before:'')).then(r=>r.ok?r.json():null).catch(()=>null),
   config:()=>authFetch('/config').then(r=>r.ok?r.json():{}).catch(()=>({})),
   validate:b=>authFetch('/validate',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(b)}),
@@ -652,6 +654,7 @@ function viewCompleted(){
 /* ---- Job Detail ---- */
 let detailTab='overview';
 let selRun=null,selRunJob=null; // selected previous-run id for the Runs tab
+let logTail=200,logRun=null; // log tab tail size + selected attempt id ("live" = latest/live logs)
 let auditCache={job:null,items:[],next:0,done:false}; // paged audit log
 async function auditMore(id){
   if(auditCache.done)return;
@@ -671,7 +674,7 @@ async function followLogs(id){
   const append=t=>{if(!pre)return;const cur=pre.textContent;pre.textContent=(cur==='No output.'?'':cur)+(cur&&!cur.endsWith('\n')?'\n':'')+t+'\n';pre.scrollTop=pre.scrollHeight};
   try{
     // fetch (not EventSource) so the bearer token header is sent.
-    const r=await authFetch('/jobs/'+id+'/logs/stream?tail=200',{signal:ac.signal});
+    const r=await authFetch('/jobs/'+id+'/logs/stream?tail='+encodeURIComponent(logTail||200),{signal:ac.signal});
     const rd=r.body.getReader();const dec=new TextDecoder();let buf='';
     for(;;){
       const chunk=await rd.read();
@@ -682,6 +685,35 @@ async function followLogs(id){
     }
     try{rd.cancel()}catch(e){}
   }catch(e){if(!ac.signal.aborted&&btn)btn.textContent='Follow (error)'}
+}
+function setLogTail(v){logTail=Math.max(50,Math.min(5000,Number(v)||200));}
+function setRunSelection(v){selRun=v||null;logRun=v||logRun;}
+function setLogRun(v){logRun=v||'live';}
+async function copyLogText(){
+  const pre=document.getElementById('log');if(!pre)return;
+  try{await navigator.clipboard.writeText(pre.textContent||'');const b=document.getElementById('copyLogBtn');if(b){const t=b.textContent;b.textContent='Copied';setTimeout(()=>b.textContent=t,1200)}}catch(e){alert('Copy failed. Select the log text and copy manually.')}
+}
+function diagnosticsCards(dg,phase){
+  if(!dg)return card('Diagnostics','<div class="empty">Diagnostics are unavailable for this run.</div>');
+  const failure=dg.failure?card('Failure',kv([
+    ['Title',`<b>${esc(dg.failure.title||'Failure')}</b>`],
+    ['Hint',esc(dg.failure.hint||'—')],
+    ['Message',dg.failure.message?esc(dg.failure.message):'<span class="faint">—</span>']
+  ])):card('Failure','<div class="empty">No active failure — '+esc(phase)+'</div>');
+  const activity=card('Activity',kv([
+    ['Last activity',dg.activity?esc(fmtFull(dg.activity.at)):'<span class="faint">not reported</span>'],
+    ['Records',dg.activity?'in '+fmtN(dg.activity.recordsIn)+' / out '+fmtN(dg.activity.recordsOut):'<span class="faint">not reported</span>']
+  ]));
+  const restart=card('Restart',kv([
+    ['Schedule',dg.restart?esc(fmtCountdown(dg.restart.inSeconds)):'<span class="faint">not scheduled</span>'],
+    ['At',dg.restart?esc(fmtFull(dg.restart.scheduledAt)):'<span class="faint">—</span>']
+  ]));
+  const checkpoint=card('Checkpoint signal',kv([
+    ['Latest',dg.checkpoint?`<span class="id">${esc(dg.checkpoint.id)}</span>`:'<span class="faint">not reported</span>'],
+    ['Duration',dg.checkpoint?esc(fmtDur(dg.checkpoint.durationMs)):'<span class="faint">—</span>'],
+    ['Size',dg.checkpoint?esc(fmtMem(dg.checkpoint.sizeBytes)):'<span class="faint">—</span>']
+  ]));
+  return `<div class="grid2">${failure}${activity}${restart}${checkpoint}</div>`;
 }
 function switchTab(tab){
   detailTab=tab;
@@ -697,11 +729,10 @@ function viewDetail(id){
     // Parallel live fetches with fetch-time capture for the freshness
     // indicator (roadmap: freshness = fetch time + successful parse time).
     const t0=Date.now();
-    const [st,pi,pl,hist,dg,logsTxt,runsData,metricsTxt]=await Promise.all([
+    const [st,pi,pl,hist,dg,runsData,metricsTxt]=await Promise.all([
       term?null:api.state(id), (job.kind==='sdk'&&!term)?api.describe(id):null,
       (job.kind==='sdk'&&!term)?api.plan(id):null,
       api.history(id).catch(()=>null), api.diagnostics(id).catch(()=>null),
-      api.logs(id).catch(()=>''),
       api.runs(id).catch(()=>null),
       term?null:api.metrics(id).catch(()=>null),
     ]);
@@ -714,7 +745,6 @@ function viewDetail(id){
     }
     const pts=((hist&&hist.points)||[]);
     await getGrafanaURL();
-    const logs=logsTxt;
     // Normalized models: rendering consumes these, never raw payloads.
     const srcModel=normalizeSources(job,pi,pl,st,M);
     const sinkModel=normalizeSinks(job,pi,pl,st,M);
@@ -724,7 +754,7 @@ function viewDetail(id){
     const delivery=deriveDelivery(job,srcModel,sinkModel,cpModel);
     const metricsAge=metricsAt!=null?Date.now()-metricsAt:(term?null:(t0?Date.now()-t0:null));
     // attempt selection + paged audit, cached across the 2s re-renders
-    if(selRunJob!==id){selRunJob=id;selRun=null;auditCache={job:id,items:[],next:0,done:false}}
+    if(selRunJob!==id){selRunJob=id;selRun=null;logRun='live';auditCache={job:id,items:[],next:0,done:false}}
     if(!auditCache.items.length&&!auditCache.done){
       const p=await api.transitions(id,0,10);
       if(p){auditCache.items=p.transitions||[];auditCache.next=p.nextBefore||0;if(!auditCache.next)auditCache.done=true}
@@ -733,14 +763,11 @@ function viewDetail(id){
     const runList=(runsData&&runsData.runs)||[];
     const selId=selRun||(run&&run.id);
     const selDetail=selId?await api.run(id,selId):null;
-    const selLogs=selDetail?await api.runLogs(id,selId):null;
-    // diagnostics card: failure, last activity, restart countdown, checkpoint
-    const dgCard=dg?card('Diagnostics',kv([
-      ['Failure',dg.failure?`<b>${esc(dg.failure.title)}</b><div class="dim">${esc(dg.failure.hint)}${dg.failure.message?' — '+esc(dg.failure.message):''}</div>`:`<span class="dim">none — ${esc(phase)}</span>`],
-      ['Last activity',dg.activity?esc(fmtFull(dg.activity.at))+` · in ${fmtN(dg.activity.recordsIn)} / out ${fmtN(dg.activity.recordsOut)}`:'—'],
-      ['Restart',dg.restart?esc(fmtCountdown(dg.restart.inSeconds))+` (at ${esc(fmtFull(dg.restart.scheduledAt))})`:'—'],
-      ['Checkpoint',dg.checkpoint?`<span class="id">${esc(dg.checkpoint.id)}</span> · ${esc(fmtDur(dg.checkpoint.durationMs))} · ${esc(fmtMem(dg.checkpoint.sizeBytes))}`:'—'],
-    ])):'';
+    const selectedLogRun=(logRun&&logRun!=='live')?logRun:(run&&run.id);
+    const logs=(logRun&&logRun!=='live')?await api.runLogs(id,logRun,logTail):await api.logs(id,logTail);
+    const selLogs=selDetail?await api.runLogs(id,selId,logTail):null;
+    // grouped diagnostics: failure/activity/restart/checkpoint without repeats
+    const dgCard=diagnosticsCards(dg,phase);
     // paged audit log, newest first, with an Older button (cursor in auditCache)
     const trs=auditCache.items.map(t=>`<div class="r"><b>${esc(t.to)}</b><span>${esc(t.reason||'')}</span><span class="at">${esc(fmtTime(t.at))}</span></div>`).join('')||'<div class="dim" style="padding:5px 0">No transitions.</div>';
     const lifecycleCard=card('Lifecycle',`<div class="tl">${trs}</div>`+(auditCache.done?'':`<div style="margin-top:8px"><button class="btn" onclick="auditMore('${esc(id)}')">Older</button></div>`));
@@ -882,25 +909,39 @@ function viewDetail(id){
         <div style="height:14px"></div>
         ${card('Checkpointed source positions',posBody)}
       </div>`;
-    // attempts: select a previous run to inspect its audit + logs
-    const runRows=runList.length?runList.map(rm=>`<tr class="row" onclick="selRun='${esc(rm.id)}'"><td class="num">${esc(rm.attempt!=null?rm.attempt:'—')}</td><td>${phaseEl(rm.phase)}</td><td class="dim">${esc(fmtTime(rm.startedAt))}</td><td class="dim">${rm.stoppedAt?esc(fmtTime(rm.stoppedAt)):'—'}</td><td class="dim">${esc((rm.error||'').slice(0,80))}</td></tr>`).join(''):'<tr><td colspan="5" class="dim">No runs recorded.</td></tr>';
+    // attempts: the Runs tab is the canonical run explorer; the Logs tab can
+    // inspect either the live container stream or logs from any recorded run.
+    const runRows=runList.length?runList.map(rm=>`<tr class="row ${selId===rm.id?'sel':''}" onclick="setRunSelection('${esc(rm.id)}');viewDetail('${esc(id)}')"><td class="num">${esc(rm.attempt!=null?rm.attempt:'—')}</td><td>${phaseEl(rm.phase)}</td><td class="dim">${esc(fmtTime(rm.startedAt))}</td><td class="dim">${rm.stoppedAt?esc(fmtTime(rm.stoppedAt)):'—'}</td><td class="dim">${esc((rm.error||'').slice(0,80))}</td></tr>`).join(''):'<tr><td colspan="5" class="dim">No runs recorded.</td></tr>';
     const sel=selDetail&&selDetail.run;
     const selPane=sel?card('Attempt '+(sel.attempt!=null?sel.attempt:'?')+' · '+sel.id,
       kv([['Status',phaseEl(sel.phase)],['Started',esc(fmtFull(sel.startedAt))],['Stopped',sel.stoppedAt?esc(fmtFull(sel.stoppedAt)):'—'],
         ['Error',sel.error?esc(sel.error):'<span class="faint">—</span>'],
         ['Failure kind',sel.failureKind?esc(sel.failureKind):'<span class="faint">—</span>'],
         ['Restart',selDetail.restart?esc(fmtCountdown(selDetail.restart.inSeconds)):'—']])
-      +`<div style="margin-top:12px">${card('Attempt transitions',(selDetail.transitions||[]).map(t=>`<div class="r"><b>${esc(t.to)}</b><span>${esc(t.reason||'')}</span><span class="at">${esc(fmtTime(t.at))}</span></div>`).join('')||'<div class="dim">No transitions.</div>')}</div>`
+      +`<div style="margin-top:12px">${card('Attempt transitions',(selDetail.transitions||[]).map(t=>`<div class="r"><b>${esc(t.to)}</b><span>${esc(t.reason||'')}</span><span class="at">${esc(fmtTime(t.at))}</span></div>`).join('')||'<div class="dim" style="padding:16px">No transitions.</div>')}</div>`
       +`<div style="margin-top:12px"><div class="card"><div class="hd">Attempt logs</div><pre class="log">${esc(selLogs||'No output (container removed or never recorded).')}</pre></div></div>`
     ):'<div class="empty">Select an attempt.</div>';
+    const fullLifecycle=card('Full lifecycle',`<div class="tl">${auditCache.items.map(t=>`<div class="r"><b>${esc(t.to)}</b><span>${esc(t.reason||'')}</span><span class="at">${esc(fmtTime(t.at))}</span></div>`).join('')||'<div class="dim" style="padding:5px 0">No transitions.</div>'}</div>`+(auditCache.done?'':`<div style="padding:0 16px 14px"><button class="btn" onclick="auditMore('${esc(id)}')">Older</button></div>`));
     const runsPane=`
       <div class="tabpane" data-pane="runs">
         ${card('Attempts','<table><thead><tr><th class="num">#</th><th>Status</th><th>Started</th><th>Stopped</th><th>Error</th></tr></thead><tbody>'+runRows+'</tbody></table>')}
         <div style="margin-top:12px">${selPane}</div>
+        <div style="margin-top:12px">${fullLifecycle}</div>
       </div>`;
+    const logOptions=['<option value="live" '+((!logRun||logRun==='live')?'selected':'')+'>Live / latest container</option>'].concat(runList.map(rm=>`<option value="${esc(rm.id)}" ${logRun===rm.id?'selected':''}>Attempt ${esc(rm.attempt!=null?rm.attempt:'?')} · ${esc(rm.phase||'unknown')}</option>`)).join('');
+    const tailOptions=[100,200,500,1000,5000].map(n=>`<option value="${n}" ${Number(logTail)===n?'selected':''}>${n} lines</option>`).join('');
+    const liveSelected=!logRun||logRun==='live';
     const logsPane=`
       <div class="tabpane" data-pane="logs">
-        <div class="card"><div class="hd">Logs <span style="float:right"><button class="btn" id="followBtn" onclick="followLogs('${esc(id)}')">Follow</button></span></div><pre class="log" id="log">${esc(logs||'No output.')}</pre></div>
+        <div class="card">
+          <div class="hd">Logs <span class="r">
+            <select class="mini" onchange="setLogRun(this.value);viewDetail('${esc(id)}')">${logOptions}</select>
+            <select class="mini" onchange="setLogTail(this.value);viewDetail('${esc(id)}')">${tailOptions}</select>
+            <button class="btn" id="copyLogBtn" onclick="copyLogText()">Copy</button>
+            <button class="btn" id="followBtn" ${(!liveSelected||term)?'disabled':''} onclick="followLogs('${esc(id)}')">${liveSelected?'Follow':'Historical'}</button>
+          </span></div>
+          <pre class="log" id="log">${esc(logs||'No output.')}</pre>
+        </div>
       </div>`;
     const specPane=`
       <div class="tabpane" data-pane="spec">
