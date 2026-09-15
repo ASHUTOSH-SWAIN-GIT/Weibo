@@ -29,3 +29,8 @@ require (
 	google.golang.org/grpc v1.82.1 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
 )
+
+// Exclude the monolithic genproto: the split googleapis/{api,rpc} modules
+// provide the same packages and the old copy only causes ambiguous imports
+// (grpc status / grpc-gateway httpbody).
+exclude google.golang.org/genproto v0.0.0-20230410155749-daa745c078e1

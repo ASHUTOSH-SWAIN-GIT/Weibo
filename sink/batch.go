@@ -212,7 +212,14 @@ func (b *batchWriter[T]) run(ctx context.Context, in <-chan types.Record) error 
 				if err != nil {
 					return err
 				}
-				return asyncErr()
+				if err := asyncErr(); err != nil {
+					return err
+				}
+				// The input can close in the same instant the context is
+				// cancelled and win the select above; the shutdown
+				// contract still requires reporting the cancellation
+				// after everything already accepted has been flushed.
+				return ctx.Err()
 			}
 			full, err := add(ctx, r)
 			if err != nil {

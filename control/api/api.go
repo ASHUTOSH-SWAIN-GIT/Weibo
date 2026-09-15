@@ -336,9 +336,18 @@ func (s *Server) auditMutations(next http.Handler) http.Handler {
 
 // authCheck returns 200 once a request reaches it — the auth middleware has
 // already validated (or the API is open). It lets the UI verify a token
-// before storing it, without listing jobs.
+// before storing it, without listing jobs. The role field lets the
+// dashboard disable mutation actions for read-only tokens (D9): "open"
+// when no token is configured, otherwise the authenticated token's scope.
 func (s *Server) authCheck(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	role := "open"
+	if s.authConfigured() {
+		role = "unknown"
+		if v, ok := r.Context().Value(authRoleKey{}).(Role); ok && v != "" {
+			role = string(v)
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "role": role})
 }
 
 func (s *Server) cluster(w http.ResponseWriter, r *http.Request) {

@@ -145,3 +145,8 @@ require (
 replace github.com/ASHUTOSH-SWAIN-GIT/weibo/telemetry => ../telemetry
 
 replace github.com/ASHUTOSH-SWAIN-GIT/weibo => ..
+
+// Exclude the monolithic genproto: the split googleapis/{api,rpc} modules
+// provide the same packages and the old copy only causes ambiguous imports
+// (grpc status / grpc-gateway httpbody).
+exclude google.golang.org/genproto v0.0.0-20230410155749-daa745c078e1

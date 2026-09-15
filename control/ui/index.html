@@ -193,6 +193,22 @@ const isTerm=p=>['finished','failed','cancelled'].includes(String(p||'').toLower
 const TOKEN_KEY='weibo_token';
 const getToken=()=>localStorage.getItem(TOKEN_KEY)||'';
 const setToken=t=>{t?localStorage.setItem(TOKEN_KEY,t):localStorage.removeItem(TOKEN_KEY)};
+/* D9: read-only tokens render the dashboard but must not mutate. The role
+   comes from POST /auth ({status, role}); mutation buttons render disabled
+   when the role is readonly. Backend still enforces 403. */
+let userRole='open';
+const canMutate=()=>userRole!=='readonly';
+const mutAttr=()=>canMutate()?'':'disabled title="read-only token"';
+async function refreshRole(){
+  try{
+    const t=getToken();
+    const r=await fetch('/auth',{method:'POST',headers:t?{'Authorization':'Bearer '+t}:{}});
+    if(!r.ok){userRole='open';return userRole}
+    const j=await r.json().catch(()=>({}));
+    userRole=(j&&j.role)||'open';
+  }catch(e){userRole='open'}
+  return userRole;
+}
 function authFetch(url,opts){
   opts=opts||{};const t=getToken();
   const headers=Object.assign({},opts.headers||{});
@@ -491,7 +507,7 @@ async function saveToken(){
   const t=document.getElementById('tok').value.trim();if(!t)return;
   let ok=false;try{ok=(await fetch('/auth',{method:'POST',headers:{'Authorization':'Bearer '+t}})).ok}catch(e){}
   if(!ok){const e=document.getElementById('tokerr');e.style.display='block';e.textContent='Invalid token.';return}
-  setToken(t);route();
+  setToken(t);await refreshRole();route();
 }
 
 const app=document.getElementById('app');let timer=null;
@@ -900,8 +916,8 @@ function viewDetail(id){
           `<div style="padding:16px">
             <div class="dim" style="margin-bottom:12px">${esc(restartHint)}</div>
             <div class="btns">
-              <button class="btn pri" ${term?'disabled':''} onclick="doSavepoint('${esc(id)}')">Create savepoint</button>
-              <button class="btn" onclick="doRestart('${esc(id)}')">Restart from savepoint / latest checkpoint</button>
+              <button class="btn pri" ${term?'disabled':''} ${mutAttr()} onclick="doSavepoint('${esc(id)}')">Create savepoint</button>
+              <button class="btn" ${mutAttr()} onclick="doRestart('${esc(id)}')">Restart from savepoint / latest checkpoint</button>
             </div>
           </div>`)}
         <div style="height:14px"></div>
@@ -955,9 +971,9 @@ function viewDetail(id){
         ${phaseEl(phase)} ${badge(job)} ${freshBadge}
         <div class="btns" style="margin-left:auto">
           ${grafanaLink(job.id,run&&run.id)}
-          <button class="btn" ${term?'disabled':''} onclick="doSavepoint('${esc(id)}')">Savepoint</button>
-          <button class="btn" onclick="doRestart('${esc(id)}')">Restart</button>
-          <button class="btn danger" ${term?'disabled':''} onclick="doCancel('${esc(id)}')">Cancel</button>
+          <button class="btn" ${term?'disabled':''} ${mutAttr()} onclick="doSavepoint('${esc(id)}')">Savepoint</button>
+          <button class="btn" ${mutAttr()} onclick="doRestart('${esc(id)}')">Restart</button>
+          <button class="btn danger" ${term?'disabled':''} ${mutAttr()} onclick="doCancel('${esc(id)}')">Cancel</button>
         </div>
       </div>
       ${metaGrid}
@@ -977,16 +993,17 @@ function viewDetail(id){
     const lg=document.getElementById('log');if(lg)lg.scrollTop=lg.scrollHeight;
   },2000);
 }
-async function doCancel(id){if(!confirm('Cancel this job?'))return;await api.act(id,'cancel')}
-async function doRestart(id){const sp=prompt('Restart from savepoint label? (blank for last checkpoint)','');if(sp===null)return;await api.act(id,'restart',sp?{savepoint:sp}:null)}
-async function doSavepoint(id){const label=prompt('Savepoint label:','');if(!label)return;const r=await api.act(id,'savepoint?label='+encodeURIComponent(label));if(!r.ok){const j=await r.json().catch(()=>({}));alert('Savepoint failed: '+(j.error||r.status))}}
+async function doCancel(id){if(!canMutate()){alert('Read-only token cannot cancel jobs.');return}if(!confirm('Cancel this job?'))return;await api.act(id,'cancel')}
+async function doRestart(id){if(!canMutate()){alert('Read-only token cannot restart jobs.');return}const sp=prompt('Restart from savepoint label? (blank for last checkpoint)','');if(sp===null)return;await api.act(id,'restart',sp?{savepoint:sp}:null)}
+async function doSavepoint(id){if(!canMutate()){alert('Read-only token cannot create savepoints.');return}const label=prompt('Savepoint label:','');if(!label)return;const r=await api.act(id,'savepoint?label='+encodeURIComponent(label));if(!r.ok){const j=await r.json().catch(()=>({}));alert('Savepoint failed: '+(j.error||r.status))}}
 
 /* ---- Submit ---- */
 function viewSubmit(){
   setNav('submit');stopPoll();setConn(true);
+  refreshRole().then(()=>{const b=document.getElementById('deploy');if(b&&!canMutate()){b.disabled=true;b.title='read-only token'}});
   app.innerHTML=`
     <h1>Deploy a job</h1>
-    <div class="sub" style="margin:8px 0 16px">Run a container image built with the Weibo SDK.</div>
+    <div class="sub" style="margin:8px 0 16px">Run a container image built with the Weibo SDK.${canMutate()?'':' <b>Read-only token: deploy disabled.</b>'}</div>
     <textarea id="wf" rows="12" spellcheck="false" placeholder="kind: sdk
 name: orders-stream
 image: ghcr.io/company/orders-stream:1.0.0
@@ -994,13 +1011,14 @@ resources:
   cpu: 500m
   memory: 512Mi"></textarea>
     <div class="btns" style="margin-top:12px">
-      <button class="btn pri" id="deploy" onclick="doDeploy()">Deploy image</button>
+      <button class="btn pri" id="deploy" ${mutAttr()} onclick="doDeploy()">Deploy image</button>
     </div>
     <div id="pv" style="margin-top:14px"></div>`;
 }
-async function doDeploy(){const wf=document.getElementById('wf').value;const r=await api.submit({workflow:wf});const j=await r.json();if(!r.ok){document.getElementById('pv').innerHTML=`<div class="err">${esc(j.error||'Submit failed.')}</div>`;return}const id=(j.job&&j.job.id)||j.id;go('overview',id)}
+async function doDeploy(){if(!canMutate()){document.getElementById('pv').innerHTML=`<div class="err">Read-only token cannot deploy jobs.</div>`;return}const wf=document.getElementById('wf').value;const r=await api.submit({workflow:wf});const j=await r.json();if(!r.ok){document.getElementById('pv').innerHTML=`<div class="err">${esc(j.error||'Submit failed.')}</div>`;return}const id=(j.job&&j.job.id)||j.id;go('overview',id)}
 
 function route(){
+  refreshRole();
   const h=location.hash.replace(/^#/,'')||'overview';
   if(h.startsWith('job/')){viewDetail(h.slice(4));return}
   setNav(h);

@@ -536,7 +536,25 @@ Exit criteria:
 - A failed job can be debugged without leaving the dashboard.
 - Terminal jobs do not attempt live-agent polling forever.
 
-### Phase D9 — Accuracy tests and regression gates
+### Phase D9 — Accuracy tests and regression gates — ✅ DONE
+
+Status:
+
+- `control/api/dashboard_accuracy_test.go` pins the dashboard contract via
+  httptest (no browser required, runs in CI `test` job):
+  - overview shell (fleet triage hooks);
+  - all eight job-detail tab panes + normalization helpers + freshness badge;
+  - backend contract stability for `/jobs`, `/jobs/{id}`, `/runs`,
+    `/transitions`, `/diagnostics`, `/history`, `/config`;
+  - graceful degradation when `/state`, `/metrics`, `/describe`, `/plan`
+    have no live agent;
+  - Kafka/file source, sink, operator/stage, checkpoint, and delivery text;
+  - readonly 403s on every mutation, `POST /auth` role reporting, and
+    readonly-disabled mutation buttons (`userRole`/`canMutate`/`mutAttr`);
+  - secret values absent from every API surface plus `redactProps` coverage.
+- `POST /auth` now returns `{status, role}` (`open`/`readonly`/`readwrite`)
+  so the dashboard disables Cancel/Restart/Savepoint/Deploy for readonly
+  tokens; the backend still enforces 403.
 
 Deliverables:
 
