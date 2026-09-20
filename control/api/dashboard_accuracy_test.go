@@ -75,52 +75,62 @@ func d9Submit(t *testing.T, srv *httptest.Server, body, ctype string) store.Job 
 }
 
 // Sources renders: the dashboard is intentionally reduced to one visible
-// section while the source UX is designed.
-func TestDashboard_SourcesOnlyShellRenders(t *testing.T) {
+// sections with the simplified revamp shell.
+func TestDashboard_MinimalSectionsShellRenders(t *testing.T) {
 	srv := d9Server(t, api.AuthConfig{})
 	code, html := d9Get(t, srv.URL+"/")
 	if code != 200 {
 		t.Fatalf("GET /: got %d", code)
 	}
 	for _, want := range []string{
-		`id="app"`, `data-r="sources"`, `Sources`,
-		`Only source inventory is shown for now`,
-		`sourceRows`, `sourceFallback`, `normalizeSources`,
+		`id="app"`, `data-r="overview"`, `data-r="sources"`, `data-r="sinks"`, `data-r="pipeline"`,
+		`data-r="reliability"`, `Overview`, `Sources`, `Sinks`, `Pipeline`, `Reliability`,
+		`Fleet summary`, `Source Lag`, `Sink Errors`, `overviewRows`,
+		`Ingress inventory`, `Total Lag`, `Checkpointed`, `With Errors`,
+		`Egress inventory`, `Written`, `Exactly-once`,
+		`Processing inventory`, `Runtime Stages`, `Stateful`, `Backpressure`,
+		`Recovery inventory`, `Healthy Checkpoints`, `Needs Attention`, `Restarting`,
+		`sourceRows`, `sourceFallback`, `sourceSummary`, `loadSourceInventory`,
+		`sinkRows`, `sinkFallback`, `sinkSummary`, `loadSinkInventory`,
+		`pipelineRows`, `pipelineFallback`, `pipelineSummary`, `loadPipelineInventory`,
+		`reliabilityRows`, `reliabilityFallback`, `reliabilitySummary`, `loadReliabilityInventory`,
+		`normalizeSources`, `normalizeSinks`, `normalizeOperators`, `normalizeStages`, `normalizeCheckpoints`, `checkpointHealth`, `deriveDelivery`,
 	} {
 		if !strings.Contains(html, want) {
 			t.Errorf("sources shell missing %q", want)
 		}
 	}
 	for _, removed := range []string{
-		`data-r="overview"`, `data-r="job-manager"`, `data-r="running"`,
+		`data-r="job-manager"`, `data-r="running"`,
 		`data-r="completed"`, `data-r="submit"`,
 	} {
 		if strings.Contains(html, removed) {
-			t.Errorf("sources-only dashboard still exposes %q", removed)
+			t.Errorf("section-by-section dashboard still exposes %q", removed)
 		}
 	}
 }
 
-// Job detail renders only source detail for now; the other panes stay out of
-// the visible UI until they are designed section-by-section.
-func TestDashboard_JobDetailSourcesOnly(t *testing.T) {
+// Job detail renders only the designed source/sink/pipeline/reliability details;
+// older multi-pane controls stay out of the visible UI.
+func TestDashboard_JobDetailSectionBySection(t *testing.T) {
 	srv := d9Server(t, api.AuthConfig{})
 	_, html := d9Get(t, srv.URL+"/")
 	for _, want := range []string{
-		`data-pane="sources"`, `normalizeSources`,
-		`Source · Kafka`, `Source · File`,
+		`data-pane="sources"`, `data-pane="sinks"`, `data-pane="pipeline"`, `data-pane="reliability"`,
+		`normalizeSources`, `normalizeSinks`, `normalizeOperators`, `normalizeStages`, `deriveDelivery`,
+		`Source · Kafka`, `Source · File`, `Delivery guarantee`, `Sink ·`,
+		`Logical operators`, `Runtime stages`, `Checkpoint health`, `State backend`, `Attempts`,
 	} {
 		if !strings.Contains(html, want) {
-			t.Errorf("source detail shell missing %q", want)
+			t.Errorf("section detail shell missing %q", want)
 		}
 	}
 	for _, removed := range []string{
-		`data-tab="overview"`, `data-tab="operators"`, `data-tab="sinks"`,
-		`data-tab="checkpoints"`, `data-tab="runs"`, `data-tab="logs"`,
-		`data-tab="spec"`,
+		`data-tab="overview"`, `data-tab="operators"`, `data-tab="checkpoints"`,
+		`data-tab="runs"`, `data-tab="logs"`, `data-tab="spec"`,
 	} {
 		if strings.Contains(html, removed) {
-			t.Errorf("source detail still exposes removed tab %q", removed)
+			t.Errorf("section detail still exposes removed tab %q", removed)
 		}
 	}
 }

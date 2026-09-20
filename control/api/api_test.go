@@ -648,7 +648,7 @@ func TestUIServesHistoryHooks(t *testing.T) {
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
 	html := string(body)
-	for _, want := range []string{"bulkHistory", "spark(", "grafanaLink", "/config", "Fleet Throughput"} {
+	for _, want := range []string{"bulkHistory", "spark(", "grafanaLink", "/config", "Source Lag"} {
 		if !strings.Contains(html, want) {
 			t.Errorf("dashboard missing history hook %q", want)
 		}

@@ -170,7 +170,11 @@
 <aside class="side">
   <div class="side-brand"><img src="/logo.png" alt="weibo" class="logo"><span class="txt">weibo</span></div>
   <nav class="side-nav" id="snav">
-    <div class="sec on" data-r="sources" onclick="go('sources')">Sources</div>
+    <div class="sec on" data-r="overview" onclick="go('overview')">Overview</div>
+    <div class="sec" data-r="sources" onclick="go('sources')">Sources</div>
+    <div class="sec" data-r="sinks" onclick="go('sinks')">Sinks</div>
+    <div class="sec" data-r="pipeline" onclick="go('pipeline')">Pipeline</div>
+    <div class="sec" data-r="reliability" onclick="go('reliability')">Reliability</div>
   </nav>
   <div class="side-foot" id="conn"><span class="c-dot"></span><span id="connt">—</span></div>
 </aside>
@@ -526,7 +530,7 @@ function setNav(r){
   document.querySelectorAll('#snav .sec, #snav .sub a').forEach(el=>el.classList.remove('on'));
   const el=document.querySelector(`[data-r="${r}"]`);if(el)el.classList.add('on');
 }
-function go(r,id){setNav(r);if(id){location.hash='#job/'+id;viewDetail(id);return}location.hash='#'+r;route()}
+function go(r,id){setNav(r);if(id){detailReturn=(r==='sinks'||r==='pipeline'||r==='reliability')?r:'sources';location.hash='#job/'+id;viewDetail(id);return}location.hash='#'+r;route()}
 
 /* helpers */
 function card(title,body,right){return`<div class="card"><div class="hd">${esc(title)}${right?`<span class="r">${right}</span>`:''}</div>${body}</div>`}
@@ -628,17 +632,57 @@ function sourceFallback(job){
   const graph=job&&job.graph?job.graph:{};
   const src=graph.Source||graph.source||'not reported';
   const kind=job&&job.kind==='sdk'?'SDK image':'Workflow spec';
-  return{identity:src,type:src,kind,detail:'Static metadata; live source details appear when the job is running.',status:String(job&&job.phase||'unknown')};
+  return{identity:src,type:src,kind,detail:'Static metadata; live source details appear when the job is running.',status:String(job&&job.phase||'unknown'),lag:null,readTotal:null,errors:null,checkpointed:false,source:'job graph'};
 }
-function sourceRows(jobs){
-  if(!jobs.length)return'<tr><td colspan="5" class="dim">No jobs yet. Sources will appear after you deploy a job.</td></tr>';
-  return jobs.map(j=>{
-    const s=sourceFallback(j);
+function sourceSummary(job,model,state){
+  const fallback=sourceFallback(job);
+  const item=model&&model.items&&model.items[0];
+  if(!item)return Object.assign(fallback,{detail:model&&model.missingReason?model.missingReason:fallback.detail});
+  const cp=!!(state&&(state.currentCheckpointId||state.lastCheckpointAt||(state.checkpoints&&state.checkpoints.length)));
+  let position='not reported';
+  if(item.kind==='kafka'&&Array.isArray(item.partitions))position=item.partitions.length+' partition'+(item.partitions.length===1?'':'s');
+  else if(item.position!=null)position='reported';
+  else if(item.missingReason)position=item.missingReason;
+  return{
+    identity:item.identity||fallback.identity,
+    type:item.type||fallback.type,
+    kind:item.kind||fallback.kind,
+    detail:position,
+    status:String(job&&job.phase||'unknown'),
+    lag:item.lag,
+    readTotal:item.readTotal,
+    errors:item.errors,
+    checkpointed:cp,
+    source:model.source||fallback.source,
+  };
+}
+async function loadSourceInventory(jobs){
+  return Promise.all((jobs||[]).map(async job=>{
+    const terminal=isTerm(job.phase);
+    const [st,desc,plan,metricsTxt]=await Promise.all([
+      terminal?null:api.state(job.id),
+      (job.kind==='sdk'&&!terminal)?api.describe(job.id):null,
+      (job.kind==='sdk'&&!terminal)?api.plan(job.id):null,
+      terminal?null:api.metrics(job.id),
+    ]);
+    let M={};if(metricsTxt){try{M=parseProm(metricsTxt)}catch(e){}}
+    const model=normalizeSources(job,desc,plan,st,M);
+    return{job,summary:sourceSummary(job,model,st),model,state:st};
+  }));
+}
+function sourceRows(items){
+  if(!items.length)return'<tr><td colspan="7" class="dim">No jobs yet. Sources will appear after you deploy a job.</td></tr>';
+  return items.map(({job:j,summary:s})=>{
+    const lag=s.lag!=null?(s.lag?fmtN(s.lag):'caught up'):'not reported';
+    const read=s.readTotal!=null?fmtN(s.readTotal):'not reported';
+    const errors=s.errors!=null?fmtN(s.errors):'not reported';
     return `<tr class="row" onclick="go('sources','${esc(j.id)}')">
       <td class="name"><div class="job-name-line">${esc(j.name)} ${badge(j)}</div><div class="job-route"><b>${esc(j.id)}</b></div></td>
-      <td><span class="pill">${esc(s.type)}</span></td>
-      <td class="dim">${esc(s.kind)}</td>
+      <td><span class="pill">${esc(s.type)}</span><div class="dim">${esc(s.identity)}</div></td>
       <td class="dim">${esc(s.detail)}</td>
+      <td class="dim">${esc(lag)}</td>
+      <td class="dim">read ${esc(read)} · errors ${esc(errors)}</td>
+      <td>${s.checkpointed?'<span class="pill">checkpointed</span>':'<span class="faint">not reported</span>'}</td>
       <td>${phaseEl(s.status)}</td>
     </tr>`;
   }).join('');
@@ -649,46 +693,323 @@ function viewSources(){
     let d;try{d=await api.jobs()}catch(e){setConn(false);app.innerHTML='<div class="empty">Controller unreachable.</div>';return}
     setConn(true);
     const jobs=d.jobs||[];
+    const items=await loadSourceInventory(jobs);
+    const totalLag=items.reduce((n,x)=>n+(x.summary.lag||0),0);
+    const withErrors=items.filter(x=>(x.summary.errors||0)>0).length;
+    const checkpointed=items.filter(x=>x.summary.checkpointed).length;
     app.innerHTML=`
-      ${pageHead('Dashboard','Sources','Only source inventory is shown for now. We will design this section first.','')}
+      ${pageHead('Dashboard','Sources','Ingress inventory: what each job reads, where it is positioned, and whether source state is recoverable.','')}
+      ${fleetStrip([
+        {label:'Sources',value:fmtN(items.length),note:'jobs with source metadata'},
+        {label:'Total Lag',value:fmtN(totalLag),note:'reported source lag'},
+        {label:'Checkpointed',value:fmtN(checkpointed),note:'source state reported'},
+        {label:'With Errors',value:fmtN(withErrors),note:'source error counters'},
+      ])}
       <div class="card">
         <div class="hd">Sources <span class="r">${fmtN(jobs.length)} job${jobs.length===1?'':'s'}</span></div>
-        <table><thead><tr><th>Job</th><th>Source</th><th>Origin</th><th>Detail</th><th>Status</th></tr></thead><tbody>${sourceRows(jobs)}</tbody></table>
+        <table><thead><tr><th>Job</th><th>Source</th><th>Position</th><th>Lag</th><th>Records</th><th>Recovery</th><th>Status</th></tr></thead><tbody>${sourceRows(items)}</tbody></table>
+      </div>`;
+  },3000);
+}
+
+function sinkFallback(job){
+  const graph=job&&job.graph?job.graph:{};
+  const sink=graph.Sink||graph.sink||'not reported';
+  return{identity:sink,type:sink,destination:sink,detail:'Static metadata; live sink details appear when the job is running.',status:String(job&&job.phase||'unknown'),written:null,errors:null,delivery:job&&job.delivery?String(job.delivery):'not reported',coordinated:false,source:'job graph'};
+}
+function sinkSummary(job,sinkModel,cpModel,delivery){
+  const fallback=sinkFallback(job);
+  const item=sinkModel&&sinkModel.items&&sinkModel.items[0];
+  if(!item)return Object.assign(fallback,{detail:sinkModel&&sinkModel.missingReason?sinkModel.missingReason:fallback.detail});
+  return{
+    identity:item.identity||fallback.identity,
+    type:item.type||fallback.type,
+    destination:item.identity||fallback.destination,
+    detail:item.missingReason||'reported',
+    status:String(job&&job.phase||'unknown'),
+    written:item.written,
+    errors:item.errors,
+    delivery:delivery&&delivery.guarantee?delivery.guarantee:fallback.delivery,
+    coordinated:!!(delivery&&delivery.coordinated),
+    checkpointed:!!(cpModel&&cpModel.enabled),
+    source:sinkModel.source||fallback.source,
+  };
+}
+async function loadSinkInventory(jobs){
+  return Promise.all((jobs||[]).map(async job=>{
+    const terminal=isTerm(job.phase);
+    const [st,desc,plan,metricsTxt]=await Promise.all([
+      terminal?null:api.state(job.id),
+      (job.kind==='sdk'&&!terminal)?api.describe(job.id):null,
+      (job.kind==='sdk'&&!terminal)?api.plan(job.id):null,
+      terminal?null:api.metrics(job.id),
+    ]);
+    let M={};if(metricsTxt){try{M=parseProm(metricsTxt)}catch(e){}}
+    const srcModel=normalizeSources(job,desc,plan,st,M);
+    const sinkModel=normalizeSinks(job,desc,plan,st,M);
+    const cpModel=normalizeCheckpoints(st,job,desc);
+    const delivery=deriveDelivery(job,srcModel,sinkModel,cpModel);
+    return{job,summary:sinkSummary(job,sinkModel,cpModel,delivery),sinkModel,cpModel,delivery,state:st};
+  }));
+}
+function sinkRows(items){
+  if(!items.length)return'<tr><td colspan="7" class="dim">No jobs yet. Sinks will appear after you deploy a job.</td></tr>';
+  return items.map(({job:j,summary:s})=>{
+    const written=s.written!=null?fmtN(s.written):'not reported';
+    const errors=s.errors!=null?fmtN(s.errors):'not reported';
+    const basis=s.coordinated?'coordinated sink':(s.checkpointed?'checkpointed plain sink':'sink only');
+    return `<tr class="row" onclick="go('sinks','${esc(j.id)}')">
+      <td class="name"><div class="job-name-line">${esc(j.name)} ${badge(j)}</div><div class="job-route"><b>${esc(j.id)}</b></div></td>
+      <td><span class="pill">${esc(s.type)}</span><div class="dim">${esc(s.destination)}</div></td>
+      <td class="dim">written ${esc(written)} · errors ${esc(errors)}</td>
+      <td><span class="pill">${esc(s.delivery)}</span><div class="dim">${esc(basis)}</div></td>
+      <td>${s.checkpointed?'<span class="pill">checkpointed</span>':'<span class="faint">not reported</span>'}</td>
+      <td class="dim">${esc(s.detail)}</td>
+      <td>${phaseEl(s.status)}</td>
+    </tr>`;
+  }).join('');
+}
+function viewSinks(){
+  setNav('sinks');
+  poll(async()=>{
+    let d;try{d=await api.jobs()}catch(e){setConn(false);app.innerHTML='<div class="empty">Controller unreachable.</div>';return}
+    setConn(true);
+    const jobs=d.jobs||[];
+    const items=await loadSinkInventory(jobs);
+    const written=items.reduce((n,x)=>n+(x.summary.written||0),0);
+    const withErrors=items.filter(x=>(x.summary.errors||0)>0).length;
+    const exactly=items.filter(x=>String(x.summary.delivery||'').indexOf('exactly')>=0).length;
+    app.innerHTML=`
+      ${pageHead('Dashboard','Sinks','Egress inventory: where each job writes, whether writes are healthy, and what delivery guarantee applies.','')}
+      ${fleetStrip([
+        {label:'Sinks',value:fmtN(items.length),note:'jobs with sink metadata'},
+        {label:'Written',value:fmtN(written),note:'reported records'},
+        {label:'Exactly-once',value:fmtN(exactly),note:'derived guarantee'},
+        {label:'With Errors',value:fmtN(withErrors),note:'sink error counters'},
+      ])}
+      <div class="card">
+        <div class="hd">Sinks <span class="r">${fmtN(jobs.length)} job${jobs.length===1?'':'s'}</span></div>
+        <table><thead><tr><th>Job</th><th>Sink</th><th>Records</th><th>Delivery</th><th>Recovery</th><th>Detail</th><th>Status</th></tr></thead><tbody>${sinkRows(items)}</tbody></table>
+      </div>`;
+  },3000);
+}
+
+function pipelineFallback(job){
+  const graph=job&&job.graph?job.graph:{};
+  const ops=graph.Operators||graph.operators||[];
+  return{operators:Array.isArray(ops)?ops.length:0,stages:null,stateful:0,bottlenecks:0,recordsIn:null,recordsOut:null,workers:null,status:String(job&&job.phase||'unknown'),detail:'Static metadata; live pipeline details appear when the job is running.'};
+}
+function pipelineSummary(job,opModel,stageModel){
+  const fallback=pipelineFallback(job);
+  const ops=opModel&&opModel.items?opModel.items:[];
+  const stages=stageModel&&stageModel.items?stageModel.items:[];
+  const sum=(arr,key)=>arr.reduce((n,x)=>n+(x[key]||0),0);
+  const reportedOps=ops.length||fallback.operators;
+  const reportedStages=stages.length;
+  return{
+    operators:reportedOps,
+    stages:reportedStages||fallback.stages,
+    stateful:ops.filter(o=>o.stateful).length,
+    bottlenecks:stages.filter(s=>s.bottleneck).length,
+    recordsIn:stages.length?sum(stages,'inRec'):fallback.recordsIn,
+    recordsOut:stages.length?sum(stages,'outRec'):fallback.recordsOut,
+    workers:stages.length?sum(stages,'workers'):fallback.workers,
+    status:String(job&&job.phase||'unknown'),
+    detail:reportedStages?'reported':(stageModel&&stageModel.missingReason)||(opModel&&opModel.missingReason)||fallback.detail,
+  };
+}
+async function loadPipelineInventory(jobs){
+  return Promise.all((jobs||[]).map(async job=>{
+    const terminal=isTerm(job.phase);
+    const [st,desc,plan,metricsTxt]=await Promise.all([
+      terminal?null:api.state(job.id),
+      (job.kind==='sdk'&&!terminal)?api.describe(job.id):null,
+      (job.kind==='sdk'&&!terminal)?api.plan(job.id):null,
+      terminal?null:api.metrics(job.id),
+    ]);
+    let M={};if(metricsTxt){try{M=parseProm(metricsTxt)}catch(e){}}
+    const opModel=normalizeOperators(job,desc,plan,st,M);
+    const stageModel=normalizeStages(plan,M);
+    return{job,summary:pipelineSummary(job,opModel,stageModel),opModel,stageModel,state:st};
+  }));
+}
+function pipelineRows(items){
+  if(!items.length)return'<tr><td colspan="7" class="dim">No jobs yet. Pipeline details will appear after you deploy a job.</td></tr>';
+  return items.map(({job:j,summary:s})=>{
+    const throughput=(s.recordsIn!=null||s.recordsOut!=null)?`in ${fmtN(s.recordsIn||0)} · out ${fmtN(s.recordsOut||0)}`:'not reported';
+    const stages=s.stages!=null?fmtN(s.stages):'not reported';
+    const workers=s.workers!=null?fmtN(s.workers):'not reported';
+    return `<tr class="row" onclick="go('pipeline','${esc(j.id)}')">
+      <td class="name"><div class="job-name-line">${esc(j.name)} ${badge(j)}</div><div class="job-route"><b>${esc(j.id)}</b></div></td>
+      <td><span class="pill">${fmtN(s.operators)} operators</span><div class="dim">${fmtN(s.stateful)} stateful</div></td>
+      <td class="dim">${esc(stages)} stages · ${esc(workers)} workers</td>
+      <td class="dim">${esc(throughput)}</td>
+      <td>${s.bottlenecks?'<span class="pill">backpressure signal</span>':'<span class="faint">none reported</span>'}</td>
+      <td class="dim">${esc(s.detail)}</td>
+      <td>${phaseEl(s.status)}</td>
+    </tr>`;
+  }).join('');
+}
+function viewPipeline(){
+  setNav('pipeline');
+  poll(async()=>{
+    let d;try{d=await api.jobs()}catch(e){setConn(false);app.innerHTML='<div class="empty">Controller unreachable.</div>';return}
+    setConn(true);
+    const jobs=d.jobs||[];
+    const items=await loadPipelineInventory(jobs);
+    const operators=items.reduce((n,x)=>n+(x.summary.operators||0),0);
+    const stages=items.reduce((n,x)=>n+(x.summary.stages||0),0);
+    const stateful=items.reduce((n,x)=>n+(x.summary.stateful||0),0);
+    const bottlenecks=items.reduce((n,x)=>n+(x.summary.bottlenecks||0),0);
+    app.innerHTML=`
+      ${pageHead('Dashboard','Pipeline','Processing inventory: logical operators, runtime stages, and backpressure in one view.','')}
+      ${fleetStrip([
+        {label:'Pipelines',value:fmtN(items.length),note:'jobs with processing metadata'},
+        {label:'Operators',value:fmtN(operators),note:'logical steps'},
+        {label:'Runtime Stages',value:fmtN(stages),note:'planned execution stages'},
+        {label:'Stateful',value:fmtN(stateful),note:'operators with state'},
+        {label:'Backpressure',value:fmtN(bottlenecks),note:'reported bottlenecks'},
+      ])}
+      <div class="card">
+        <div class="hd">Pipeline <span class="r">${fmtN(jobs.length)} job${jobs.length===1?'':'s'}</span></div>
+        <table><thead><tr><th>Job</th><th>Operators</th><th>Stages</th><th>Throughput</th><th>Backpressure</th><th>Detail</th><th>Status</th></tr></thead><tbody>${pipelineRows(items)}</tbody></table>
+      </div>`;
+  },3000);
+}
+
+function reliabilityFallback(job){
+  return{checkpoint:'not reported',checkpointTone:'',attempts:null,failures:String(job&&job.phase||'').toLowerCase()==='failed'?1:0,restart:'not scheduled',activity:'not reported',status:String(job&&job.phase||'unknown'),detail:'Live reliability signals appear when the job is running.'};
+}
+function reliabilitySummary(job,cpModel,dg,runsData){
+  const fallback=reliabilityFallback(job);
+  const cp=checkpointHealth(cpModel,String(job&&job.phase||''));
+  const runs=(runsData&&Array.isArray(runsData.runs))?runsData.runs:[];
+  const failedRuns=runs.filter(r=>String(r.phase||'').toLowerCase()==='failed'||r.failureKind||r.error).length;
+  return{
+    checkpoint:cp.label,
+    checkpointTone:cp.tone,
+    checkpointDetail:cp.detail,
+    attempts:runs.length||fallback.attempts,
+    failures:(dg&&dg.failure?1:0)||failedRuns||fallback.failures,
+    restart:dg&&dg.restart?fmtCountdown(dg.restart.inSeconds):fallback.restart,
+    activity:dg&&dg.activity?fmtFull(dg.activity.at):fallback.activity,
+    status:String(job&&job.phase||'unknown'),
+    detail:dg&&dg.failure?(dg.failure.title||dg.failure.message||'active failure'):cp.detail,
+  };
+}
+async function loadReliabilityInventory(jobs){
+  return Promise.all((jobs||[]).map(async job=>{
+    const terminal=isTerm(job.phase);
+    const [st,desc,dg,runsData]=await Promise.all([
+      terminal?null:api.state(job.id),
+      (job.kind==='sdk'&&!terminal)?api.describe(job.id):null,
+      api.diagnostics(job.id).catch(()=>null),
+      api.runs(job.id).catch(()=>null),
+    ]);
+    const cpModel=normalizeCheckpoints(st,job,desc);
+    return{job,summary:reliabilitySummary(job,cpModel,dg,runsData),cpModel,diagnostics:dg,runsData};
+  }));
+}
+function reliabilityRows(items){
+  if(!items.length)return'<tr><td colspan="7" class="dim">No jobs yet. Reliability signals will appear after you deploy a job.</td></tr>';
+  return items.map(({job:j,summary:s})=>{
+    const attempts=s.attempts!=null?fmtN(s.attempts):'not reported';
+    const failure=s.failures?'<span class="pill">attention needed</span>':'<span class="faint">none active</span>';
+    const cpTone=s.checkpointTone==='r'||s.checkpointTone==='a'?'pill':'faint';
+    return `<tr class="row" onclick="go('reliability','${esc(j.id)}')">
+      <td class="name"><div class="job-name-line">${esc(j.name)} ${badge(j)}</div><div class="job-route"><b>${esc(j.id)}</b></div></td>
+      <td><span class="${cpTone}">${esc(s.checkpoint)}</span><div class="dim">${esc(s.checkpointDetail||'')}</div></td>
+      <td class="dim">${esc(attempts)} attempt${attempts==='1'?'':'s'}</td>
+      <td>${failure}</td>
+      <td class="dim">${esc(s.restart)}</td>
+      <td class="dim">${esc(s.activity)}</td>
+      <td>${phaseEl(s.status)}</td>
+    </tr>`;
+  }).join('');
+}
+function viewReliability(){
+  setNav('reliability');
+  poll(async()=>{
+    let d;try{d=await api.jobs()}catch(e){setConn(false);app.innerHTML='<div class="empty">Controller unreachable.</div>';return}
+    setConn(true);
+    const jobs=d.jobs||[];
+    const items=await loadReliabilityInventory(jobs);
+    const unhealthy=items.filter(x=>x.summary.checkpointTone==='r'||x.summary.checkpointTone==='a'||x.summary.failures).length;
+    const attempts=items.reduce((n,x)=>n+(x.summary.attempts||0),0);
+    const restarting=items.filter(x=>x.summary.restart&&x.summary.restart!=='not scheduled').length;
+    const checkpointed=items.filter(x=>/healthy|recorded/i.test(x.summary.checkpoint||'')).length;
+    app.innerHTML=`
+      ${pageHead('Dashboard','Reliability','Recovery inventory: checkpoint health, attempts, failures, and restart signals in one view.','')}
+      ${fleetStrip([
+        {label:'Jobs',value:fmtN(items.length),note:'tracked reliability state'},
+        {label:'Healthy Checkpoints',value:fmtN(checkpointed),note:'latest checkpoint usable'},
+        {label:'Attempts',value:fmtN(attempts),note:'recorded runs'},
+        {label:'Needs Attention',value:fmtN(unhealthy),note:'failure or degraded signal'},
+        {label:'Restarting',value:fmtN(restarting),note:'scheduled retries'},
+      ])}
+      <div class="card">
+        <div class="hd">Reliability <span class="r">${fmtN(jobs.length)} job${jobs.length===1?'':'s'}</span></div>
+        <table><thead><tr><th>Job</th><th>Checkpoint</th><th>Attempts</th><th>Failure</th><th>Restart</th><th>Last Activity</th><th>Status</th></tr></thead><tbody>${reliabilityRows(items)}</tbody></table>
       </div>`;
   },3000);
 }
 
 /* ---- Overview ---- */
+function overviewRows(rows){
+  return rows.map(r=>`<tr class="row" onclick="go('${esc(r.route)}')">
+    <td class="name">${esc(r.section)}<div class="job-route">${esc(r.scope)}</div></td>
+    <td>${r.status}</td>
+    <td class="dim">${esc(r.detail)}</td>
+    <td><button class="btn" onclick="event.stopPropagation();go('${esc(r.route)}')">${esc(r.action)}</button></td>
+  </tr>`).join('');
+}
 function viewOverview(){
   setNav('overview');
   poll(async()=>{
     let d;try{d=await api.jobs()}catch(e){setConn(false);app.innerHTML='<div class="empty">Controller unreachable.</div>';return}
-    setConn(true);const jobs=d.jobs||[];const ph=j=>String(j.phase||'').toLowerCase();
+    setConn(true);
+    const jobs=d.jobs||[];
+    const ph=j=>String(j.phase||'').toLowerCase();
     const n={total:jobs.length,running:0,finished:0,failed:0,cancelled:0};
     jobs.forEach(j=>{const p=ph(j);if(p==='running')n.running++;else if(p==='finished')n.finished++;else if(p==='failed')n.failed++;else if(p==='cancelled')n.cancelled++});
 
-    if(!jobs.length){app.innerHTML=pageHead('Control plane','Overview','No jobs have been submitted yet.',`<button class="btn pri" onclick="go('submit')">Deploy job</button>`)+`<div class="card"><div class="empty">No jobs yet.<br><br><a href="#/submit" style="color:var(--accent);cursor:pointer" onclick="event.preventDefault();go('submit')">Submit one →</a></div></div>`;return}
+    if(!jobs.length){
+      app.innerHTML=pageHead('Dashboard','Overview','Fleet summary appears after the first job is submitted.','')+
+        `<div class="card"><div class="empty">No jobs yet. Sources, sinks, pipeline, and reliability signals will appear after a job is deployed.</div></div>`;
+      return;
+    }
 
-    // Fleet throughput: sum of each job's latest per-second out-rate.
-    const bulk=await api.bulkHistory();const hist=(bulk&&bulk.histories)||{};
-    let fleet=null;jobs.forEach(j=>{const r=lastRate(hist[j.id]);if(r!=null)fleet=(fleet||0)+r});
-    const trend=j=>spark(rates(hist[j.id]));
-
-    const running=jobs.filter(j=>ph(j)==='running');
-    const completed=jobs.filter(j=>isTerm(ph(j))).slice(-8).reverse();
+    const [sources,sinks,pipelines,reliability]=await Promise.all([
+      loadSourceInventory(jobs),
+      loadSinkInventory(jobs),
+      loadPipelineInventory(jobs),
+      loadReliabilityInventory(jobs),
+    ]);
+    const totalLag=sources.reduce((m,x)=>m+(x.summary.lag||0),0);
+    const sinkErrors=sinks.reduce((m,x)=>m+(x.summary.errors||0),0);
+    const exactly=sinks.filter(x=>String(x.summary.delivery||'').indexOf('exactly')>=0).length;
+    const backpressure=pipelines.reduce((m,x)=>m+(x.summary.bottlenecks||0),0);
+    const attention=reliability.filter(x=>x.summary.checkpointTone==='r'||x.summary.checkpointTone==='a'||x.summary.failures).length;
+    const checkpointed=reliability.filter(x=>/healthy|recorded/i.test(x.summary.checkpoint||'')).length;
+    const rows=[
+      {section:'Sources',scope:'ingress position and recovery',route:'sources',status:totalLag?`<span class="pill">lag ${fmtN(totalLag)}</span>`:'<span class="faint">caught up or not reported</span>',detail:`${fmtN(sources.length)} sources · ${fmtN(sources.filter(x=>x.summary.checkpointed).length)} checkpointed`,action:'Open sources'},
+      {section:'Sinks',scope:'egress health and delivery',route:'sinks',status:sinkErrors?`<span class="pill">errors ${fmtN(sinkErrors)}</span>`:'<span class="faint">no sink errors reported</span>',detail:`${fmtN(sinks.length)} sinks · ${fmtN(exactly)} exactly-once`,action:'Open sinks'},
+      {section:'Pipeline',scope:'operators, stages, backpressure',route:'pipeline',status:backpressure?`<span class="pill">backpressure ${fmtN(backpressure)}</span>`:'<span class="faint">no bottlenecks reported</span>',detail:`${fmtN(pipelines.reduce((m,x)=>m+(x.summary.operators||0),0))} operators · ${fmtN(pipelines.reduce((m,x)=>m+(x.summary.stages||0),0))} stages`,action:'Open pipeline'},
+      {section:'Reliability',scope:'checkpoints, attempts, recovery',route:'reliability',status:attention?`<span class="pill">attention ${fmtN(attention)}</span>`:'<span class="faint">no active reliability alerts</span>',detail:`${fmtN(checkpointed)} healthy checkpoints · ${fmtN(reliability.reduce((m,x)=>m+(x.summary.attempts||0),0))} attempts`,action:'Open reliability'},
+    ];
 
     app.innerHTML=`
-      ${pageHead('Control plane','Overview','Fleet health, throughput, and recent job activity.',`<button class="btn" onclick="go('running')">Active</button><button class="btn" onclick="go('completed')">History</button><button class="btn pri" onclick="go('submit')">Deploy job</button>`)}
+      ${pageHead('Dashboard','Overview','Fleet summary from Sources, Sinks, Pipeline, and Reliability.','')}
       ${fleetStrip([
-        {label:'Running Jobs',value:fmtN(n.running),note:n.total+' total jobs'},
-        {label:'Fleet Throughput',value:fmtRate(fleet),note:'records out / sec'},
-        {label:'Finished',value:fmtN(n.finished),note:'terminal success'},
-        {label:'Failed',value:fmtN(n.failed),note:'needs inspection'},
-        {label:'Cancelled',value:fmtN(n.cancelled),note:'user stopped'},
+        {label:'Jobs',value:fmtN(n.total),note:fmtN(n.running)+' running'},
+        {label:'Source Lag',value:fmtN(totalLag),note:'reported lag'},
+        {label:'Sink Errors',value:fmtN(sinkErrors),note:'reported errors'},
+        {label:'Backpressure',value:fmtN(backpressure),note:'pipeline signals'},
+        {label:'Needs Attention',value:fmtN(attention),note:'reliability signals'},
       ])}
-      ${jobsTable('Running Jobs',running,['Start time','Status','Trend · out/s'],{cols:['createdAt','phase','trend'],trend,empty:'No running jobs.'})}
-      <div style="margin-top:14px">
-      ${jobsTable('Completed Jobs',completed,['Start time','End time','Status'],{cols:['createdAt','updatedAt','phase'],empty:'No completed jobs yet.'})}
+      <div class="card">
+        <div class="hd">Sections <span class="r">${fmtN(n.failed)} failed · ${fmtN(n.finished)} finished · ${fmtN(n.cancelled)} cancelled</span></div>
+        <table><thead><tr><th>Section</th><th>Signal</th><th>Detail</th><th>Action</th></tr></thead><tbody>${overviewRows(rows)}</tbody></table>
       </div>`;
   },3000);
 }
@@ -727,6 +1048,7 @@ function viewCompleted(){
 
 /* ---- Job Detail ---- */
 let detailTab='overview';
+let detailReturn='sources';
 let selRun=null,selRunJob=null; // selected previous-run id for the Runs tab
 let logTail=200,logRun=null; // log tab tail size + selected attempt id ("live" = latest/live logs)
 let auditCache={job:null,items:[],next:0,done:false}; // paged audit log
@@ -796,7 +1118,8 @@ function switchTab(tab){
 }
 function viewDetail(id){
   setNav(null);
-  detailTab='sources';
+  detailReturn=detailReturn||'sources';
+  detailTab=(detailReturn==='sinks'||detailReturn==='pipeline'||detailReturn==='reliability')?detailReturn:'sources';
   poll(async()=>{
     let d;try{d=await api.job(id)}catch(e){setConn(false);app.innerHTML='<div class="empty">Job not found.</div>';stopPoll();return}
     if(d.error){app.innerHTML=`<div class="err">${esc(d.error)}</div>`;stopPoll();return}
@@ -932,6 +1255,7 @@ function viewDetail(id){
       </div>`;
     const sourcesPane=`<div class="tabpane" data-pane="sources"><div class="stack">${srcCards()}</div></div>`;
     const operatorsPane=`<div class="tabpane" data-pane="operators"><div class="stack">${opTables()}</div></div>`;
+    const pipelinePane=`<div class="tabpane" data-pane="pipeline"><div class="stack">${opTables()}</div></div>`;
     const sinksPane=`<div class="tabpane" data-pane="sinks"><div class="stack">
       ${card('Delivery guarantee',kv([['Guarantee','<b>'+esc(delivery.guarantee)+'</b>'],['Basis',esc(delivery.detail)]]))}
       ${sinkCards()}</div></div>`;
@@ -1022,9 +1346,36 @@ function viewDetail(id){
       <div class="tabpane" data-pane="spec">
         <div class="card"><div class="hd">Spec</div><pre class="spec">${esc(job.spec||'—')}</pre></div>
       </div>`;
+    const reliabilityPane=`<div class="tabpane" data-pane="reliability"><div class="stack">
+      ${diagnosticsCards(dg,phase)}
+      <div class="stats" style="margin-bottom:14px">
+        ${tile('Health',esc(cpHealth.label),cpHealth.tone)}
+        ${tile('Checkpoints',fmtN(cps.length),'b')}
+        ${tile('Last Checkpoint',cpModel.latest&&cpModel.latest.at?esc(fmtTime(cpModel.latest.at)):'—',cpHealth.tone)}
+        ${tile('Attempts',fmtN(runList.length),'b')}
+      </div>
+      <div class="grid2">
+        ${card('Checkpoint health',kv([
+          ['Status',`<span class="ph ph-${esc(cpHealth.state)}"><span class="d"></span>${esc(cpHealth.label)}</span>`],
+          ['Detail',esc(cpHealth.detail)],
+          ['Interval',cpModel.interval?esc(String(cpModel.interval)):'<span class="faint">not reported</span>'],
+          ['Source',esc(cpModel.source||'state')]
+        ]))}
+        ${card('State backend',kv([
+          ['Backend',stateBackend.backend?esc(String(stateBackend.backend)):(cpModel.enabled?'<span class="faint">not reported</span>':'<span class="faint">not configured</span>')],
+          ['Location',stateBackend.path?esc(String(stateBackend.path)):'<span class="faint">not reported</span>'],
+          ['Checkpointing',cpModel.enabled?'<span class="pill">enabled</span>':'<span class="pill">disabled</span>'],
+          ['Source',esc(stateBackend.source)]
+        ]))}
+      </div>
+      ${card('Attempts','<table><thead><tr><th class="num">#</th><th>Status</th><th>Started</th><th>Stopped</th><th>Error</th></tr></thead><tbody>'+runRows+'</tbody></table>')}
+      ${card('Checkpoint history','<table><thead><tr><th>ID</th><th>Completed At</th><th>Age</th><th class="num">Duration</th><th class="num">Size</th><th>Status</th></tr></thead><tbody>'+cpRows+'</tbody></table>')}
+    </div></div>`;
 
+    const returnLabel=detailReturn==='sinks'?'Sinks':detailReturn==='pipeline'?'Pipeline':detailReturn==='reliability'?'Reliability':'Sources';
+    const returnPane=detailReturn==='sinks'?sinksPane:detailReturn==='pipeline'?pipelinePane:detailReturn==='reliability'?reliabilityPane:sourcesPane;
     app.innerHTML=`
-      <a class="back" href="#/sources" onclick="event.preventDefault();go('sources')">← Sources</a>
+      <a class="back" href="#/${esc(detailReturn)}" onclick="event.preventDefault();go('${esc(detailReturn)}')">← ${returnLabel}</a>
       <div class="row-head" style="margin:10px 0 18px">
         <div><h1>${esc(job.name)}</h1><div class="id" style="margin-top:3px">${esc(job.id)}</div></div>
         ${phaseEl(phase)} ${badge(job)} ${freshBadge}
@@ -1036,8 +1387,8 @@ function viewDetail(id){
         </div>
       </div>
       <div style="height:16px"></div>
-      ${sourcesPane}`;
-    if(detailTab!=='sources')detailTab='sources';
+      ${returnPane}`;
+    if(detailTab!==detailReturn)detailTab=detailReturn;
     switchTab(detailTab);
     const lg=document.getElementById('log');if(lg)lg.scrollTop=lg.scrollHeight;
   },2000);
@@ -1068,13 +1419,13 @@ async function doDeploy(){if(!canMutate()){document.getElementById('pv').innerHT
 
 function route(){
   refreshRole();
-  const h=location.hash.replace(/^#/,'')||'sources';
+  const h=location.hash.replace(/^#/,'')||'overview';
   if(h.startsWith('job/')){viewDetail(h.slice(4));return}
   setNav(h);
-  switch(h){case'sources':viewSources();break;default:go('sources');}
+  switch(h){case'overview':viewOverview();break;case'sources':detailReturn='sources';viewSources();break;case'sinks':detailReturn='sinks';viewSinks();break;case'pipeline':detailReturn='pipeline';viewPipeline();break;case'reliability':detailReturn='reliability';viewReliability();break;default:go('overview');}
 }
 window.addEventListener('hashchange',route);
-go('sources');
+go('overview');
 </script>
 </body>
 </html>
