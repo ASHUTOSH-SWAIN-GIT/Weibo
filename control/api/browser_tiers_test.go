@@ -80,13 +80,19 @@ func TestTier_BrowserDashboardLifecycle(t *testing.T) {
 	} else {
 		for _, want := range []string{
 			`<title>weibo</title>`, `id="app"`,
-			`data-r="overview"`, `data-pane="sources"`, `data-pane="operators"`,
-			`data-pane="sinks"`, `data-pane="runs"`,
-			`normalizeSources`, `normalizeSinks`, `normalizeStages`,
-			`normalizeOperators`, `deriveDelivery`,
+			`data-r="sources"`, `Sources`,
+			`normalizeSources`,
 		} {
 			if !strings.Contains(body, want) {
 				t.Errorf("dashboard missing %q", want)
+			}
+		}
+		for _, removed := range []string{
+			`data-r="overview"`, `data-r="job-manager"`, `data-r="running"`,
+			`data-r="completed"`, `data-r="submit"`,
+		} {
+			if strings.Contains(body, removed) {
+				t.Errorf("sources-only dashboard still exposes %q", removed)
 			}
 		}
 	}

@@ -74,43 +74,53 @@ func d9Submit(t *testing.T, srv *httptest.Server, body, ctype string) store.Job 
 	return job
 }
 
-// Overview renders: the fleet triage view the roadmap requires.
-func TestDashboard_OverviewRenders(t *testing.T) {
+// Sources renders: the dashboard is intentionally reduced to one visible
+// section while the source UX is designed.
+func TestDashboard_SourcesOnlyShellRenders(t *testing.T) {
 	srv := d9Server(t, api.AuthConfig{})
 	code, html := d9Get(t, srv.URL+"/")
 	if code != 200 {
 		t.Fatalf("GET /: got %d", code)
 	}
 	for _, want := range []string{
-		`id="app"`, `data-r="overview"`, `data-r="job-manager"`,
-		`data-r="running"`, `data-r="completed"`, `data-r="submit"`,
-		`Overview`, `Infrastructure`, `Fleet Throughput`, `Running Jobs`,
-		`bulkHistory`, `spark(`, `/config`, `lastRate`,
+		`id="app"`, `data-r="sources"`, `Sources`,
+		`Only source inventory is shown for now`,
+		`sourceRows`, `sourceFallback`, `normalizeSources`,
 	} {
 		if !strings.Contains(html, want) {
-			t.Errorf("overview shell missing %q", want)
+			t.Errorf("sources shell missing %q", want)
+		}
+	}
+	for _, removed := range []string{
+		`data-r="overview"`, `data-r="job-manager"`, `data-r="running"`,
+		`data-r="completed"`, `data-r="submit"`,
+	} {
+		if strings.Contains(html, removed) {
+			t.Errorf("sources-only dashboard still exposes %q", removed)
 		}
 	}
 }
 
-// Job detail tabs render: all eight panes plus the freshness indicator and
-// the pure normalization helpers rendering must consume.
-func TestDashboard_JobDetailTabsRender(t *testing.T) {
+// Job detail renders only source detail for now; the other panes stay out of
+// the visible UI until they are designed section-by-section.
+func TestDashboard_JobDetailSourcesOnly(t *testing.T) {
 	srv := d9Server(t, api.AuthConfig{})
 	_, html := d9Get(t, srv.URL+"/")
 	for _, want := range []string{
-		`data-pane="overview"`, `data-pane="sources"`, `data-pane="operators"`,
-		`data-pane="sinks"`, `data-pane="checkpoints"`, `data-pane="runs"`,
-		`data-pane="logs"`, `data-pane="spec"`,
-		`data-tab="overview"`, `data-tab="sources"`, `data-tab="operators"`,
-		`data-tab="sinks"`, `data-tab="checkpoints"`, `data-tab="runs"`,
-		`data-tab="logs"`, `data-tab="spec"`,
-		`switchTab`, `normalizeSources`, `normalizeSinks`, `normalizeStages`,
-		`normalizeOperators`, `normalizeCheckpoints`, `deriveDelivery`,
-		`freshness = fetch time`, `freshBadge`, `terminal — live data frozen`,
+		`data-pane="sources"`, `normalizeSources`,
+		`Source · Kafka`, `Source · File`,
 	} {
 		if !strings.Contains(html, want) {
-			t.Errorf("job detail shell missing %q", want)
+			t.Errorf("source detail shell missing %q", want)
+		}
+	}
+	for _, removed := range []string{
+		`data-tab="overview"`, `data-tab="operators"`, `data-tab="sinks"`,
+		`data-tab="checkpoints"`, `data-tab="runs"`, `data-tab="logs"`,
+		`data-tab="spec"`,
+	} {
+		if strings.Contains(html, removed) {
+			t.Errorf("source detail still exposes removed tab %q", removed)
 		}
 	}
 }

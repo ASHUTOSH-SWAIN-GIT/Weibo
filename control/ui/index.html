@@ -157,24 +157,20 @@
   .topline{margin:18px 0 0;padding:12px 0 0;height:auto;min-height:30px;justify-content:flex-start;align-items:center;flex-wrap:wrap;gap:8px 18px;background:transparent;border-top:1px solid var(--line);border-bottom:0}.tabs{margin-top:24px}.tab{padding:10px 2px;margin-right:24px}.tab.on{color:var(--fg);border-bottom-color:var(--fg)}
   .bar{height:5px;min-width:90px;border-radius:99px}.bar span{border-radius:99px;transition:width .35s ease}.usage{min-width:140px}.usage b{font-size:12px;font-weight:550}
   .infra-section{margin-top:30px}.section-head{display:flex;align-items:end;justify-content:space-between;margin-bottom:12px}.section-head h2{font-size:16px;margin:0;letter-spacing:-.02em}.section-head p{margin:0;color:var(--muted);font-size:12px}
+  .page-head{display:flex;justify-content:space-between;align-items:flex-end;gap:18px;margin-bottom:20px}.page-head .eyebrow{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--faint);margin-bottom:6px}.page-head .actions{display:flex;gap:8px;flex-wrap:wrap}
+  .fleet-strip{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));border-top:1px solid var(--line);border-bottom:1px solid var(--line);margin:18px 0 22px}.fleet-cell{padding:18px 20px;border-right:1px solid var(--line)}.fleet-cell:last-child{border-right:0}.fleet-cell .label{font-size:11px;color:var(--faint);text-transform:uppercase;letter-spacing:.04em}.fleet-cell .value{font-size:28px;font-weight:620;letter-spacing:-.035em;margin-top:5px}.fleet-cell .note{font-size:12px;color:var(--muted);margin-top:4px}.fleet-cell.primary .value{color:var(--accent)}
+  .job-name-line{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.job-route{color:var(--muted);font-size:12px;margin-top:4px}.job-route b{color:var(--fg);font-weight:550}
   .host-strip{display:grid;grid-template-columns:1.4fr repeat(4,1fr);border:1px solid var(--line);border-radius:12px;background:#fff;overflow:hidden}.host-cell{padding:20px;border-right:1px solid var(--line)}.host-cell:last-child{border:0}.host-cell .label{font-size:11px;color:var(--faint);text-transform:uppercase;letter-spacing:.04em}.host-cell .value{font-size:20px;font-weight:620;margin-top:7px;letter-spacing:-.025em}.host-cell .note{font-size:11px;color:var(--muted);margin-top:4px}
   .image-ref{font-family:var(--mono);font-size:11px;color:var(--muted);margin-top:3px;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .infra-table{overflow-x:auto;overscroll-behavior-inline:contain}.infra-table table{min-width:1180px}.infra-table th,.infra-table td{vertical-align:top}.infra-table td{overflow-wrap:anywhere}
-  @media(max-width:850px){:root{--side-w:0px}.side{position:static;width:auto;height:auto}.side-nav{display:flex;overflow:auto}.side-nav .sec{white-space:nowrap}.side-nav .sub,.side-foot{display:none!important}.main{margin:0;padding:28px 18px}.topline{margin-top:16px;padding-top:10px}.host-strip{grid-template-columns:1fr 1fr}.host-cell{border-bottom:1px solid var(--line)}.stats{grid-template-columns:1fr 1fr}}
+  @media(max-width:850px){:root{--side-w:0px}.side{position:static;width:auto;height:auto}.side-nav{display:flex;overflow:auto}.side-nav .sec{white-space:nowrap}.side-nav .sub,.side-foot{display:none!important}.main{margin:0;padding:28px 18px}.topline{margin-top:16px;padding-top:10px}.host-strip,.fleet-strip{grid-template-columns:1fr 1fr}.host-cell,.fleet-cell{border-bottom:1px solid var(--line)}.stats{grid-template-columns:1fr 1fr}.page-head{align-items:flex-start;flex-direction:column}}
 </style>
 </head>
 <body>
 <aside class="side">
   <div class="side-brand"><img src="/logo.png" alt="weibo" class="logo"><span class="txt">weibo</span></div>
   <nav class="side-nav" id="snav">
-    <div class="sec on" data-r="overview" onclick="go('overview')">Overview</div>
-    <div class="sec" data-r="job-manager" onclick="go('job-manager')">Infrastructure</div>
-    <div class="sec" data-r="jobs" onclick="go('running')"><span>Jobs</span><span class="arr">▶</span></div>
-    <div class="sub" data-r="jobs-sub">
-      <a data-r="running" onclick="go('running')">Active</a>
-      <a data-r="completed" onclick="go('completed')">History</a>
-    </div>
-    <div class="sec" data-r="submit" onclick="go('submit')">Deploy</div>
+    <div class="sec on" data-r="sources" onclick="go('sources')">Sources</div>
   </nav>
   <div class="side-foot" id="conn"><span class="c-dot"></span><span id="connt">—</span></div>
 </aside>
@@ -603,6 +599,65 @@ function viewJobManager(){
   },3000);
 }
 
+function pageHead(kicker,title,sub,actions){
+  return `<div class="page-head"><div><div class="eyebrow">${esc(kicker)}</div><h1>${esc(title)}</h1>${sub?`<div class="sub">${esc(sub)}</div>`:''}</div><div class="actions">${actions||''}</div></div>`;
+}
+function fleetStrip(items){
+  return `<div class="fleet-strip">${items.map((it,i)=>`<div class="fleet-cell ${i===0?'primary':''}"><div class="label">${esc(it.label)}</div><div class="value">${it.value}</div>${it.note?`<div class="note">${esc(it.note)}</div>`:''}</div>`).join('')}</div>`;
+}
+function jobRows(jobs,opts){
+  opts=opts||{};const cols=opts.cols||['createdAt','phase'];
+  if(!jobs.length)return `<tr><td colspan="${cols.length+1}" class="dim">${esc(opts.empty||'No jobs.')}</td></tr>`;
+  return jobs.map(j=>{
+    const cells=cols.map(c=>{
+      if(c==='phase')return `<td>${phaseEl(j.phase)}</td>`;
+      if(c==='kind')return `<td>${badge(j)||'<span class="faint">yaml</span>'}</td>`;
+      if(c==='updatedAt')return `<td class="dim">${esc(fmtTime(j.updatedAt))}</td>`;
+      if(c==='trend')return `<td>${opts.trend?opts.trend(j):'<span class="faint">—</span>'}</td>`;
+      return `<td class="dim">${esc(fmtTime(j.createdAt))}</td>`;
+    }).join('');
+    const route=opts.route||'overview';
+    return `<tr class="row" onclick="go('${esc(route)}','${esc(j.id)}')"><td class="name"><div class="job-name-line">${esc(j.name)} ${badge(j)}</div><div class="job-route"><b>${esc(j.id)}</b>${j.delivery?' · '+esc(j.delivery):''}</div></td>${cells}</tr>`;
+  }).join('');
+}
+function jobsTable(title,jobs,headers,opts){
+  return card(title,`<table><thead><tr><th>Job</th>${headers.map(h=>`<th>${esc(h)}</th>`).join('')}</tr></thead><tbody>${jobRows(jobs,opts)}</tbody></table>`);
+}
+
+function sourceFallback(job){
+  const graph=job&&job.graph?job.graph:{};
+  const src=graph.Source||graph.source||'not reported';
+  const kind=job&&job.kind==='sdk'?'SDK image':'Workflow spec';
+  return{identity:src,type:src,kind,detail:'Static metadata; live source details appear when the job is running.',status:String(job&&job.phase||'unknown')};
+}
+function sourceRows(jobs){
+  if(!jobs.length)return'<tr><td colspan="5" class="dim">No jobs yet. Sources will appear after you deploy a job.</td></tr>';
+  return jobs.map(j=>{
+    const s=sourceFallback(j);
+    return `<tr class="row" onclick="go('sources','${esc(j.id)}')">
+      <td class="name"><div class="job-name-line">${esc(j.name)} ${badge(j)}</div><div class="job-route"><b>${esc(j.id)}</b></div></td>
+      <td><span class="pill">${esc(s.type)}</span></td>
+      <td class="dim">${esc(s.kind)}</td>
+      <td class="dim">${esc(s.detail)}</td>
+      <td>${phaseEl(s.status)}</td>
+    </tr>`;
+  }).join('');
+}
+function viewSources(){
+  setNav('sources');
+  poll(async()=>{
+    let d;try{d=await api.jobs()}catch(e){setConn(false);app.innerHTML='<div class="empty">Controller unreachable.</div>';return}
+    setConn(true);
+    const jobs=d.jobs||[];
+    app.innerHTML=`
+      ${pageHead('Dashboard','Sources','Only source inventory is shown for now. We will design this section first.','')}
+      <div class="card">
+        <div class="hd">Sources <span class="r">${fmtN(jobs.length)} job${jobs.length===1?'':'s'}</span></div>
+        <table><thead><tr><th>Job</th><th>Source</th><th>Origin</th><th>Detail</th><th>Status</th></tr></thead><tbody>${sourceRows(jobs)}</tbody></table>
+      </div>`;
+  },3000);
+}
+
 /* ---- Overview ---- */
 function viewOverview(){
   setNav('overview');
@@ -612,7 +667,7 @@ function viewOverview(){
     const n={total:jobs.length,running:0,finished:0,failed:0,cancelled:0};
     jobs.forEach(j=>{const p=ph(j);if(p==='running')n.running++;else if(p==='finished')n.finished++;else if(p==='failed')n.failed++;else if(p==='cancelled')n.cancelled++});
 
-    if(!jobs.length){app.innerHTML=`<h1>Overview</h1><div class="card" style="margin-top:18px"><div class="empty">No jobs yet.<br><br><a href="#/submit" style="color:var(--accent);cursor:pointer" onclick="event.preventDefault();go('submit')">Submit one →</a></div></div>`;return}
+    if(!jobs.length){app.innerHTML=pageHead('Control plane','Overview','No jobs have been submitted yet.',`<button class="btn pri" onclick="go('submit')">Deploy job</button>`)+`<div class="card"><div class="empty">No jobs yet.<br><br><a href="#/submit" style="color:var(--accent);cursor:pointer" onclick="event.preventDefault();go('submit')">Submit one →</a></div></div>`;return}
 
     // Fleet throughput: sum of each job's latest per-second out-rate.
     const bulk=await api.bulkHistory();const hist=(bulk&&bulk.histories)||{};
@@ -623,16 +678,17 @@ function viewOverview(){
     const completed=jobs.filter(j=>isTerm(ph(j))).slice(-8).reverse();
 
     app.innerHTML=`
-      <h1>Overview</h1>
-      <div class="stats" style="margin:18px 0 20px">
-        ${tile('Running Jobs',fmtN(n.running),n.running?'g':'')}
-        ${tile('Fleet Throughput',fmtRate(fleet),fleet?'b':'')}
-        ${tile('Finished',fmtN(n.finished),'b')}
-        ${tile('Failed',fmtN(n.failed),n.failed?'r':'')}
-      </div>
-      ${card(running.length?'Running Jobs':'Running Jobs','<table><thead><tr><th>Job Name</th><th>Start Time</th><th>Duration</th><th>Status</th><th>Trend · out/s</th></tr></thead><tbody>'+(running.length?running.map(j=>`<tr class="row" onclick="go('overview','${esc(j.id)}')"><td class="name">${esc(j.name)}<div class="id" style="margin-top:1px">${esc(j.id)}</div></td><td class="dim">${esc(fmtTime(j.createdAt))}</td><td class="dim">—</td><td>${phaseEl(j.phase)}</td><td>${trend(j)}</td></tr>`).join(''):'<tr><td colspan="5" class="dim">No running jobs.</td></tr>')+'</tbody></table>')}
+      ${pageHead('Control plane','Overview','Fleet health, throughput, and recent job activity.',`<button class="btn" onclick="go('running')">Active</button><button class="btn" onclick="go('completed')">History</button><button class="btn pri" onclick="go('submit')">Deploy job</button>`)}
+      ${fleetStrip([
+        {label:'Running Jobs',value:fmtN(n.running),note:n.total+' total jobs'},
+        {label:'Fleet Throughput',value:fmtRate(fleet),note:'records out / sec'},
+        {label:'Finished',value:fmtN(n.finished),note:'terminal success'},
+        {label:'Failed',value:fmtN(n.failed),note:'needs inspection'},
+        {label:'Cancelled',value:fmtN(n.cancelled),note:'user stopped'},
+      ])}
+      ${jobsTable('Running Jobs',running,['Start time','Status','Trend · out/s'],{cols:['createdAt','phase','trend'],trend,empty:'No running jobs.'})}
       <div style="margin-top:14px">
-      ${card(completed.length?'Completed Jobs':'Completed Jobs','<table><thead><tr><th>Job Name</th><th>Start Time</th><th>End Time</th><th>Status</th></tr></thead><tbody>'+(completed.length?completed.map(j=>`<tr class="row" onclick="go('overview','${esc(j.id)}')"><td class="name">${esc(j.name)}<div class="id" style="margin-top:1px">${esc(j.id)}</div></td><td class="dim">${esc(fmtTime(j.createdAt))}</td><td class="dim">${esc(fmtTime(j.updatedAt))}</td><td>${phaseEl(j.phase)}</td></tr>`).join(''):'<tr><td colspan="4" class="dim">No completed jobs.</td></tr>')+'</tbody></table>')}
+      ${jobsTable('Completed Jobs',completed,['Start time','End time','Status'],{cols:['createdAt','updatedAt','phase'],empty:'No completed jobs yet.'})}
       </div>`;
   },3000);
 }
@@ -650,9 +706,10 @@ function viewRunning(){
   poll(async()=>{
     let d;try{d=await api.jobs()}catch(e){setConn(false);app.innerHTML='<div class="empty">Controller unreachable.</div>';return}
     setConn(true);const jobs=(d.jobs||[]).filter(j=>String(j.phase||'').toLowerCase()==='running');
-    const rows=jobs.map(j=>'<tr class="row" onclick="go(\'running\',\''+esc(j.id)+'\')"><td class="name">'+esc(j.name)+'<div class="id" style="margin-top:1px">'+esc(j.id)+'</div></td><td class="dim">'+esc(fmtTime(j.createdAt))+'</td><td class="dim">—</td><td>'+phaseEl(j.phase)+'</td></tr>').join('');
-    if(!jobs.length){app.innerHTML='<h1>Running Jobs</h1><div class="card" style="margin-top:18px"><div class="empty">No jobs running.<br><br><a href="#/submit" style="color:var(--accent);cursor:pointer" onclick="event.preventDefault();go(\'submit\')">Submit one →</a></div></div>';return}
-    app.innerHTML='<h1>Running Jobs</h1><div class="sub" style="margin-bottom:16px">'+jobs.length+' job'+(jobs.length!==1?'s':'')+' running</div>'+card('Jobs','<table><thead><tr><th>Job Name</th><th>Start Time</th><th>Duration</th><th>Status</th></tr></thead><tbody>'+rows+'</tbody></table>');
+    if(!jobs.length){app.innerHTML=pageHead('Jobs','Active','No jobs are currently running.',`<button class="btn pri" onclick="go('submit')">Deploy job</button>`)+`<div class="card"><div class="empty">No jobs running.<br><br><a href="#/submit" style="color:var(--accent);cursor:pointer" onclick="event.preventDefault();go('submit')">Submit one →</a></div></div>`;return}
+    app.innerHTML=pageHead('Jobs','Active',jobs.length+' job'+(jobs.length!==1?'s':'')+' running now.',`<button class="btn" onclick="go('overview')">Overview</button><button class="btn pri" onclick="go('submit')">Deploy job</button>`)
+      +fleetStrip([{label:'Running',value:fmtN(jobs.length),note:'live jobs'},{label:'SDK',value:fmtN(jobs.filter(j=>j.kind==='sdk').length),note:'prebuilt images'},{label:'YAML',value:fmtN(jobs.filter(j=>j.kind!=='sdk').length),note:'workflow specs'},{label:'Exactly-once',value:fmtN(jobs.filter(j=>String(j.delivery||'').indexOf('exactly')>=0).length),note:'declared delivery'}])
+      +jobsTable('Active jobs',jobs,['Start time','Type','Status'],{route:'running',cols:['createdAt','kind','phase'],empty:'No running jobs.'});
   },3000);
 }
 function viewCompleted(){
@@ -661,9 +718,10 @@ function viewCompleted(){
     let d;try{d=await api.jobs()}catch(e){setConn(false);app.innerHTML='<div class="empty">Controller unreachable.</div>';return}
     setConn(true);const jobs=(d.jobs||[]).filter(j=>isTerm(String(j.phase||'')));
     const n=jobs.length,fin=jobs.filter(j=>String(j.phase||'').toLowerCase()==='finished').length,fail=jobs.filter(j=>String(j.phase||'').toLowerCase()==='failed').length;
-    const rows=jobs.map(j=>'<tr class="row" onclick="go(\'completed\',\''+esc(j.id)+'\')"><td class="name">'+esc(j.name)+'<div class="id" style="margin-top:1px">'+esc(j.id)+'</div></td><td class="dim">'+esc(fmtTime(j.createdAt))+'</td><td class="dim">'+esc(fmtTime(j.updatedAt))+'</td><td>'+phaseEl(j.phase)+'</td></tr>').join('');
-    if(!jobs.length){app.innerHTML='<h1>Completed Jobs</h1><div class="card" style="margin-top:18px"><div class="empty">No completed jobs yet.</div></div>';return}
-    app.innerHTML='<h1>Completed Jobs</h1><div class="stats" style="margin:14px 0 18px">'+tile('Finished',fmtN(fin),'b')+tile('Failed',fmtN(fail),fail?'r':'')+'</div>'+card('Jobs','<table><thead><tr><th>Job Name</th><th>Start Time</th><th>End Time</th><th>Status</th></tr></thead><tbody>'+rows+'</tbody></table>');
+    if(!jobs.length){app.innerHTML=pageHead('Jobs','History','Terminal jobs appear here.',`<button class="btn" onclick="go('overview')">Overview</button>`)+`<div class="card"><div class="empty">No completed jobs yet.</div></div>`;return}
+    app.innerHTML=pageHead('Jobs','History','Finished, failed, and cancelled jobs with their final state.',`<button class="btn" onclick="go('overview')">Overview</button><button class="btn pri" onclick="go('submit')">Deploy job</button>`)
+      +fleetStrip([{label:'Completed Jobs',value:fmtN(n),note:'terminal total'},{label:'Finished',value:fmtN(fin),note:'successful'},{label:'Failed',value:fmtN(fail),note:'needs inspection'},{label:'Cancelled',value:fmtN(jobs.filter(j=>String(j.phase||'').toLowerCase()==='cancelled').length),note:'user stopped'}])
+      +jobsTable('Job history',jobs,['Start time','End time','Status'],{route:'completed',cols:['createdAt','updatedAt','phase'],empty:'No completed jobs yet.'});
   },3000);
 }
 
@@ -738,6 +796,7 @@ function switchTab(tab){
 }
 function viewDetail(id){
   setNav(null);
+  detailTab='sources';
   poll(async()=>{
     let d;try{d=await api.job(id)}catch(e){setConn(false);app.innerHTML='<div class="empty">Job not found.</div>';stopPoll();return}
     if(d.error){app.innerHTML=`<div class="err">${esc(d.error)}</div>`;stopPoll();return}
@@ -965,7 +1024,7 @@ function viewDetail(id){
       </div>`;
 
     app.innerHTML=`
-      <a class="back" href="#/overview" onclick="event.preventDefault();go('overview')">← Jobs</a>
+      <a class="back" href="#/sources" onclick="event.preventDefault();go('sources')">← Sources</a>
       <div class="row-head" style="margin:10px 0 18px">
         <div><h1>${esc(job.name)}</h1><div class="id" style="margin-top:3px">${esc(job.id)}</div></div>
         ${phaseEl(phase)} ${badge(job)} ${freshBadge}
@@ -976,19 +1035,9 @@ function viewDetail(id){
           <button class="btn danger" ${term?'disabled':''} ${mutAttr()} onclick="doCancel('${esc(id)}')">Cancel</button>
         </div>
       </div>
-      ${metaGrid}
-      <div class="tabs">
-        <button class="tab ${detailTab==='overview'?'on':''}" data-tab="overview" onclick="switchTab('overview')">Overview</button>
-        <button class="tab ${detailTab==='sources'?'on':''}" data-tab="sources" onclick="switchTab('sources')">Sources</button>
-        <button class="tab ${detailTab==='operators'?'on':''}" data-tab="operators" onclick="switchTab('operators')">Operators</button>
-        <button class="tab ${detailTab==='sinks'?'on':''}" data-tab="sinks" onclick="switchTab('sinks')">Sinks</button>
-        <button class="tab ${detailTab==='checkpoints'?'on':''}" data-tab="checkpoints" onclick="switchTab('checkpoints')">Checkpoints</button>
-        <button class="tab ${detailTab==='runs'?'on':''}" data-tab="runs" onclick="switchTab('runs')">Runs</button>
-        <button class="tab ${detailTab==='logs'?'on':''}" data-tab="logs" onclick="switchTab('logs')">Logs</button>
-        <button class="tab ${detailTab==='spec'?'on':''}" data-tab="spec" onclick="switchTab('spec')">Spec</button>
-      </div>
-      ${overviewPane}${sourcesPane}${operatorsPane}${sinksPane}${checkpointsPane}${runsPane}${logsPane}${specPane}`;
-    if(detailTab==='metrics')detailTab='operators';
+      <div style="height:16px"></div>
+      ${sourcesPane}`;
+    if(detailTab!=='sources')detailTab='sources';
     switchTab(detailTab);
     const lg=document.getElementById('log');if(lg)lg.scrollTop=lg.scrollHeight;
   },2000);
@@ -1015,17 +1064,17 @@ resources:
     </div>
     <div id="pv" style="margin-top:14px"></div>`;
 }
-async function doDeploy(){if(!canMutate()){document.getElementById('pv').innerHTML=`<div class="err">Read-only token cannot deploy jobs.</div>`;return}const wf=document.getElementById('wf').value;const r=await api.submit({workflow:wf});const j=await r.json();if(!r.ok){document.getElementById('pv').innerHTML=`<div class="err">${esc(j.error||'Submit failed.')}</div>`;return}const id=(j.job&&j.job.id)||j.id;go('overview',id)}
+async function doDeploy(){if(!canMutate()){document.getElementById('pv').innerHTML=`<div class="err">Read-only token cannot deploy jobs.</div>`;return}const wf=document.getElementById('wf').value;const r=await api.submit({workflow:wf});const j=await r.json();if(!r.ok){document.getElementById('pv').innerHTML=`<div class="err">${esc(j.error||'Submit failed.')}</div>`;return}const id=(j.job&&j.job.id)||j.id;go('sources',id)}
 
 function route(){
   refreshRole();
-  const h=location.hash.replace(/^#/,'')||'overview';
+  const h=location.hash.replace(/^#/,'')||'sources';
   if(h.startsWith('job/')){viewDetail(h.slice(4));return}
   setNav(h);
-  switch(h){case'overview':viewOverview();break;case'job-manager':viewJobManager();break;case'running':viewRunning();break;case'completed':viewCompleted();break;case'submit':viewSubmit();break;default:go('overview');}
+  switch(h){case'sources':viewSources();break;default:go('sources');}
 }
 window.addEventListener('hashchange',route);
-go('overview');toggleJobs();
+go('sources');
 </script>
 </body>
 </html>
