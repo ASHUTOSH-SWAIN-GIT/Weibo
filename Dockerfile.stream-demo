@@ -1,0 +1,29 @@
+# Streaming demo job image: a continuously-running SDK pipeline used to
+# exercise the control-plane dashboard end to end. Built from the repo root
+# so it compiles against this checkout.
+#
+#   docker build -f Dockerfile.stream-demo -t weibo-stream-demo:dev .
+
+FROM golang:1.26 AS build
+WORKDIR /src
+
+COPY go.mod go.sum ./
+COPY telemetry/go.mod telemetry/go.sum ./telemetry/
+RUN go mod download
+
+COPY . .
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" \
+    -o /out/job ./examples/stream-demo
+RUN mkdir -p /out/data /out/savepoints
+
+FROM gcr.io/distroless/static-debian12:nonroot
+COPY --from=build /out/job /usr/local/bin/job
+COPY --from=build --chown=65532:65532 /out/data /data
+COPY --from=build --chown=65532:65532 /out/savepoints /savepoints
+ENV DATA_DIR=/data \
+    SAVEPOINT_DIR=/savepoints \
+    PORT=8080
+VOLUME ["/data", "/savepoints"]
+EXPOSE 8080
+USER nonroot:nonroot
+ENTRYPOINT ["/usr/local/bin/job"]

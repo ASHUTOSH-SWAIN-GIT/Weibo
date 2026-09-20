@@ -21,8 +21,8 @@ unless a later phase explicitly justifies splitting files.
   diagnostics. If data is missing, show "not reported" instead of guessing.
 - **Minimal visual language.** Neutral dark UI, restrained color, compact cards,
   dense tables, no novelty charts unless they clarify state.
-- **Sections mirror the runtime.** Sources, operators/stages, sinks,
-  checkpoints/state, runs/lifecycle, logs/diagnostics.
+- **Sections mirror the operator's question.** Overview, Sources, Pipeline,
+  Sinks, and Reliability — not every internal subsystem as its own page.
 - **Progressive detail.** The first screen shows health and bottleneck hints; the
   detail page expands exact source/sink/operator data.
 - **Stable for operators.** Avoid noisy reflow while polling. Preserve selected
@@ -36,14 +36,14 @@ unless a later phase explicitly justifies splitting files.
 
 ## Current state
 
-The dashboard already provides:
+The dashboard currently provides:
 
 - Embedded plain-JS SPA in `control/ui/index.html`.
-- Routes: overview, infrastructure, running, completed, submit, job detail.
-- Job metadata/action strip.
-- Inline SVG pipeline graph.
-- Metrics tab with stage/operator tables parsed from Prometheus text.
-- Checkpoints, runs, logs, spec, diagnostics.
+- A deliberately reduced visible route: Sources.
+- Source list and source detail as the first section-design pass.
+- Existing normalization helpers in code for sources, sinks, stages/operators,
+  checkpoints, and delivery derivation; these will be reused as sections are
+  reintroduced.
 - API routes already available:
   - `GET /jobs`
   - `GET /jobs/{id}`
@@ -58,282 +58,283 @@ The dashboard already provides:
 
 Known gaps:
 
-- Source/sink/operator data is scattered across Pipeline, Metrics, and State.
-- Graph is visually useful but not operationally rich.
-- Metrics parsing is ad hoc and lacks an explicit "freshness" or source
-  attribution model.
-- Operator/stage/backpressure/state are not presented as one coherent runtime
-  picture.
-- Sources are Kafka-biased; file/slice/generator and future connectors need a
-  generic model.
-- Sinks are underrepresented; delivery semantics and error/retry behavior should
-  be visible.
+- Sources is still only a first draft and needs focused design.
+- Sinks is not visible yet.
+- Pipeline needs to combine logical operators and runtime stages into one view.
+- Reliability needs to group checkpoints, runs, diagnostics, and logs.
+- Overview should be rebuilt last from summaries of the other sections.
 
 ---
 
 ## Target information architecture
 
-### 1. Fleet overview
+The dashboard should answer one operator question first:
 
-Purpose: fast triage across all jobs.
+> What is happening in my streaming system right now, and where is the problem?
+
+Use five sections only:
+
+```text
+Overview
+Sources
+Pipeline
+Sinks
+Reliability
+```
+
+The global dashboard and job detail view should use the same model. When a user
+clicks a job, the detail tabs should be:
+
+```text
+Overview | Sources | Pipeline | Sinks | Reliability
+```
+
+Avoid exposing implementation boundaries as top-level UI. Operators, stages,
+checkpoints, runs, diagnostics, logs, spec, infrastructure, and deploy are
+important capabilities, but they should be grouped under the five sections
+unless a later design pass proves they deserve their own surface.
+
+### 1. Overview
+
+Purpose: quick health check.
+
+Show only what helps triage:
+
+- running jobs;
+- failed jobs;
+- fleet throughput;
+- total source lag;
+- jobs needing attention;
+- compact jobs table:
+  - job name;
+  - status;
+  - source → sink;
+  - records/sec;
+  - lag;
+  - last checkpoint age.
+
+Answers:
+
+- Is the system healthy?
+- Is data flowing?
+- Which job needs attention first?
+
+Accuracy rules:
+
+- Phase comes from controller run/job state.
+- Throughput comes from history points or Prometheus counter deltas.
+- Never invent rates from total counters without timestamps.
+- If source/sink summary is unavailable until a job starts, display "pending
+  describe".
+
+### 2. Sources
+
+Purpose: understand where data enters Weibo.
 
 Show:
 
-- Header stats: running, failed, finished, cancelled, restarting, total.
-- Throughput total: latest fleet records/sec from `/jobs/history`.
-- Attention list:
-  - failed jobs;
-  - running jobs with source lag growing;
-  - jobs with sink errors;
-  - jobs with checkpoint age above threshold;
-  - jobs with no metrics heartbeat.
-- Jobs table:
-  - name/id;
-  - phase;
-  - kind/delivery;
-  - source → sink summary;
-  - records out/sec;
-  - latest checkpoint age;
-  - last updated.
+- source type: Kafka, file, generator, slice, custom SDK, unknown;
+- source identity:
+  - Kafka topic/group;
+  - file path/basename;
+  - generator/source name;
+- read rate;
+- current offset/position;
+- checkpointed offset/position;
+- lag;
+- source errors/deserialization errors;
+- whether the source participates in checkpointing.
 
-Accuracy rules:
+For Kafka, show partition detail only after expanding or selecting the source.
 
-- Phase comes from controller run/job state, not CSS-only interpretation.
-- Throughput comes from history points or Prometheus counter delta; never invent
-  rates from total counters without timestamps.
-- If source/sink summary is unavailable until job starts, display "pending
-  describe".
+Answers:
 
-### 2. Job detail overview
-
-Purpose: one screen for "what is this job doing?"
-
-Sections:
-
-- **Status strip**
-  - phase;
-  - attempt;
-  - uptime;
-  - delivery guarantee;
-  - latest checkpoint;
-  - metrics freshness;
-  - action buttons.
-- **Dataflow summary**
-  - source cards on the left;
-  - operator/stage path in the middle;
-  - sink cards on the right;
-  - minimal arrows; compact labels.
-- **Health summary**
-  - source lag;
-  - records in/out rate;
-  - failed records;
-  - sink errors;
-  - checkpoint age;
-  - restart count;
-  - diagnostics severity.
-- **Recent events**
-  - lifecycle transitions;
-  - latest diagnostics;
-  - latest checkpoint;
-  - latest error log excerpt.
-
-Accuracy rules:
-
-- Metrics freshness must be based on fetch time + successful parse time.
-- If a job is terminal, freeze live sections and prefer latest run snapshots/logs
-  when available.
-
-### 3. Sources section
-
-Purpose: explain ingress and read progress.
-
-For every source, show:
-
-- connector type: Kafka, file, slice, generator, custom SDK, unknown;
-- identity: topic(s), file path/basename, source name, or logical source ID;
-- delivery capability:
-  - checkpoint offsets;
-  - positioned checkpoints;
-  - external offset commit;
-  - operational state available;
-- current position:
-  - Kafka: topic, partition, current offset, checkpoint offset, high watermark,
-    lag;
-  - file: source name, next line/offset when reported;
-  - custom: display reported fields only;
-- read rate and records emitted;
-- source errors/deserialization failures;
-- watermark status when available:
-  - latest watermark;
-  - idle or active;
-  - max out-of-orderness when described.
+- Are we reading correctly?
+- Are we falling behind at ingress?
+- Do we have enough source state for recovery?
 
 Data sources:
 
 - `/describe` for static connector metadata.
 - `/state` for operational state and checkpoint progress.
 - `/metrics` for rates/errors.
-- `/plan` for source/stage mapping when available.
+- `/plan` only when needed to map source to runtime stage.
 
 Implementation notes:
 
-- Build a connector-normalization layer in JS:
-  `normalizeSources(job, describe, plan, state, metrics)`.
-- Avoid Kafka-only table titles. Use generic "Source progress"; render Kafka
-  partition table only for Kafka.
+- Keep `normalizeSources(job, describe, plan, state, metrics)` as the main data
+  boundary.
+- Avoid Kafka-only labels in the generic UI.
 - Show "source does not expose progress" for connectors without operational
   state.
 
-### 4. Operators section
+### 3. Pipeline
 
-Purpose: make transformations and bottlenecks inspectable.
+Purpose: understand what happens between source and sink.
 
-Show two views:
+This combines the old Operators and Runtime Stages ideas. The UI should explain
+the processing path without forcing the user to understand internal scheduler
+objects first.
 
-1. **Logical operators**
-   - ID/label;
-   - type: map, filter, flatMap, process, keyBy, reduce, window, join,
-     keyedProcess, custom;
-   - parallelism/partitions;
-   - records processed;
-   - failures/DLQ count when available;
-   - stateful yes/no;
-   - checkpoint participation.
+Show:
 
-2. **Runtime stages**
-   - stage ID;
-   - type: source/stateless/keyed/sink/join;
-   - records in/out;
-   - worker count;
-   - send-block seconds;
-   - edge queue size/capacity before/after;
-   - bottleneck badge when queue stays high or send-block increases.
+- logical operators:
+  - map;
+  - filter;
+  - flatMap/process;
+  - keyBy;
+  - window;
+  - reduce;
+  - join;
+  - custom;
+- runtime stages:
+  - stage name;
+  - stage type;
+  - workers;
+  - records in/out;
+  - queue size/capacity;
+  - send-block time;
+- backpressure indicators;
+- stateful operator indicators;
+- checkpoint participation when exposed.
+
+Answers:
+
+- Where is processing slow?
+- Which operation is stateful?
+- Which stage or edge is causing backpressure?
 
 Data sources:
 
-- `/plan` for runtime stage layout.
-- `/describe` for logical graph.
-- `/metrics` for operator/stage counters.
-- `/state` for state/checkpoint info where exposed.
+- `/describe` for logical graph/operators.
+- `/plan` for runtime stages/edges.
+- `/metrics` for operator/stage counters and queue/send-block metrics.
+- `/state` for checkpoint/state participation when exposed.
 
 Accuracy rules:
 
-- Do not equate logical operators with runtime stages. Show both because one
-  stage can contain multiple stateless operators.
+- Do not conflate logical operators with runtime stages.
 - Counter totals are totals; rates require history/delta.
-- Use exact Prometheus labels; if labels change, render "metric unavailable" not
-  zero.
+- If metric labels change, render "metric unavailable" instead of zero.
 
-### 5. Sinks section
+### 4. Sinks
 
-Purpose: explain egress, write progress, and delivery semantics.
+Purpose: understand where data leaves Weibo.
 
-For every sink, show:
+Show:
 
-- connector type: Kafka, transactional Kafka, Postgres, HTTP, S3, file, stdout,
+- sink type: Kafka, transactional Kafka, file, Postgres, HTTP, S3, stdout,
   blackhole, custom SDK, unknown;
-- destination identity:
+- destination:
   - Kafka topic;
-  - Postgres table;
-  - HTTP URL host/path with query redacted;
-  - S3 bucket/prefix;
+  - table;
+  - URL host/path with query redacted;
+  - bucket/path;
   - file path/basename;
-  - stdout/blackhole;
-- delivery guarantee:
-  - exactly-once coordinated;
-  - at-least-once;
-  - at-most-once/no checkpointing;
-- batching/retry config when described;
 - records written;
 - sink errors;
-- last successful flush/commit when available;
-- transactional state for `TxnKafkaSink`:
-  - transaction ID;
-  - marker topic;
-  - prepared/committed checkpoint status if exposed.
+- delivery guarantee:
+  - at-most-once;
+  - at-least-once;
+  - exactly-once;
+- transaction/checkpoint participation when relevant.
+
+Answers:
+
+- Are we writing correctly?
+- Is the sink failing?
+- What delivery guarantee actually applies?
 
 Data sources:
 
 - `/describe` for static sink metadata.
 - `/metrics` for records/errors.
-- `/state` and checkpoint state for transactional/checkpoint information.
+- `/state` and checkpoint state for transactional/checkpoint detail.
 
 Accuracy rules:
 
 - Delivery guarantee is derived from actual source/sink capabilities and
   checkpointing config, not from connector names alone.
-- If transactional sink metadata is missing, show "coordinated sink detected;
+- If transactional metadata is missing, show "coordinated sink detected;
   transaction detail unavailable".
 
-### 6. Checkpoints & state section
+### 5. Reliability
 
-Purpose: make fault tolerance understandable.
+Purpose: debug and recover.
 
-Show:
-
-- checkpointing enabled/disabled;
-- interval;
-- storage backend/path/bucket where safe;
-- state backend: memory/Pebble/custom;
-- latest completed checkpoint ID/time/age;
-- in-progress/prepared checkpoint if exposed;
-- checkpoint history table;
-- source positions stored in latest checkpoint;
-- operator/native state backend summary when available;
-- savepoint actions and restart-from-savepoint path.
-
-Accuracy rules:
-
-- "Healthy checkpointing" requires a recent completed checkpoint for running
-  jobs with checkpointing enabled; otherwise show stale/disabled explicitly.
-- Never show "exactly-once" unless a coordinated sink and checkpointing are both
-  actually configured.
-
-### 7. Runs, lifecycle, and diagnostics
-
-Purpose: debug lifecycle issues.
+This combines the old Checkpoints, Runs, Diagnostics, and Logs sections. Those
+are all reliability concerns, so keep them together until the UI proves a split
+is necessary.
 
 Show:
 
-- attempt list with start/stop time, phase, error.
-- transition log with reason and actor if available.
-- diagnostics grouped by severity:
-  - validation;
-  - backend launch;
-  - runtime;
-  - resource cleanup;
-  - API/proxy.
-- restart policy and next restart countdown when available.
+- current job state;
+- latest checkpoint;
+- checkpoint age;
+- checkpoint history;
+- savepoint action;
+- restart from checkpoint/savepoint;
+- attempts/runs;
+- lifecycle transitions;
+- failure reason;
+- logs;
+- restart countdown when available.
+
+Answers:
+
+- If something broke, why?
+- What happened before the failure?
+- Can I recover from a checkpoint or savepoint?
+
+Data sources:
+
+- `/state` for checkpoint state.
+- `/diagnostics` for grouped failure/activity/restart/checkpoint status.
+- `/runs` and `/runs/{runId}` for attempt history.
+- `/transitions` for lifecycle audit.
+- `/logs`, `/logs/stream`, and `/runs/{runId}/logs` for logs.
 
 Accuracy rules:
 
-- Attempt details should come from `/runs`, not reconstructed from current job.
-- Transition order must be monotonic by server timestamp.
-
-### 8. Logs section
-
-Purpose: low-friction debugging.
-
-Show:
-
-- current run logs by default;
-- previous run selector;
-- follow/pause;
-- tail size selector: 100/200/500/1000;
-- copy button;
-- error highlighting that is purely visual and never hides lines.
-
-Accuracy rules:
-
+- Attempt details come from `/runs`, not reconstructed from the current job.
+- Terminal jobs should not poll live-agent endpoints forever.
 - Streaming logs must use bearer auth.
-- If logs are unavailable because the backend removed the resource, show the
-  stored run log route when available.
+- If logs are unavailable because the backend removed the resource, say that
+  clearly.
+
+---
+
+## Current section-by-section build plan
+
+The current product direction is intentionally simpler than the earlier
+eight-pane prototype. Treat the older D-phases below as data/model groundwork,
+not the final navigation.
+
+Build in this order:
+
+1. **Sources** — ✅ live inventory pass complete; visible section.
+2. **Sinks** — ✅ live inventory and delivery guarantee pass complete; visible section.
+3. **Pipeline** — ✅ live operator/stage/backpressure pass complete; visible section.
+4. **Reliability** — ✅ checkpoint/run/diagnostic recovery pass complete; visible section.
+5. **Overview** — ✅ default fleet summary rebuilt from section summaries.
+
+Each section should be designed, implemented, and tested before the next section
+is exposed in navigation. Dashboard revamp is complete; remaining work is
+validation/polish only.
 
 ---
 
 ## Data-contract roadmap
 
-### Phase D1 — Inventory the current truth sources
+### Phase D1 — Inventory the current truth sources — ✅ DONE
+
+Status:
+
+- Added `docs/dashboard-data-contract.md` with endpoint-by-endpoint source of
+  truth, key fields, dashboard use, and missing-data behavior.
+- D9 accuracy tests now cover the contract surfaces that matter for the
+  dashboard: app shell, tabs, live-agent degradation, source/sink/operator
+  hooks, auth roles, and secret redaction.
 
 Deliverables:
 
@@ -393,9 +394,11 @@ Exit criteria:
 
 Status:
 
-- Job detail is split into Overview, Sources, Operators, Sinks, Checkpoints,
-  Runs, Logs, and Spec tabs.
-- Header includes a freshness badge based on live fetch/parse results.
+- The visible dashboard is intentionally reduced to a single Sources section
+  while the UI is redesigned section-by-section.
+- Earlier multi-section helpers are retained in code for reuse, but Overview,
+  Operators, Sinks, Checkpoints, Runs, Logs, Spec, Infrastructure, and Deploy
+  are not exposed in the current navigation.
 
 Deliverables:
 
@@ -486,6 +489,60 @@ Deliverables:
 - Transactional Kafka details when available.
 - File/HTTP/S3/Postgres/Kafka-specific detail rows.
 
+---
+### Phase D7 — Pipeline section — ✅ DONE
+
+Status:
+
+- Pipeline is exposed as its own minimal section.
+- The list view combines logical operators, runtime stages, throughput totals,
+  stateful operator count, worker count, and backpressure signals.
+- Job detail opens directly to logical operators and runtime stages when entered
+  from Pipeline.
+
+Deliverables:
+
+- Pipeline inventory loader.
+- Pipeline summary rows.
+- Runtime stage and logical operator detail pane.
+- Accuracy tests for Pipeline navigation and detail rendering.
+
+---
+### Phase D8 — Reliability section — ✅ DONE
+
+Status:
+
+- Reliability is exposed as its own minimal section.
+- The list view combines checkpoint health, attempts, failures, restart
+  countdowns, last activity, and current job status.
+- Job detail opens directly to diagnostics, checkpoint health, attempt history,
+  and checkpoint history when entered from Reliability.
+
+Deliverables:
+
+- Reliability inventory loader.
+- Reliability summary rows.
+- Checkpoint/run/diagnostic detail pane.
+- Accuracy tests for Reliability navigation and detail rendering.
+
+---
+### Phase D9 — Overview section — ✅ DONE
+
+Status:
+
+- Overview is the default landing page.
+- It summarizes job count, source lag, sink errors, pipeline backpressure, and
+  reliability attention using the same section inventory loaders as the detail
+  pages.
+- It links directly into Sources, Sinks, Pipeline, and Reliability without
+  reintroducing the old running/completed/deploy navigation.
+
+Deliverables:
+
+- Overview summary rows.
+- Default route switched to Overview.
+- Accuracy tests for Overview navigation and shell content.
+
 Exit criteria:
 
 - Plain sinks show at-least-once output when checkpointing is enabled.
@@ -542,8 +599,8 @@ Status:
 
 - `control/api/dashboard_accuracy_test.go` pins the dashboard contract via
   httptest (no browser required, runs in CI `test` job):
-  - overview shell (fleet triage hooks);
-  - all eight job-detail tab panes + normalization helpers + freshness badge;
+  - current Sources-only shell;
+  - source detail rendering + normalization helpers;
   - backend contract stability for `/jobs`, `/jobs/{id}`, `/runs`,
     `/transitions`, `/diagnostics`, `/history`, `/config`;
   - graceful degradation when `/state`, `/metrics`, `/describe`, `/plan`
@@ -606,45 +663,52 @@ proves stable. Prefer small, typed additions to existing operational endpoints.
 ## Minimal layout sketch
 
 ```text
-Job: order-totals                         running · metrics 3s ago
-[Cancel] [Savepoint] [Restart] [Grafana]
+Sidebar
+Sources
 
-Health
-records out/s | source lag | sink errors | checkpoint age | restarts
+Later:
+Overview
+Sources
+Pipeline
+Sinks
+Reliability
 
-Dataflow
-[Source: Kafka orders ×12 partitions] → [Operators: 5 logical / 4 stages] → [Sink: Txn Kafka totals]
+Job detail
+order-totals                         running · metrics 3s ago
 
-Tabs
-Overview | Sources | Operators | Sinks | Checkpoints | Runs | Logs | Spec
+Overview | Sources | Pipeline | Sinks | Reliability
 
 Sources
-┌ Kafka: orders ───────────────────────────────┐
-│ group order-processor · read_committed        │
-│ records/s 1.2k · lag 240 · checkpointed yes   │
-│ partitions table...                           │
-└───────────────────────────────────────────────┘
+Kafka: orders
+group order-processor · read_committed
+records/s 1.2k · lag 240 · checkpointed yes
+[expand partition progress]
 
-Operators
-Logical operators table
-Runtime stages table + edge backpressure
+Pipeline
+operators + runtime stages in one processing view
 
 Sinks
-┌ Txn Kafka: customer-totals ───────────────────┐
-│ exactly-once · txn id customer-totals-v1      │
-│ records written 1.8M · errors 0               │
-└───────────────────────────────────────────────┘
+Txn Kafka: customer-totals
+exactly-once · records written 1.8M · errors 0
+
+Reliability
+latest checkpoint · attempts · diagnostics · logs
 ```
 
 ---
 
 ## Suggested implementation order
 
-1. D1 + D2 first: data inventory and normalization helpers.
-2. D3: visual shell and tabs.
-3. D4/D6 together enough to show source → sink accurately.
-4. D5: operators/stages/backpressure.
-5. D7/D8: operational depth.
-6. D9: tests and CI hardening.
+Build section-by-section:
 
-This order keeps the revamp honest: data model first, UI second, polish last.
+1. **Sources** — make ingress accurate and calm first.
+2. **Sinks** — add egress and delivery semantics next.
+3. **Pipeline** — combine operators/stages/backpressure into one processing
+   view.
+4. **Reliability** — add checkpoints, runs, diagnostics, and logs as one
+   recovery/debugging section.
+5. **Overview** — build last from summaries produced by the other sections.
+
+Overview is intentionally last: if built first, it will guess. Once Sources,
+Sinks, Pipeline, and Reliability are accurate, Overview can become a compact
+summary instead of a noisy dashboard-card grid.

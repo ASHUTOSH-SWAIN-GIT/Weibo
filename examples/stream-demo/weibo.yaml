@@ -1,0 +1,9 @@
+# SDK job manifest for the continuously-running dashboard demo. `weibo deploy
+# -file examples/stream-demo/weibo.yaml -no-build -no-push` submits it once
+# the image below is built locally.
+kind: sdk
+name: stream-demo
+image: weibo-stream-demo:dev
+resources:
+  cpu: "250m"
+  memory: "256Mi"

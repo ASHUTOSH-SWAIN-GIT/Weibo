@@ -21,44 +21,32 @@ listens require `-allow-open-public`.
 | `control/ui/ui.go`       | `//go:embed index.html logo.png`; serves the SPA at `/` and the logo |
 | `control/ui/index.html`  | The whole dashboard (SPA, inline CSS/JS) |
 | `control/api/api.go`     | REST server; dashboard talks to `/jobs`, `/jobs/{id}/...`, `/validate` |
+| `docs/dashboard-data-contract.md` | Source-of-truth inventory for dashboard endpoints and fields |
 
-The dashboard is a plain-JS SPA with a hash router (`#/overview`, `#/job-manager`, `#/running`, `#/completed`, `#/submit`, `#/job/{id}`). It polls the API on an interval (Overview/Infrastructure/Active/History: 3s, job detail: 2s). All rendering is self-contained in the embedded page.
+The dashboard is a plain-JS SPA. The current visible router is intentionally reduced to `#/sources` plus source detail (`#/job/{id}`) while the dashboard is redesigned section-by-section. All rendering is self-contained in the embedded page.
 
 ## Implemented so far
 
 ### Layout & navigation
-- **Sidebar** — compact dark navigation with Overview, Infrastructure, Active, History, and Deploy. Connection status appears in the footer.
+- **Sidebar** — compact dark navigation with section-by-section entries for Overview, Sources, Sinks, Pipeline, and Reliability. Connection status appears in the footer.
 - **Token auth** — on a 401 the UI drops to a token prompt, validates it via `POST /auth`, and stores it in `localStorage`. Read-only hashed tokens can inspect the dashboard but cannot submit, delete, cancel, restart, or savepoint jobs.
 
-### Overview
-- Stat tiles: Available Task Slots (jobs × 2), Running, Finished, Failed.
-- Running Jobs + Completed Jobs tables (name/id, start/end time, status phase dot). Rows navigate to the job detail page.
+### Target sections
+- **Overview** — quick health check, rebuilt last from other section summaries.
+- **Sources** — ingress identity, position, lag, read rate, errors, checkpoint participation.
+- **Pipeline** — operators + runtime stages + backpressure in one processing view.
+- **Sinks** — egress destination, records written, errors, delivery guarantee.
+- **Reliability** — checkpoints, runs, diagnostics, logs, recovery actions.
 
-### Jobs lists
-- **Running Jobs** — filter to `phase=running`, count subheading.
-- **Completed Jobs** — terminal phases only, Finished/Failed stat tiles.
-
-### Infrastructure
-- **Host machine** — hostname, operating system, architecture, CPU, memory, load average, Docker version, and container counts.
-- **Container inventory** — every Docker container with image reference/ID, state, live CPU and memory, network, disk I/O, process count, and start time.
-
-### Job detail
-- **Metadata strip** — Job Name, Job ID, Status, Type, Kind, Delivery, Created/Updated, Attempt, Started/Stopped, Control Port. Delivery shows the derived guarantee (coordinated sink + checkpointing ⇒ exactly-once), not the raw spec string.
-- **Freshness badge** — header shows `metrics just now / Ns ago / not reported`, from fetch time + successful parse time; terminal jobs freeze live sections.
-- **Actions** — Savepoint (prompt for label), Restart (prompt for savepoint label, blank = last checkpoint), Cancel.
-- **Pipeline graph (DAG)** — source → operators → sink nodes, color-coded by kind (source blue, sink green, keyBy/reduce accent, window amber), parallelism badge (`×N`) when present. Rendered as inline SVG.
-- **Tabs**: Overview (health, dataflow source → stages → sink summary, pipeline, live state, lifecycle) · Sources (generic connector card + Kafka partition table, redacted props, "not reported" fallbacks) · Operators (logical operators + runtime stages with workers/send-block/edge queue and bottleneck badge; never conflated) · Sinks (destination identity + records/errors + delivery panel) · Checkpoints · Runs · Logs · Spec.
-- **Normalization layer** — `normalizeSources / normalizeSinks / normalizeStages / normalizeOperators / normalizeCheckpoints / deriveDelivery` in `index.html`; rendering consumes models with `source` + `missingReason`, live fetches run in parallel via `Promise.all`.
-- **Tab detail**:
-  - **Overview** — pipeline DAG, Live State card (phase, uptime, records in/out) via `/jobs/{id}/state`, Lifecycle transition log.
-  - **Checkpoints** — checkpoint health, disabled/stale/unavailable state, state backend, savepoint/restore actions, checkpoint history, and checkpointed source positions (from `/describe` + `/state`).
-  - **Runs** — canonical attempt explorer with selected attempt detail, transitions, logs, restart timing, and full lifecycle history.
-  - **Logs** — live/latest logs or previous-attempt logs with tail-size selector, copy, and follow/pause for live logs.
-  - **Spec** — raw job spec YAML.
-
-### Deploy
-- Accepts an SDK image manifest with name, image reference, and optional resource limits.
-- Submits via `POST /jobs`, then navigates to the new job's detail page.
+### Current visible dashboard
+- **Section-by-section navigation** — the sidebar exposes `Overview`, `Sources`, `Sinks`, `Pipeline`, and `Reliability`.
+- **Overview** — default landing page summarizing job count, source lag, sink errors, pipeline backpressure, and reliability attention signals from the section summaries.
+- **Sources list** — shows each job, source identity, live/static position, reported lag, read/error counters, checkpoint/recovery signal, and current job status.
+- **Sinks list** — shows each job, sink destination, records written, sink errors, derived delivery guarantee, checkpoint/recovery signal, and current job status.
+- **Pipeline list** — shows logical operators, runtime stages, worker count, throughput totals, stateful operators, and reported backpressure signals.
+- **Reliability list** — shows checkpoint health, attempts, failures, restart schedule, last activity, and current job status.
+- **Source/Sink/Pipeline/Reliability detail** — clicking a job opens the matching detail view. Other panes remain hidden until intentionally redesigned.
+- **Normalization layer** — rendering uses `normalizeSources`, `normalizeSinks`, `normalizeOperators`, `normalizeStages`, `normalizeCheckpoints`, and `deriveDelivery` with existing missing-data fallbacks so the UI does not guess when live `/describe`, `/state`, or `/metrics` is unavailable.
 
 ## How to update this doc
 
