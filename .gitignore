@@ -55,3 +55,9 @@ control/weibo-control.db
 data/
 control/data/
 control/weibo
+
+# Compiled stream-demo binary at repo root (anchored: examples/stream-demo/ is source)
+/stream-demo
+
+# Manual Playwright screenshots (see plans/production-validation.md)
+control/.playwright-shots/

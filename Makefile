@@ -14,6 +14,7 @@
 #   make help        list available targets
 #   make ci          run the same stable checks as hosted CI
 #   make kafka-test  run the Kafka e2e test (requires local broker)
+#   make dashboard-e2e  run the dashboard end-to-end test (requires docker + jq)
 
 GO         ?= go
 PKG        ?= ./...
@@ -25,7 +26,7 @@ FUZZTIME   ?= 10s
 .PHONY: help
 help: ## Show available targets
 	@awk 'BEGIN {FS = ":.*##"; printf "weibo make targets:\n\n"} \
-		/^[a-zA-Z_-]+:.*?##/ { printf "  \033[1;34m%-20s\033[0m %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
+		/^[a-zA-Z0-9_-]+:.*?##/ { printf "  \033[1;34m%-20s\033[0m %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
 
 # --- build --------------------------------------------------------------------
 
@@ -141,6 +142,10 @@ kafka-test: build-examples ## Run the Kafka end-to-end test (requires local brok
 	./scripts/test-kafka.sh
 
 # --- composite targets --------------------------------------------------------
+
+.PHONY: dashboard-e2e
+dashboard-e2e: ## Boot the real dashboard, run the stream-demo job, assert the read path (needs docker + jq)
+	./control/scripts/dashboard-stream-e2e.sh --ci
 
 .PHONY: ci
 ci: build fmt-check vet vet-kubernetes check-static test-race test-kubernetes test-coverage ## Run the stable local CI suite

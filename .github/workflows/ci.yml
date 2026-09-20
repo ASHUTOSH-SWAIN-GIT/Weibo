@@ -279,6 +279,9 @@ jobs:
           format: sarif
           output: trivy-results.sarif
           severity: CRITICAL,HIGH
+          # Without this, trivy-action ignores `severity` for sarif output and
+          # exit-code fails the job on LOW/UNKNOWN findings too.
+          limit-severities-for-sarif: true
           exit-code: '1'
 
       - name: Upload container scan results

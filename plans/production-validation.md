@@ -102,16 +102,23 @@ Also reuse rather than rewrite:
 
 ---
 
-## Phase 0 — Stop losing the harness (~20 min)
+## Phase 0 — Stop losing the harness (~20 min) — DONE
 
-The end-to-end test infrastructure is untracked. Commit it first or every result is unreproducible.
+The end-to-end harness was already tracked by `0c1003e`. Remaining work, now complete:
 
-- `git add` the harness: `examples/stream-demo/`, `Dockerfile.stream-demo`,
-  `control/scripts/dashboard-stream-e2e.sh`, `docs/dashboard-data-contract.md`.
-- Extend `.gitignore`: it covers `data/`, `*.db`, `*.out` and several demo binaries, but **not** the
-  39 MB `stream-demo` binary at root, nor `control/.playwright-shots/`. Add both, and
-  `git rm --cached` the committed `kafka-dashboard` (13 MB) and `coverage.out` (9.3 MB).
-- Add `make dashboard-e2e` wrapping the script so it is discoverable.
+- `.gitignore`: added `/stream-demo` (**anchored** — an unanchored `stream-demo` would also ignore the
+  tracked `examples/stream-demo/` source) and `control/.playwright-shots/`.
+- `git rm --cached` the 37 MB `stream-demo` binary and the four Playwright PNGs that `0c1003e`
+  committed by mistake. Files stay on disk.
+- Added `make dashboard-e2e` (wraps `control/scripts/dashboard-stream-e2e.sh --ci`) and fixed the
+  `make help` regex, which silently hid any target name containing a digit.
+- Baseline smoke test: `make dashboard-e2e` **passes in ~24 s**. Note its own output prints
+  `describe: source=Unknown` — the script asserts source/sink/operators are *exposed*, not that the
+  source is *identified*, so the degraded path passes. Phase 2 tightens this.
+
+**Side effect to know about:** `0c1003e` is what the published `v1.0.0` engine tag points at, so the
+Go module zip for `v1.0.0` contains the 37 MB binary, and it stays in git history. The Go proxy never
+forgets a fetched version, so this is fixed only going forward (`v1.0.1`), not retroactively.
 
 ## Phase 1 — Prod-like local stack
 
