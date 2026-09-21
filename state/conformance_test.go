@@ -405,6 +405,10 @@ func TestConformance_List_Keys(t *testing.T) {
 	}
 }
 
+func TestMemoryBackend_InterfaceCompliance(t *testing.T) {
+	var _ state.StateBackend = state.NewMemoryBackend()
+}
+
 // ---- Owner isolation -------------------------------------------------------
 
 func TestConformance_OwnerIsolation(t *testing.T) {
