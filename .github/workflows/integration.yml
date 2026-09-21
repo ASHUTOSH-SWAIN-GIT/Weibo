@@ -98,7 +98,7 @@ jobs:
             -p 9000:9000 \
             -e MINIO_ROOT_USER=weibo \
             -e MINIO_ROOT_PASSWORD=weibominio \
-            minio/minio:latest server /data
+            quay.io/minio/minio:latest server /data
           for i in $(seq 1 30); do
             curl -fsS http://localhost:9000/minio/health/live >/dev/null 2>&1 && break
             sleep 1
@@ -177,6 +177,9 @@ jobs:
           go-version: '1.26.6'
           cache: true
           cache-dependency-path: control/go.sum
+
+      - name: Build runner image
+        run: docker build -f Dockerfile.runner -t weibo-runner:dev .
 
       - name: Start dashboard
         working-directory: control
