@@ -731,7 +731,9 @@ func TestScheduledRestartSurvivesControllerRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	time.Sleep(30 * time.Millisecond)
+	// BaseBackoff is 20ms; sleep well past it so scheduler/GC jitter on a
+	// loaded CI runner can't leave RestartAt still in the future.
+	time.Sleep(150 * time.Millisecond)
 	c2 := control.New(control.Options{Store: st, Backend: fake, Restart: policy, StopTimeout: time.Second})
 	if err := c2.Reconcile(context.Background()); err != nil {
 		t.Fatal(err)

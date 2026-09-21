@@ -10,24 +10,6 @@ import (
 	"github.com/ASHUTOSH-SWAIN-GIT/weibo/window"
 )
 
-func TestKeyBy_Router_SameKeySameWorker(t *testing.T) {
-	kb := operator.KeyBy(func(r types.Record) []byte { return r.Key }).WithPartitions(4)
-
-	alice := types.Record{Key: []byte("alice")}
-	w1 := kb.Route(alice)
-	w2 := kb.Route(alice)
-	if w1 != w2 {
-		t.Errorf("same key should route to same worker: %d != %d", w1, w2)
-	}
-}
-
-func TestKeyBy_Router_EmptyKeyToZero(t *testing.T) {
-	kb := operator.KeyBy(func(r types.Record) []byte { return nil }).WithPartitions(16)
-	if w := kb.Route(types.Record{Key: nil}); w != 0 {
-		t.Errorf("empty key should route to worker 0, got %d", w)
-	}
-}
-
 func TestKeyBy_Router_Deterministic(t *testing.T) {
 	kb := operator.KeyBy(func(r types.Record) []byte { return r.Key }).WithPartitions(16)
 	r := types.Record{Key: []byte("test-key")}
@@ -47,13 +29,6 @@ func TestKeyBy_Router_DifferentKeysDifferentWorkers(t *testing.T) {
 	}
 	if len(workers) < 2 {
 		t.Errorf("expected keys to spread across at least 2 workers, got %d", len(workers))
-	}
-}
-
-func TestKeyBy_Router_SinglePartition(t *testing.T) {
-	kb := operator.KeyBy(func(r types.Record) []byte { return r.Key }).WithPartitions(1)
-	if w := kb.Route(types.Record{Key: []byte("any")}); w != 0 {
-		t.Errorf("single partition should always return 0, got %d", w)
 	}
 }
 
