@@ -212,6 +212,9 @@ func (p *PostgresSink) insertBatch(ctx context.Context, rows []pendingRow) error
 // using a single multi-value INSERT, retrying on failure. After all retries
 // are exhausted, the failure policy is applied to each row.
 func (p *PostgresSink) insertGroupWithRetry(ctx context.Context, table string, columns []string, rows []pendingRow) error {
+	if p.cfg.mode == PostgresUpsert {
+		rows = dedupeByConflictKey(rows, columns, p.cfg.conflictCols)
+	}
 	query := buildPostgresWriteQuery(postgresWriteQuery{
 		Table:           table,
 		Columns:         columns,
@@ -250,6 +253,41 @@ func (p *PostgresSink) insertGroupWithRetry(ctx context.Context, table string, c
 		}
 	}
 	return nil
+}
+
+// dedupeByConflictKey keeps only the last row per conflict key. Postgres
+// rejects a single INSERT ... ON CONFLICT DO UPDATE that touches the same key
+// twice ("cannot affect row a second time"), so duplicates within one batch
+// are collapsed to the latest value, matching upsert semantics.
+func dedupeByConflictKey(rows []pendingRow, columns, conflictCols []string) []pendingRow {
+	idx := make([]int, 0, len(conflictCols))
+	for _, cc := range conflictCols {
+		for i, c := range columns {
+			if c == cc {
+				idx = append(idx, i)
+				break
+			}
+		}
+	}
+	if len(idx) != len(conflictCols) {
+		return rows
+	}
+	pos := make(map[string]int, len(rows))
+	out := make([]pendingRow, 0, len(rows))
+	for _, r := range rows {
+		parts := make([]any, len(idx))
+		for i, j := range idx {
+			parts[i] = r.values[j]
+		}
+		key := fmt.Sprintf("%#v", parts)
+		if at, ok := pos[key]; ok {
+			out[at] = r
+			continue
+		}
+		pos[key] = len(out)
+		out = append(out, r)
+	}
+	return out
 }
 
 type postgresWriteQuery struct {

@@ -194,8 +194,12 @@ func (b *batchWriter[T]) run(ctx context.Context, in <-chan types.Record) error 
 				cancel()
 				return err
 			}
-			err := doFlush(shutdownCtx)
+			// drain may have used the whole shutdownCtx budget (input never
+			// closed), so the final flush gets its own fresh deadline.
+			flushCtx, cancelFlush := context.WithTimeout(context.Background(), shutdownTimeout)
+			err := doFlush(flushCtx)
 			wg.Wait()
+			cancelFlush()
 			cancel()
 			if err != nil {
 				return err
