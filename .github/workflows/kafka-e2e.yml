@@ -53,20 +53,34 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y openjdk-17-jre-headless
 
+      # The kafka service container already holds the full distribution, so the
+      # CLI tools are copied out of it rather than downloaded. The previous
+      # source, archive.apache.org, is Apache's unmirrored legacy archive and
+      # stalls for tens of minutes at a time, hanging this job with it.
       - name: Install Kafka CLI tools
         run: |
-          KAFKA_VERSION=3.7.0
-          SCALA_VERSION=2.13
-          curl -fsSL "https://archive.apache.org/dist/kafka/${KAFKA_VERSION}/kafka_${SCALA_VERSION}-${KAFKA_VERSION}.tgz" -o /tmp/kafka.tgz
-          mkdir -p /opt/kafka
-          tar -xzf /tmp/kafka.tgz -C /opt/kafka --strip-components=1
-          echo "/opt/kafka/bin" >> $GITHUB_PATH
-          echo "KAFKA_BIN=/opt/kafka/bin" >> $GITHUB_ENV
+          cid=$(docker ps --filter 'ancestor=apache/kafka:3.7.0' --format '{{.ID}}' | head -1)
+          if [ -z "$cid" ]; then
+            cid=$(docker ps --format '{{.ID}} {{.Image}}' | awk '/apache\/kafka/ {print $1; exit}')
+          fi
+          if [ -z "$cid" ]; then
+            echo "::error::kafka service container not found"
+            docker ps -a
+            exit 1
+          fi
+          docker cp "$cid:/opt/kafka" "$HOME/kafka"
+          if [ ! -x "$HOME/kafka/bin/kafka-topics.sh" ]; then
+            echo "::error::kafka CLI tools missing from the service container image"
+            ls -la "$HOME/kafka" "$HOME/kafka/bin" 2>&1 || true
+            exit 1
+          fi
+          echo "$HOME/kafka/bin" >> $GITHUB_PATH
+          echo "KAFKA_BIN=$HOME/kafka/bin" >> $GITHUB_ENV
 
       - name: Wait for Kafka
         run: |
           for i in {1..60}; do
-            if /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list >/dev/null 2>&1; then
+            if kafka-topics.sh --bootstrap-server localhost:9092 --list >/dev/null 2>&1; then
               echo "kafka is up"
               exit 0
             fi
@@ -74,7 +88,7 @@ jobs:
             sleep 2
           done
           echo "kafka failed to start"
-          /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list || true
+          kafka-topics.sh --bootstrap-server localhost:9092 --list || true
           exit 1
 
       - name: Run kafka e2e test
