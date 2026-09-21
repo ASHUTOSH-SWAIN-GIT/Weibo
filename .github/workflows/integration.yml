@@ -105,12 +105,15 @@ jobs:
           done
           curl -fsS http://localhost:9000/minio/health/live
 
+      # MinIO's own `mc` client download (dl.min.io) now returns 410 Gone, so
+      # create the bucket with the AWS CLI (preinstalled on the runner)
+      # against MinIO's S3-compatible API instead.
       - name: Create MinIO bucket
-        run: |
-          curl -fsSL https://dl.min.io/client/mc/release/linux-amd64/mc -o /tmp/mc
-          chmod +x /tmp/mc
-          /tmp/mc alias set tier http://localhost:9000 weibo weibominio
-          /tmp/mc mb tier/weibo-tier || true
+        env:
+          AWS_ACCESS_KEY_ID: weibo
+          AWS_SECRET_ACCESS_KEY: weibominio
+          AWS_REGION: us-east-1
+        run: aws --endpoint-url http://localhost:9000 s3 mb s3://weibo-tier || true
 
       - name: Live Kafka tiers
         env:
