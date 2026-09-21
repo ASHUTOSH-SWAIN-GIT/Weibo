@@ -57,7 +57,10 @@ jobs:
         run: |
           KAFKA_VERSION=3.7.0
           SCALA_VERSION=2.13
-          curl -fsSL "https://archive.apache.org/dist/kafka/${KAFKA_VERSION}/kafka_${SCALA_VERSION}-${KAFKA_VERSION}.tgz" -o /tmp/kafka.tgz
+          # archive.apache.org occasionally stalls; fail within a few minutes
+          # instead of hanging the whole job for its default multi-hour timeout.
+          curl -fsSL --max-time 180 --retry 3 --retry-delay 10 --retry-connrefused \
+            "https://archive.apache.org/dist/kafka/${KAFKA_VERSION}/kafka_${SCALA_VERSION}-${KAFKA_VERSION}.tgz" -o /tmp/kafka.tgz
           mkdir -p /opt/kafka
           tar -xzf /tmp/kafka.tgz -C /opt/kafka --strip-components=1
           echo "/opt/kafka/bin" >> $GITHUB_PATH
