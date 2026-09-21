@@ -188,8 +188,27 @@ func produceLive(t *testing.T, brokers []string, topic string, values ...string)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	if err := w.WriteMessages(ctx, msgs...); err != nil {
-		t.Fatalf("produce %s: %v", topic, err)
+
+	// A topic created moments ago (createLiveTopics already confirmed its
+	// leader is up) can still make the Writer's own metadata lookup return
+	// "unknown topic or partition" until that propagates; kafka-go documents
+	// this class of error as retriable. Nothing is produced when it happens
+	// here (the error comes from the pre-send metadata call), so a plain
+	// retry of the whole write is safe.
+	for {
+		err := w.WriteMessages(ctx, msgs...)
+		if err == nil {
+			return
+		}
+		var kerr segmentkafka.Error
+		if !errors.As(err, &kerr) || !kerr.Temporary() {
+			t.Fatalf("produce %s: %v", topic, err)
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatalf("produce %s: %v", topic, err)
+		case <-time.After(200 * time.Millisecond):
+		}
 	}
 }
 
