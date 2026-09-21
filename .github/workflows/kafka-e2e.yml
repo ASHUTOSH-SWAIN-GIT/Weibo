@@ -53,7 +53,18 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y openjdk-17-jre-headless
 
+      # Cached across runs so a healthy run only ever hits archive.apache.org
+      # once; later runs restore the extracted tools straight from cache and
+      # never touch the network, regardless of that mirror's mood.
+      - name: Cache Kafka CLI tools
+        id: kafka-cli-cache
+        uses: actions/cache@v4
+        with:
+          path: /opt/kafka
+          key: kafka-cli-3.7.0-2.13
+
       - name: Install Kafka CLI tools
+        if: steps.kafka-cli-cache.outputs.cache-hit != 'true'
         run: |
           KAFKA_VERSION=3.7.0
           SCALA_VERSION=2.13
@@ -63,6 +74,9 @@ jobs:
             "https://archive.apache.org/dist/kafka/${KAFKA_VERSION}/kafka_${SCALA_VERSION}-${KAFKA_VERSION}.tgz" -o /tmp/kafka.tgz
           mkdir -p /opt/kafka
           tar -xzf /tmp/kafka.tgz -C /opt/kafka --strip-components=1
+
+      - name: Add Kafka CLI tools to PATH
+        run: |
           echo "/opt/kafka/bin" >> $GITHUB_PATH
           echo "KAFKA_BIN=/opt/kafka/bin" >> $GITHUB_ENV
 
