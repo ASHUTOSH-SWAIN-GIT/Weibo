@@ -1,0 +1,115 @@
+name: control edge
+
+# Rolling pre-release: after every fully green push to main, rebuild the linux
+# binaries from that exact commit and overwrite the single `control/edge`
+# release, so the downloadable binary always matches main. Numbered releases
+# (control/v*) stay manual via control-release.yml.
+#
+# Triggered by workflow_run, so it fires once per finished workflow; the gate
+# step only lets the run through when ci, integration tiers and kafka-e2e have
+# ALL succeeded for the same commit and that commit is still the tip of main.
+
+on:
+  workflow_run:
+    workflows: [ci, integration tiers, kafka-e2e]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: write
+  actions: read
+  attestations: write
+  id-token: write
+
+# One edge publish at a time; a newer green commit simply publishes after.
+concurrency:
+  group: control-edge
+  cancel-in-progress: false
+
+jobs:
+  edge:
+    name: publish control/edge
+    # Only push-triggered runs on this repo's main; ignore PR and fork runs.
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Gate - all workflows green and commit is still main
+        id: gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          ready=true
+          for wf in "ci" "integration tiers" "kafka-e2e"; do
+            concl=$(gh api "repos/$REPO/actions/runs?head_sha=$SHA&event=push&per_page=100" \
+              --jq "[.workflow_runs[] | select(.name==\"$wf\")] | sort_by(.created_at) | last | .conclusion")
+            echo "$wf: ${concl:-none}"
+            [ "$concl" = "success" ] || ready=false
+          done
+          tip=$(gh api "repos/$REPO/commits/main" --jq .sha)
+          if [ "$tip" != "$SHA" ]; then
+            echo "$SHA is no longer the tip of main ($tip); the newer commit will publish itself"
+            ready=false
+          fi
+          echo "ready=$ready" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+        if: steps.gate.outputs.ready == 'true'
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - name: Set up Go
+        if: steps.gate.outputs.ready == 'true'
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.6'
+          cache: true
+          cache-dependency-path: control/go.sum
+
+      # No test step: the gate above already requires ci to have passed on this commit.
+      - name: Build Linux binaries
+        if: steps.gate.outputs.ready == 'true'
+        working-directory: control
+        env:
+          CGO_ENABLED: '0'
+        run: |
+          mkdir -p dist
+          for arch in amd64 arm64; do
+            GOOS=linux GOARCH="$arch" go build \
+              -tags kubernetes \
+              -trimpath \
+              -ldflags="-s -w" \
+              -o "dist/weibo-linux-$arch" \
+              ./cmd/weibo
+          done
+          cd dist && sha256sum weibo-linux-* > checksums.txt
+
+      - name: Attest binary provenance
+        if: steps.gate.outputs.ready == 'true'
+        uses: actions/attest-build-provenance@v3
+        with:
+          subject-path: |
+            control/dist/weibo-linux-amd64
+            control/dist/weibo-linux-arm64
+
+      # `control/edge` is not semver, so Go's module proxy ignores it, and it
+      # does not match control-release.yml's `control/v*` trigger.
+      - name: Move tag and update release
+        if: steps.gate.outputs.ready == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          short="${SHA:0:7}"
+          git tag -f control/edge "$SHA"
+          git push -f origin refs/tags/control/edge
+          notes="Rolling build of main at $short (commit $SHA). Built only after ci, integration tiers and kafka-e2e all passed. Not a stable release: pin a numbered control/v* release for production."
+          gh release view control/edge >/dev/null 2>&1 \
+            || gh release create control/edge --prerelease --title "control edge" --notes "$notes"
+          gh release edit control/edge --prerelease --title "control edge ($short)" --notes "$notes"
+          gh release upload control/edge \
+            control/dist/weibo-linux-amd64 \
+            control/dist/weibo-linux-arm64 \
+            control/dist/checksums.txt \
+            --clobber
