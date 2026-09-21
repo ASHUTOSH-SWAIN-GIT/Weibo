@@ -79,18 +79,6 @@ jobs:
         options: >-
           --health-cmd "pg_isready -U weibo -d weibo"
           --health-interval 5s --health-timeout 5s --health-retries 10
-      minio:
-        image: minio/minio:latest
-        env:
-          MINIO_ROOT_USER: weibo
-          MINIO_ROOT_PASSWORD: weibominio
-        ports:
-          - 9000:9000
-        options: >-
-          --health-cmd "curl -f http://localhost:9000/minio/health/live"
-          --health-interval 5s --health-timeout 5s --health-retries 10
-        # MinIO server command is appended after the image entrypoint args.
-        args: server /data
 
     steps:
       - uses: actions/checkout@v4
@@ -100,6 +88,22 @@ jobs:
         with:
           go-version: '1.26.6'
           cache: true
+
+      # MinIO's image has no default CMD, and the "services:" block has no way to pass
+      # one (services only support image/credentials/env/ports/volumes/options), so it
+      # is started directly with docker run instead of as a service container.
+      - name: Start MinIO
+        run: |
+          docker run -d --name minio \
+            -p 9000:9000 \
+            -e MINIO_ROOT_USER=weibo \
+            -e MINIO_ROOT_PASSWORD=weibominio \
+            minio/minio:latest server /data
+          for i in $(seq 1 30); do
+            curl -fsS http://localhost:9000/minio/health/live >/dev/null 2>&1 && break
+            sleep 1
+          done
+          curl -fsS http://localhost:9000/minio/health/live
 
       - name: Create MinIO bucket
         run: |
