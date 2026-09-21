@@ -141,6 +141,14 @@ clean-coverage: ## Remove coverage artifacts
 kafka-test: build-examples ## Run the Kafka end-to-end test (requires local broker)
 	./scripts/test-kafka.sh
 
+.PHONY: prod-like-up
+prod-like-up: ## Start the prod-like local stack (Kafka/Postgres/MinIO/Prometheus/Grafana/Caddy)
+	docker compose -f deploy/compose/docker-compose.prod-like.yml up -d
+
+.PHONY: prod-like-down
+prod-like-down: ## Stop and remove the prod-like local stack, including volumes
+	docker compose -f deploy/compose/docker-compose.prod-like.yml down -v
+
 # --- composite targets --------------------------------------------------------
 
 .PHONY: dashboard-e2e

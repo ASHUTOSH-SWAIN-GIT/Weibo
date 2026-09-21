@@ -1,6 +1,7 @@
 # Production-style validation of Weibo
 
-Status: proposed, not started. Owner: @ASHUTOSH-SWAIN-GIT.
+Status: Phase 0 done. Phase 1 infra built and verified; gate is partially red on real findings
+(see Phase 1). Phases 2-5 not started. Owner: @ASHUTOSH-SWAIN-GIT.
 
 ## Context
 
@@ -120,10 +121,47 @@ The end-to-end harness was already tracked by `0c1003e`. Remaining work, now com
 Go module zip for `v1.0.0` contains the 37 MB binary, and it stays in git history. The Go proxy never
 forgets a fetched version, so this is fixed only going forward (`v1.0.1`), not retroactively.
 
-## Phase 1 — Prod-like local stack
+## Phase 1 — Prod-like local stack — infra DONE, gate partially red (real findings)
 
 Goal: every backing service real, controller reachable only over TLS with a token — the
 `docs/self-hosting.md` security checklist actually satisfied, on one machine.
+
+**Built:** `deploy/compose/docker-compose.prod-like.yml`, `deploy/compose/Caddyfile`,
+`deploy/compose/.env.example`, `deploy/compose/README.md`, `make prod-like-up`/`prod-like-down`.
+All six services (Kafka, Postgres, MinIO, Prometheus, Grafana, Caddy) come up healthy and were
+verified end to end: `weibo dashboard` on the host, reachable only via `https://weibo.localhost`
+through Caddy, 401 with no token, 401 with a wrong token, 200 with the right one.
+
+**Host-specific port conflicts found and worked around** (this machine already runs a native
+Kafka broker on 9092 and a native Postgres on 5432 — the latter silently wins over Docker's
+`0.0.0.0` publish because macOS prefers the more specific `127.0.0.1` bind, so clients connecting
+to "localhost" reached the wrong server with no error). Kafka now uses host ports 39092/39093,
+Postgres 54320. Ports are machine-specific; another host may need different ones — check first.
+
+**Real bug found and fixed in the compose config itself:** the first listener topology advertised
+the external host address (`localhost:39092`) as the *inter-broker* listener. The broker could
+accept client connections fine but could not dial **itself** for transaction-coordinator and
+marker-propagation traffic (nothing inside the container listens on the host-mapped port), so
+`TestLive_KafkaTransactions` hung for a full 60 s timeout. Fixed by giving inter-broker traffic
+its own `BROKER://kafka:9092` listener, separate from the `EXTERNAL`/`INTERNAL` ones clients use.
+
+**Gate result running `make test-integration-live` for real, for the first time, against this
+stack** — 12 of 16 live/tier tests green; four failures are genuine product/test gaps, not stack
+misconfiguration (confirmed by rerunning each in isolation against a healthy stack):
+- `TestLive_PostgresUpsert`, `TestLive_PostgresDisconnectAndShutdownFlush` — both write fewer
+  records than the batch size and expect a flush anyway; both land 0 rows. Points at
+  `sink.PostgresSink` having no flush-on-close / flush-interval path that actually fires before
+  `Write` returns, only a batch-size-boundary flush (the 50-row `TestLive_PostgresRetryInsert`,
+  which always hits full batches of 10, passes). Needs a code fix in `sink/`, not infra.
+- `TestLive_KafkaPartitionExpansion`, `TestLive_KafkaRebalance` — intermittent
+  `[3] Unknown Topic Or Partition` immediately after `createLiveTopics` + `waitLiveLeader`.
+  `waitLiveLeader` (`test/integration/kafka_tiers_test.go:162`) only confirms partition **0**'s
+  leader is ready before the test produces to a topic with 2 partitions — a real gap in the test
+  helper itself, exposed only by actually running against a live broker under load.
+
+These four are unresolved — left for a follow-up pass, per this plan's own rule not to fix drill
+findings inline. Re-run `make test-integration-live` against `deploy/compose/` after any fix to
+confirm.
 
 **New file `deploy/compose/docker-compose.prod-like.yml`** (a dedicated stack, not a change to the
 observability compose):

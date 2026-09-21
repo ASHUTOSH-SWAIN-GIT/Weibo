@@ -1,0 +1,146 @@
+name: weibo-prod-like
+
+# Prod-like local stack for plans/production-validation.md Phase 1.
+#
+# Real Kafka, Postgres and MinIO (S3), plus the existing observability
+# compose's Prometheus/Grafana, fronted by Caddy as a TLS terminator. The
+# `weibo dashboard` controller itself runs on the host (not here) because
+# the Docker backend needs the host's Docker daemon socket — see
+# docs/self-hosting.md and deploy/compose/README.md.
+#
+# Kafka exposes two listeners because job containers created by the
+# controller attach to Docker's default bridge network, not this compose
+# network (control/backend/docker.go's ContainerCreate passes a nil
+# NetworkingConfig): PLAINTEXT on localhost:39092 for the host and test
+# tooling, INTERNAL on host.docker.internal:39093 for job containers.
+# Non-standard host ports (39092/39093 instead of 9092/29092) to dodge a
+# locally running native Kafka broker on 9092 and other projects' compose
+# stacks already using 29092 on this machine.
+
+services:
+  kafka:
+    image: apache/kafka:3.7.0
+    container_name: weibo-kafka
+    mem_limit: 768m
+    environment:
+      KAFKA_NODE_ID: '1'
+      KAFKA_PROCESS_ROLES: 'broker,controller'
+      KAFKA_CONTROLLER_QUORUM_VOTERS: '1@kafka:9094'
+      # BROKER is the inter-broker/self listener, advertised by the compose
+      # service name so the broker can dial itself from inside the container
+      # (transaction coordinator, marker propagation). EXTERNAL/INTERNAL are
+      # advertised by host-reachable names and only used by clients.
+      KAFKA_LISTENERS: 'BROKER://:9092,EXTERNAL://:9093,INTERNAL://:9095,CONTROLLER://:9094'
+      KAFKA_ADVERTISED_LISTENERS: 'BROKER://kafka:9092,EXTERNAL://localhost:39092,INTERNAL://host.docker.internal:39093'
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: 'CONTROLLER:PLAINTEXT,BROKER:PLAINTEXT,EXTERNAL:PLAINTEXT,INTERNAL:PLAINTEXT'
+      KAFKA_CONTROLLER_LISTENER_NAMES: 'CONTROLLER'
+      KAFKA_INTER_BROKER_LISTENER_NAME: 'BROKER'
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'true'
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: '1'
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: '1'
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: '1'
+      KAFKA_HEAP_OPTS: '-Xmx512m -Xms512m'
+      CLUSTER_ID: 'MkU3OEVBNTcwNTJENDM2QkM0RUUxM0VCOEUwQjlGQjY='
+    ports:
+      - '39092:9093'
+      - '39093:9095'
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+
+  postgres:
+    image: postgres:16
+    container_name: weibo-postgres
+    mem_limit: 256m
+    environment:
+      POSTGRES_USER: weibo
+      POSTGRES_PASSWORD: weibo
+      POSTGRES_DB: weibo
+    ports:
+      # 5432 avoided: on this machine it loses to a natively running Postgres
+      # (macOS lets a more specific 127.0.0.1 bind win over Docker's 0.0.0.0
+      # publish, so clients silently hit the wrong server).
+      - '54320:5432'
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U weibo -d weibo']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  minio:
+    image: quay.io/minio/minio:latest
+    container_name: weibo-minio
+    mem_limit: 256m
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: weibo
+      MINIO_ROOT_PASSWORD: weibominio
+    ports:
+      # 9000 is left free for the weibo controller itself.
+      - '9002:9000'
+      - '9001:9001'
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ['CMD', 'curl', '-f', 'http://localhost:9000/minio/health/live']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  minio-init:
+    image: quay.io/minio/mc:latest
+    container_name: weibo-minio-init
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 weibo weibominio &&
+      mc mb -p local/weibo-savepoints &&
+      exit 0
+      "
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: weibo-prometheus
+    mem_limit: 256m
+    ports:
+      - '9090:9090'
+    volumes:
+      - ../../observability/docker/prometheus.yml:/etc/prometheus/prometheus.yml
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: weibo-grafana
+    mem_limit: 256m
+    ports:
+      - '3000:3000'
+    environment:
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
+    volumes:
+      - ../../observability/docker/grafana-datasources.yml:/etc/grafana/provisioning/datasources/datasources.yml
+      - ../../observability/docker/dashboards.yml:/etc/grafana/provisioning/dashboards/dashboards.yml
+      - ../../observability/docker/weibo.json:/etc/grafana/provisioning/dashboards/weibo.json
+
+  caddy:
+    image: caddy:2
+    container_name: weibo-caddy
+    mem_limit: 128m
+    ports:
+      - '80:80'
+      - '443:443'
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile
+      - caddy-data:/data
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
+
+volumes:
+  kafka-data:
+  postgres-data:
+  minio-data:
+  caddy-data:

@@ -1,0 +1,4 @@
+weibo.localhost {
+	tls internal
+	reverse_proxy host.docker.internal:9000
+}
