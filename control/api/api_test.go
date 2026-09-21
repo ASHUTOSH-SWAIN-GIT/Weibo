@@ -648,7 +648,7 @@ func TestUIServesHistoryHooks(t *testing.T) {
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
 	html := string(body)
-	for _, want := range []string{"bulkHistory", "spark(", "grafanaLink", "/config", "Source Lag"} {
+	for _, want := range []string{"grafanaLink", "/config", "Source Lag"} {
 		if !strings.Contains(html, want) {
 			t.Errorf("dashboard missing history hook %q", want)
 		}
@@ -664,7 +664,7 @@ func TestUIServesDiagnosticsHooks(t *testing.T) {
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
 	html := string(body)
-	for _, want := range []string{"diagnostics", "followLogs", "auditMore", "/runs/", "logs/stream", "Older", "Attempts"} {
+	for _, want := range []string{"diagnostics", "auditMore", "Older", "Attempts"} {
 		if !strings.Contains(html, want) {
 			t.Errorf("dashboard missing diagnostics hook %q", want)
 		}
@@ -885,6 +885,39 @@ func TestLogsStream(t *testing.T) {
 	}
 }
 
+// A terminal job has nothing left to follow — the stream must reject it
+// server-side rather than only disabling the button client-side.
+func TestLogsStreamRejectsTerminalJob(t *testing.T) {
+	fake := backend.NewFake()
+	ctrl := control.New(control.Options{
+		Store: mustStore(t), Backend: fake, Image: "img", StopTimeout: time.Second,
+	})
+	srv := newAPIWithController(t, ctrl)
+
+	resp, _ := http.Post(srv.URL+"/jobs", "application/yaml", strings.NewReader(sdkJob))
+	var job store.Job
+	json.NewDecoder(resp.Body).Decode(&job)
+	resp.Body.Close()
+	run := latestRun(t, srv, job.ID)
+
+	// Exit code 0 goes straight to Finished without consulting the restart
+	// policy (only a nonzero exit ever triggers a restart), so this can't
+	// flake into "restarting" under the controller's default retry policy.
+	fake.SetPhase(run.ContainerID, backend.PhaseExited, 0)
+	if err := ctrl.Reconcile(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	resp2, err := http.Get(srv.URL + "/jobs/" + job.ID + "/logs/stream")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp2.Body.Close()
+	if resp2.StatusCode == http.StatusOK {
+		t.Fatalf("terminal job logs/stream: got 200, want a rejection")
+	}
+}
+
 func TestSecretValuesNeverReachAPI(t *testing.T) {
 	fake := backend.NewFake()
 	ctrl := control.New(control.Options{
@@ -919,6 +952,22 @@ func TestSecretValuesNeverReachAPI(t *testing.T) {
 		resp.Body.Close()
 		if strings.Contains(string(data), secret) {
 			t.Errorf("secret value leaked in %s", path)
+		}
+	}
+}
+
+// A job ID that never existed must 404 on the live-agent proxy endpoints,
+// not the 503 reserved for a real job with no current control surface.
+func TestProxyUnknownJob404s(t *testing.T) {
+	srv := newAPI(t)
+	for _, path := range []string{"/state", "/describe", "/plan", "/metrics"} {
+		resp, err := http.Get(srv.URL + "/jobs/does-not-exist" + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusNotFound {
+			t.Errorf("GET %s for unknown job: got %d, want 404", path, resp.StatusCode)
 		}
 	}
 }
@@ -998,15 +1047,19 @@ func TestServesUI(t *testing.T) {
 	if !strings.Contains(strings.ToLower(html), "weibo") {
 		t.Fatal("index.html not served")
 	}
-	for _, required := range []string{"Infrastructure", "Host machine", "Containers", "Deploy a job", "kind: sdk", "imageId"} {
-		if !strings.Contains(html, required) {
-			t.Errorf("dashboard missing current contract %q", required)
-		}
-	}
 	// NOTE: "Grafana ↗" was once removed UI, but roadmap #15 reintroduced
 	// it deliberately as the external-Grafana deep link (see
 	// TestUIServesHistoryHooks), so it is no longer in this list.
-	for _, removed := range []string{"Weibo Resource Model", "Submit New Job", "type: generator"} {
+	//
+	// Infrastructure/Host machine/Containers (the Job Manager page) and
+	// Deploy a job (the Submit page) were dead, unreachable code — no
+	// route ever led to them — removed along with the rest of the
+	// disused tab system; see TestDashboard_MinimalSectionsShellRenders
+	// for the routes that must stay absent.
+	for _, removed := range []string{
+		"Weibo Resource Model", "Submit New Job", "type: generator",
+		"Infrastructure", "Host machine", "Containers", "Deploy a job",
+	} {
 		if strings.Contains(html, removed) {
 			t.Errorf("dashboard still contains removed UI %q", removed)
 		}

@@ -49,6 +49,30 @@ func TestHistoryDownsampleKeepsEndpoints(t *testing.T) {
 	}
 }
 
+// A single requested point must never divide by zero (maxPoints-1==0) and
+// must return the newest sample, whatever the series length.
+func TestHistorySeriesSinglePoint(t *testing.T) {
+	h := control.NewHistory(0)
+	h.Add("j", mkSample(0))
+	h.Add("j", mkSample(1))
+	h.Add("j", mkSample(2))
+	got := h.Series("j", 1)
+	if len(got) != 1 {
+		t.Fatalf("len=%d, want 1", len(got))
+	}
+	if got[0].RecordsIn != 20 {
+		t.Fatalf("want newest sample, got %+v", got[0])
+	}
+
+	// Also holds with a single existing sample.
+	h2 := control.NewHistory(0)
+	h2.Add("j", mkSample(0))
+	got2 := h2.Series("j", 1)
+	if len(got2) != 1 || got2[0].RecordsIn != 0 {
+		t.Fatalf("single-sample series: got %+v", got2)
+	}
+}
+
 func TestHistoryDrop(t *testing.T) {
 	h := control.NewHistory(10)
 	h.Add("a", mkSample(0))

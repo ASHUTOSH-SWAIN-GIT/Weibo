@@ -74,6 +74,11 @@ func (h *History) Series(jobID string, maxPoints int) []Sample {
 	if maxPoints <= 0 || len(series) <= maxPoints {
 		return append([]Sample(nil), series...)
 	}
+	if maxPoints == 1 {
+		// A single requested point is the newest sample; a stride over
+		// maxPoints-1 divisions would divide by zero below.
+		return []Sample{series[len(series)-1]}
+	}
 	out := make([]Sample, 0, maxPoints)
 	stride := float64(len(series)-1) / float64(maxPoints-1)
 	for i := 0; i < maxPoints; i++ {
