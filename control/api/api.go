@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/ASHUTOSH-SWAIN-GIT/weibo/control"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/control/lifecycle"
 	"github.com/ASHUTOSH-SWAIN-GIT/weibo/control/store"
 	"github.com/ASHUTOSH-SWAIN-GIT/weibo/control/ui"
 )
@@ -546,12 +547,18 @@ func (s *Server) transitions(w http.ResponseWriter, r *http.Request) {
 // logsStream follows a job's latest container logs over server-sent
 // events: an initial ?tail= burst, then only new output every 2s, plus
 // heartbeat comments. It ends when the client disconnects. Deltas are
-// capped per event so one chatty poll cannot balloon memory.
+// capped per event so one chatty poll cannot balloon memory. Disabled for
+// terminal jobs — there is nothing left to follow, and the container may
+// already be gone.
 func (s *Server) logsStream(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	run, err := s.ctrl.LatestRun(id)
 	if err != nil || run == nil || run.ContainerID == "" {
 		writeErr(w, http.StatusNotFound, "no container recorded for job")
+		return
+	}
+	if lifecycle.Phase(run.Phase).Terminal() {
+		writeErr(w, http.StatusConflict, "job is terminal; nothing to follow")
 		return
 	}
 	flusher, ok := w.(http.Flusher)
@@ -588,7 +595,14 @@ func (s *Server) logsStream(w http.ResponseWriter, r *http.Request) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			cur, err := s.ctrl.Logs(ctx, id, 0)
+			// Bounded, not unbounded (tail=0): an unbounded fetch re-reads
+			// and re-buffers the container's entire accumulated log on
+			// every tick for the life of the connection. maxLogTail keeps
+			// this call's cost flat regardless of how long the job runs;
+			// once the log outgrows it, the "resend the window" branch
+			// below (len(cur)!=len(last)) kicks in instead of the plain
+			// suffix diff, which is still correct, just coarser.
+			cur, err := s.ctrl.Logs(ctx, id, maxLogTail)
 			if err != nil {
 				_, _ = io.WriteString(w, ": backend error: "+singleLine(err.Error())+"\n\n")
 				flusher.Flush()
@@ -616,6 +630,11 @@ func singleLine(s string) string {
 	return s
 }
 
+// maxLogTail bounds every log read this server issues to the backend, so
+// no single call (an explicit ?tail= or a periodic stream refetch) can
+// force an unbounded read of a container's full accumulated log.
+const maxLogTail = 5000
+
 // logTail parses ?tail=N for the log endpoints (default 200); values < 0
 // mean "all".
 func logTail(r *http.Request) int {
@@ -628,8 +647,8 @@ func logTail(r *http.Request) int {
 	if tail < 0 {
 		return 0
 	}
-	if tail > 5000 {
-		return 5000
+	if tail > maxLogTail {
+		return maxLogTail
 	}
 	return tail
 }
@@ -859,7 +878,15 @@ func readLimited(r io.Reader, max int64) ([]byte, error) {
 // proxy forwards to a path on the job's live container control surface.
 func (s *Server) proxy(path string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		addr, err := s.ctrl.ControlAddress(r.Context(), r.PathValue("id"))
+		id := r.PathValue("id")
+		// ControlAddress returns ("", nil) both for an unknown job and for a
+		// real job with no current control surface; check the job exists
+		// first so a bogus ID 404s instead of the misleading 503 below.
+		if _, err := s.ctrl.GetJob(id); err != nil {
+			writeErr(w, http.StatusNotFound, err.Error())
+			return
+		}
+		addr, err := s.ctrl.ControlAddress(r.Context(), id)
 		if err != nil {
 			writeErr(w, http.StatusNotFound, err.Error())
 			return
