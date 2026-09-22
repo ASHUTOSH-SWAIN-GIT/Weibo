@@ -27,6 +27,26 @@ func NewWatermarkSource(src Source, gen watermark.WatermarkGenerator, interval t
 	}
 }
 
+// Describe forwards to the wrapped source when it exposes dashboard
+// metadata. Without this, every watermarked pipeline (the standard way to
+// drive event-time windows) would show "Unknown" regardless of what the
+// wrapped source implements.
+func (ws *WatermarkSource) Describe() SourceInfo {
+	if d, ok := ws.Source.(Describable); ok {
+		return d.Describe()
+	}
+	return SourceInfo{}
+}
+
+// OperationalState forwards to the wrapped source when it exposes live
+// state, for the same reason as Describe.
+func (ws *WatermarkSource) OperationalState() any {
+	if p, ok := ws.Source.(OperationalStateProvider); ok {
+		return p.OperationalState()
+	}
+	return nil
+}
+
 // Run starts the underlying source, intercepts every record to update
 // the watermark generator, and periodically injects watermark records.
 // The channel owner is responsible for closing the output channel.
