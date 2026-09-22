@@ -32,28 +32,62 @@ down. For a scripted pass/fail check of the same read path (used in CI), see
 
 ## Screenshots
 
-Overview — fleet summary across all sections:
+Each section is a list of jobs; clicking a job row from that section drills
+into a detail view scoped to that section (`go('sources' | 'sinks' |
+'pipeline' | 'reliability', jobID)` in `index.html` — the same job renders a
+different pane depending on which section you entered it from). These were
+all captured from one live `stream-demo` job started with
+`scripts/dashboard-demo.sh`, not mockups.
+
+### Overview
+
+Fleet summary across all sections:
 
 ![Dashboard overview](images/dashboard-overview.png)
 
-Sources — ingress identity, position, lag, read/error counters:
+### Sources → source detail
+
+List — ingress identity, position, lag, read/error counters:
 
 ![Dashboard sources list](images/dashboard-sources.png)
 
-Pipeline — operators, runtime stages, throughput, backpressure:
+Detail — read total and errors for that job's source:
+
+![Dashboard source detail](images/dashboard-job-detail.png)
+
+### Sinks → sink detail
+
+List is reachable from the Overview "Open sinks" action or the sidebar.
+
+Detail — delivery guarantee (and why), sink destination, records written:
+
+![Dashboard sink detail](images/dashboard-sink-detail.png)
+
+### Pipeline → pipeline detail
+
+List — operators, runtime stages, throughput, backpressure:
 
 ![Dashboard pipeline list](images/dashboard-pipeline.png)
 
-Reliability — checkpoint health, attempts, restart signals:
+Detail — logical operator graph (per-operator processed counts, stateful
+markers) plus the runtime stage table (in/out, workers, send-block time,
+edge queue depth vs capacity — the backpressure view described in
+[Architecture](../ARCHITECTURE.md)):
+
+![Dashboard pipeline detail](images/dashboard-pipeline-detail.png)
+
+### Reliability → reliability detail
+
+List — checkpoint health, attempts, restart signals:
 
 ![Dashboard reliability list](images/dashboard-reliability.png)
 
-Job detail — drilling into a single job's source:
+Detail — the deepest view in the dashboard: failure/activity/restart
+status, checkpoint signal, live phase and record counts, the attempts
+table, full checkpoint history (duration/size/status per checkpoint),
+checkpointed source positions, attempt logs, and the job's full lifecycle:
 
-![Dashboard job detail](images/dashboard-job-detail.png)
-
-These were captured from a live `stream-demo` job started with
-`scripts/dashboard-demo.sh`, not mockups.
+![Dashboard reliability detail](images/dashboard-reliability-detail.png)
 
 ## Code layout
 
