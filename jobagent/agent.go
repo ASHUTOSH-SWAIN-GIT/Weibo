@@ -100,14 +100,28 @@ func (a *Agent) Run(ctx context.Context) error {
 	defer runSpan.End()
 
 	err := a.env.Execute(rctx)
+	// Capture whether shutdown was actually requested (SIGTERM propagating
+	// into ctx, or an explicit Cancel() call, which cancels runCtx
+	// directly) BEFORE the unconditional cancel() below — which would
+	// otherwise make runCtx.Err() always non-nil from here on and defeat
+	// the point of checking it.
+	shutdownRequested := runCtx.Err() != nil
 	cancel() // release the context; harmless if already cancelled
 
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	// A cancel drains gracefully; Execute may return nil or a
-	// context-cancellation error. Either is a clean finish. Anything
-	// else is a genuine failure.
-	if err != nil && !errors.Is(err, context.Canceled) {
+	// A requested cancel drains gracefully; Execute may return nil or a
+	// context-cancellation error, and either is a clean finish. But a
+	// context.Canceled error alone does NOT mean that: Execute's internal
+	// two-phase shutdown also produces context.Canceled from a completely
+	// unrelated, unrequested internal fatal error (e.g. the sink can't
+	// reach a dead Kafka broker triggers its own force-unwind, and every
+	// other stage then reports context.Canceled too). Treating any
+	// context.Canceled as "clean" made a real infrastructure failure
+	// report as PhaseFinished — found live. shutdownRequested is exactly
+	// the missing check: it is false in that scenario, since nothing
+	// outside Execute ever asked this job to stop.
+	if err != nil && !(errors.Is(err, context.Canceled) && shutdownRequested) {
 		a.st.Phase = PhaseFailed
 		a.st.LastError = err.Error()
 		runSpan.RecordError(err)

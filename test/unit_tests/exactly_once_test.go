@@ -46,6 +46,7 @@ type fakeTxnSink struct {
 	visible    []types.Record            // committed (read_committed view)
 	markers    map[string]bool           // committed checkpoint markers
 	probeErr   error
+	commitErr  error // when set, Commit fails instead of succeeding (broker-down simulation)
 	aborted    map[string]bool
 	waiters    map[string]chan struct{}
 	onPrepared func(id string, err error)
@@ -103,6 +104,10 @@ func (s *fakeTxnSink) Write(ctx context.Context, in <-chan types.Record) error {
 func (s *fakeTxnSink) Commit(ctx context.Context, id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.commitErr != nil {
+		s.signal(id)
+		return s.commitErr
+	}
 	s.visible = append(s.visible, s.pending[id]...)
 	s.markers[id] = true // the marker commits atomically with the data
 	delete(s.pending, id)
@@ -545,6 +550,30 @@ func TestExactlyOnce_KeyedStateMultiPartition(t *testing.T) {
 
 // A CheckpointedSink without checkpointing configured must be refused
 // — exactly-once cannot be silently half-configured.
+// TestExactlyOnce_FatalCommitErrorAlwaysPropagates guards a race found live
+// against a real Kafka outage: Execute()'s tail code relayed a coordinator
+// fatal error (e.g. "can't reach the broker to commit") through two
+// non-blocking channel reads racing an async watcher goroutine. When the
+// watcher hadn't finished relaying yet, the error was silently dropped and
+// Execute returned nil — the job exited 0 as "finished" instead of
+// "failed", so the controller's restart policy (which only fires on
+// Failed) never restarted it. Repeated to catch the race: a single run
+// could pass by luck even with the bug present.
+func TestExactlyOnce_FatalCommitErrorAlwaysPropagates(t *testing.T) {
+	for i := 0; i < 50; i++ {
+		sk := newFakeTxnSink()
+		sk.commitErr = errors.New("broker unreachable")
+		storage := checkpoint.NewFileStorage(t.TempDir())
+		err := runEO(t, sk, storage, "", 0, state.InMemory())
+		if err == nil {
+			t.Fatalf("iteration %d: expected the fatal commit error to fail Execute, got nil", i)
+		}
+		if !strings.Contains(err.Error(), "broker unreachable") {
+			t.Fatalf("iteration %d: expected the error to mention the underlying cause, got: %v", i, err)
+		}
+	}
+}
+
 func TestExactlyOnce_RequiresCheckpointing(t *testing.T) {
 	sk := newFakeTxnSink()
 	env := weibo.NewEnv()

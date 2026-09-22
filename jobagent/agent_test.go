@@ -262,6 +262,77 @@ func TestAgent_StructuredLoggingAndTracing(t *testing.T) {
 }
 
 // A misconfigured env (no sink) fails fast; the agent records it.
+// checkpointableSource is a minimal source.CheckpointSource: enough for
+// engine.go's coordinated (exactly-once) mode to accept it, emitting one
+// record per checkpoint tick so a barrier keeps finding new work.
+type checkpointableSource struct{ n int }
+
+func (s *checkpointableSource) Run(ctx context.Context, out chan<- types.Record) error {
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case out <- types.Record{Key: []byte("k"), Value: []byte("v"), Offset: int64(s.n)}:
+			s.n++
+			time.Sleep(time.Millisecond)
+		}
+	}
+}
+func (s *checkpointableSource) CheckpointOffset() ([]byte, error) { return []byte("0"), nil }
+func (s *checkpointableSource) RestoreOffset([]byte) error        { return nil }
+
+// fatalCommitSink is a minimal sink.CheckpointedSink whose Commit always
+// fails with context.Canceled — simulating the exact shape of error found
+// live: a coordinator-internal operation returns context.Canceled because
+// an unrelated internal force-unwind already cancelled its context, NOT
+// because anything asked the job to stop.
+type fatalCommitSink struct{ onPrepared func(id string, err error) }
+
+func (s *fatalCommitSink) Write(ctx context.Context, in <-chan types.Record) error {
+	for r := range in {
+		if r.IsBarrier {
+			s.onPrepared(r.CheckpointID, nil)
+		}
+	}
+	return nil
+}
+func (s *fatalCommitSink) SetOnPrepared(fn func(id string, err error)) { s.onPrepared = fn }
+func (s *fatalCommitSink) Commit(ctx context.Context, id string) error { return context.Canceled }
+func (s *fatalCommitSink) Abort(ctx context.Context, id string) error  { return nil }
+func (s *fatalCommitSink) WasCommitted(ctx context.Context, id string) (bool, error) {
+	return false, nil
+}
+func (s *fatalCommitSink) TransactionalID() string { return "fatal-commit-test" }
+
+// TestAgent_ContextCanceledErrorWithoutShutdownRequestIsAFailure guards
+// against the exact bug found live against a real Kafka outage: Execute
+// can return a context.Canceled-wrapped error from an internal force-unwind
+// that nothing outside the job ever requested. Run must not treat that as
+// PhaseFinished just because the error "Is" context.Canceled — only an
+// actual shutdown request (ctx cancelled, or Cancel() called) earns that.
+// The ctx passed to Run here is never cancelled and Cancel() is never
+// called, so this run must land on PhaseFailed.
+func TestAgent_ContextCanceledErrorWithoutShutdownRequestIsAFailure(t *testing.T) {
+	env := weibo.NewEnv().
+		WithCheckpointing(5*time.Millisecond, checkpoint.NewFileStorage(t.TempDir())).
+		WithShutdownTimeout(200 * time.Millisecond)
+	env.FromSource(&checkpointableSource{}).ToSink(&fatalCommitSink{})
+
+	a := jobagent.New(env)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	err := a.Run(ctx)
+	if err == nil {
+		t.Fatal("expected Run to report the fatal commit error, got nil")
+	}
+	if got := a.State().Phase; got != jobagent.PhaseFailed {
+		t.Fatalf("phase: got %q, want failed (this job was never asked to stop)", got)
+	}
+	if a.State().LastError == "" {
+		t.Fatal("expected LastError to be set")
+	}
+}
+
 func TestAgent_Failed(t *testing.T) {
 	env := weibo.NewEnv() // no source and no sink configured
 
