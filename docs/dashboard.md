@@ -69,7 +69,7 @@ The dashboard is a plain-JS SPA. The current visible router is intentionally red
 ## Implemented so far
 
 ### Layout & navigation
-- **Sidebar** — compact dark navigation with section-by-section entries for Overview, Sources, Sinks, Pipeline, and Reliability. Connection status appears in the footer.
+- **Sidebar** — minimal light navigation with section-by-section entries for Overview, Sources, Sinks, Pipeline, and Reliability. Connection status appears in the footer.
 - **Token auth** — on a 401 the UI drops to a token prompt, validates it via `POST /auth`, and stores it in `localStorage`. Read-only hashed tokens can inspect the dashboard but cannot submit, delete, cancel, restart, or savepoint jobs.
 
 ### Target sections
