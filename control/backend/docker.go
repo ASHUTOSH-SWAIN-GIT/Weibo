@@ -306,6 +306,13 @@ func (d *Docker) Status(ctx context.Context, id string) (Status, error) {
 		}
 		return Status{}, err
 	}
+	return statusFromInspect(info), nil
+}
+
+// statusFromInspect derives a Status from a container inspect result. Pulled
+// out of Status so the phase/port logic is unit-testable without a live
+// Docker daemon.
+func statusFromInspect(info types.ContainerJSON) Status {
 	st := Status{}
 	switch {
 	case info.State != nil && info.State.Running && info.State.Paused:
@@ -320,6 +327,7 @@ func (d *Docker) Status(ctx context.Context, id string) (Status, error) {
 		st.Phase = PhaseExited
 		if info.State != nil {
 			st.ExitCode = info.State.ExitCode
+			st.OOMKilled = info.State.OOMKilled
 		}
 	}
 	// Resolve the published control port.
@@ -337,7 +345,7 @@ func (d *Docker) Status(ctx context.Context, id string) (Status, error) {
 			}
 		}
 	}
-	return st, nil
+	return st
 }
 
 func (d *Docker) Logs(ctx context.Context, id string, tail int) (string, error) {

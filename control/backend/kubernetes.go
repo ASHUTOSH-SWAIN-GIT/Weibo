@@ -456,6 +456,7 @@ func (k *Kubernetes) Status(ctx context.Context, id string) (Status, error) {
 	case job.Status.Failed > 0:
 		st.Phase = PhaseExited
 		st.ExitCode = k.podExitCode(ctx, id)
+		st.OOMKilled = k.podOOMKilled(ctx, id)
 	case job.Status.Active > 0:
 		st.Phase, st.Reason = k.podRuntimeStatus(ctx, id)
 	default:
@@ -575,6 +576,23 @@ func (k *Kubernetes) podExitCode(ctx context.Context, run string) int {
 		}
 	}
 	return 1
+}
+
+// podOOMKilled reports whether a failed pod's container was killed by the
+// kernel OOM killer, so it isn't indistinguishable from any other crash.
+func (k *Kubernetes) podOOMKilled(ctx context.Context, run string) bool {
+	pods, err := k.cs.CoreV1().Pods(k.namespace).List(ctx, metav1.ListOptions{LabelSelector: "weibo.run=" + run})
+	if err != nil {
+		return false
+	}
+	for _, p := range pods.Items {
+		for _, cs := range p.Status.ContainerStatuses {
+			if cs.State.Terminated != nil && cs.State.Terminated.Reason == "OOMKilled" {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (k *Kubernetes) Stop(ctx context.Context, id string, timeout time.Duration) error {
