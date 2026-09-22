@@ -528,6 +528,7 @@ func (env *StreamExecutionEnv) Execute(ctx context.Context) error {
 
 	// Coordinator lifecycle (exactly-once mode only).
 	var coordErrCh chan error
+	var coordWatcherDone chan struct{}
 	if coordinated {
 		txnID := ""
 		if t, ok := env.sink.(interface{ TransactionalID() string }); ok {
@@ -574,7 +575,24 @@ func (env *StreamExecutionEnv) Execute(ctx context.Context) error {
 		// A coordination failure (persist error, sink commit error,
 		// injected test failure) is pipeline-fatal: capture it and
 		// force-unwind.
+		//
+		// coordWatcherDone is load-bearing, not decorative: without it,
+		// the tail code below races this goroutine. It checks coordErrCh
+		// with a non-blocking select right after env.coord.Stop()
+		// returns, but Stop() only guarantees the coordinator's fatal
+		// error has landed in env.coord.Fatal()'s channel — not that
+		// this goroutine has finished relaying it into coordErrCh. If
+		// the tail code's non-blocking read loses that race, a real
+		// fatal coordination error (e.g. the sink can't reach Kafka to
+		// commit/abort) is silently dropped and Execute returns nil —
+		// found live: a Kafka outage during a coordinated checkpoint
+		// made the job exit 0 as "finished" instead of failing, so the
+		// restart policy (which only fires on Failed) never restarted
+		// it. Closing this channel on every exit path lets the tail
+		// code block until the relay (if any) has definitely happened.
+		coordWatcherDone = make(chan struct{})
 		go func() {
+			defer close(coordWatcherDone)
 			select {
 			case err := <-env.coord.Fatal():
 				coordErrCh <- err
@@ -646,13 +664,14 @@ func (env *StreamExecutionEnv) Execute(ctx context.Context) error {
 	close(pipelineDone)
 
 	if coordinated {
-		env.coord.Stop() // idempotent; waits for in-flight finalization
+		env.coord.Stop()   // idempotent; waits for in-flight finalization
+		<-coordWatcherDone // wait for the fatal-error watcher above to settle
 		var coordErr error
 		select {
 		case coordErr = <-coordErrCh: // relayed by the watcher
 		default:
 			select {
-			case coordErr = <-env.coord.Fatal(): // watcher hadn't relayed yet
+			case coordErr = <-env.coord.Fatal(): // watcher picked pipelineDone instead
 			default:
 			}
 		}

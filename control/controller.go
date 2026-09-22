@@ -593,15 +593,34 @@ func (c *Controller) Transitions(jobID string) ([]*store.Transition, error) {
 
 // Cluster returns controller/backend health and capacity for the dashboard.
 func (c *Controller) Cluster(ctx context.Context) (backend.CapacitySnapshot, error) {
-	return c.backend.Capacity(ctx, c.capacity)
+	// Same reasoning as Ready: this serves a plain API/dashboard request
+	// whose context has no deadline of its own, so a slow backend must
+	// not be able to hang it indefinitely.
+	capCtx, cancel := context.WithTimeout(ctx, readyBackendTimeout)
+	defer cancel()
+	return c.backend.Capacity(capCtx, c.capacity)
 }
 
 // Ready checks dependencies needed to serve mutating/control requests.
+// readyBackendTimeout bounds the backend.Capacity() call inside Ready. A
+// container runtime under load (e.g. Docker Desktop's VM contending on a
+// stats call for one of many containers) can otherwise block Capacity()
+// indefinitely — and since readyz/healthz pass the bare request context
+// with no deadline of their own, that hangs the whole health check, not
+// just the slow call. Found live: repeated concurrent Capacity() calls
+// (reconcile ticking every second, plus manual API calls) queued behind
+// one slow ContainerStats() call on Docker Desktop and never returned.
+// Confirmed by two goroutine dumps of a hung controller both bottomed
+// out in backend.(*Docker).containerStats via Controller.Ready.
+const readyBackendTimeout = 5 * time.Second
+
 func (c *Controller) Ready(ctx context.Context) error {
 	if _, err := c.store.ListJobs(); err != nil {
 		return fmt.Errorf("store: %w", err)
 	}
-	snap, err := c.backend.Capacity(ctx, c.capacity)
+	capCtx, cancel := context.WithTimeout(ctx, readyBackendTimeout)
+	defer cancel()
+	snap, err := c.backend.Capacity(capCtx, c.capacity)
 	if err != nil {
 		return fmt.Errorf("backend: %w", err)
 	}

@@ -30,7 +30,6 @@ package sdk
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -248,13 +247,21 @@ func Serve(ctx context.Context, env *weibo.StreamExecutionEnv, opts ServeOptions
 		fmt.Fprintf(stderr, "sdk: control server: %v\n", err)
 	}
 
-	switch {
-	case runErr == nil || errors.Is(runErr, context.Canceled):
-		fmt.Fprintf(stdout, "sdk: job=%s %s\n", opts.Name, agent.State().Phase)
-		return 0
-	default:
+	// Defer to agent.Run's own Phase decision rather than re-deriving
+	// "was this really a failure" from runErr here too: re-checking
+	// errors.Is(runErr, context.Canceled) independently repeats the exact
+	// bug found live in Execute/Run — a context.Canceled error can come
+	// from an unrequested internal force-unwind (e.g. a dead Kafka
+	// broker), not just a real shutdown request, and agent.Run is the
+	// one place with enough context (whether shutdown was actually
+	// requested) to tell those apart correctly.
+	switch agent.State().Phase {
+	case jobagent.PhaseFailed:
 		fmt.Fprintf(stderr, "sdk: job=%s failed: %v\n", opts.Name, runErr)
 		return 1
+	default:
+		fmt.Fprintf(stdout, "sdk: job=%s %s\n", opts.Name, agent.State().Phase)
+		return 0
 	}
 }
 

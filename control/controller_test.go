@@ -754,6 +754,68 @@ func TestReconcileBackoffDoesNotBlockOtherJobs(t *testing.T) {
 	}
 }
 
+// slowCapacityBackend blocks Capacity until its own ctx is cancelled, like a
+// real backend client would under a context deadline — used to prove Ready
+// imposes a bound rather than hanging on whatever the caller passed in.
+type slowCapacityBackend struct {
+	backend.ContainerBackend
+}
+
+func (slowCapacityBackend) Capacity(ctx context.Context, _ backend.CapacityConfig) (backend.CapacitySnapshot, error) {
+	<-ctx.Done()
+	return backend.CapacitySnapshot{}, ctx.Err()
+}
+
+// TestReadyBoundsSlowBackendCapacityCall guards against a hang found live
+// against a real Docker daemon under load: Ready (and therefore /healthz,
+// /readyz) passed the bare request context straight to backend.Capacity()
+// with no deadline of its own, so one slow backend call blocked health
+// checks indefinitely — indistinguishable from the controller itself being
+// dead. Ready must return within its own bound even when given a context
+// that never expires on its own.
+func TestReadyBoundsSlowBackendCapacityCall(t *testing.T) {
+	st, err := store.OpenSQLite(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	c := control.New(control.Options{Store: st, Backend: slowCapacityBackend{}, StopTimeout: time.Second})
+
+	start := time.Now()
+	err = c.Ready(context.Background())
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("expected Ready to report the backend unreachable, got nil")
+	}
+	if elapsed > 10*time.Second {
+		t.Fatalf("Ready took %v against a context.Background() caller — it must bound the backend call itself, not rely on the caller's deadline", elapsed)
+	}
+}
+
+// TestClusterBoundsSlowBackendCapacityCall is TestReadyBoundsSlowBackendCapacityCall
+// for GET /cluster, which has the identical bug: it serves an API/dashboard
+// request whose context also has no deadline of its own.
+func TestClusterBoundsSlowBackendCapacityCall(t *testing.T) {
+	st, err := store.OpenSQLite(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	c := control.New(control.Options{Store: st, Backend: slowCapacityBackend{}, StopTimeout: time.Second})
+
+	start := time.Now()
+	_, err = c.Cluster(context.Background())
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("expected Cluster to report the backend error, got nil")
+	}
+	if elapsed > 10*time.Second {
+		t.Fatalf("Cluster took %v against a context.Background() caller — it must bound the backend call itself", elapsed)
+	}
+}
+
 // failGetRunStore fails GetRun for one specific run ID and delegates
 // everything else, simulating a store hiccup limited to a single row.
 type failGetRunStore struct {
