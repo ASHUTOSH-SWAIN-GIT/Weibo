@@ -93,6 +93,31 @@
       "fieldConfig": {
         "defaults": {"custom": {"fillOpacity": 15, "lineWidth": 2}}
       }
+    },
+    {
+      "title": "Checkpoint Duration (p50 / p95 / p99)",
+      "type": "timeseries",
+      "gridPos": {"x": 0, "y": 14, "w": 12, "h": 8},
+      "targets": [
+        {"expr": "histogram_quantile(0.50, rate(weibo_checkpoint_duration_seconds_bucket[5m]))", "legendFormat": "p50"},
+        {"expr": "histogram_quantile(0.95, rate(weibo_checkpoint_duration_seconds_bucket[5m]))", "legendFormat": "p95"},
+        {"expr": "histogram_quantile(0.99, rate(weibo_checkpoint_duration_seconds_bucket[5m]))", "legendFormat": "p99"}
+      ],
+      "fieldConfig": {
+        "defaults": {"unit": "s", "custom": {"lineWidth": 2}}
+      }
+    },
+    {
+      "title": "Checkpoint Size (p50 / p95)",
+      "type": "timeseries",
+      "gridPos": {"x": 12, "y": 14, "w": 12, "h": 8},
+      "targets": [
+        {"expr": "histogram_quantile(0.50, rate(weibo_checkpoint_size_bytes_bucket[5m]))", "legendFormat": "p50"},
+        {"expr": "histogram_quantile(0.95, rate(weibo_checkpoint_size_bytes_bucket[5m]))", "legendFormat": "p95"}
+      ],
+      "fieldConfig": {
+        "defaults": {"unit": "bytes", "custom": {"lineWidth": 2}}
+      }
     }
   ]
 }

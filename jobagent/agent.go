@@ -201,6 +201,8 @@ func (a *Agent) onCheckpointReport(rep weibo.CheckpointReport) {
 	// checkpoints section without unbounded memory growth.
 	cp := Checkpoint{ID: rep.ID, CompletedAt: now, DurationMs: rep.Duration.Milliseconds(), SizeBytes: rep.InlineBytes}
 	a.st.Checkpoints = append([]Checkpoint{cp}, a.st.Checkpoints...)
+	metrics.CheckpointDurationSeconds.Observe(rep.Duration.Seconds())
+	metrics.CheckpointSizeBytes.Observe(float64(rep.InlineBytes))
 	const maxCheckpoints = 10
 	if len(a.st.Checkpoints) > maxCheckpoints {
 		a.st.Checkpoints = a.st.Checkpoints[:maxCheckpoints]
