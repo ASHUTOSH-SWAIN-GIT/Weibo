@@ -15,6 +15,7 @@
 #   make ci          run the same stable checks as hosted CI
 #   make kafka-test  run the Kafka e2e test (requires local broker)
 #   make dashboard-e2e  run the dashboard end-to-end test (requires docker + jq)
+#   make dashboard-demo boot the dashboard with a live demo job to look at (requires docker + jq)
 
 GO         ?= go
 PKG        ?= ./...
@@ -154,6 +155,10 @@ prod-like-down: ## Stop and remove the prod-like local stack, including volumes
 .PHONY: dashboard-e2e
 dashboard-e2e: ## Boot the real dashboard, run the stream-demo job, assert the read path (needs docker + jq)
 	./control/scripts/dashboard-stream-e2e.sh --ci
+
+.PHONY: dashboard-demo
+dashboard-demo: ## Boot the real dashboard with a live demo job, no assertions (needs docker + jq)
+	./scripts/dashboard-demo.sh
 
 .PHONY: ci
 ci: build fmt-check vet vet-kubernetes check-static test-race test-kubernetes test-coverage ## Run the stable local CI suite
