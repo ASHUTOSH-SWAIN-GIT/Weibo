@@ -37,7 +37,7 @@ type CheckpointInfo struct {
 func (env *StreamExecutionEnv) Describe() PipelineInfo {
 	info := PipelineInfo{}
 
-	if d, ok := env.source.(source.Describable); ok {
+	if d, ok := source.As[source.Describable](env.source); ok {
 		info.Source = d.Describe()
 	} else {
 		info.Source = source.SourceInfo{Type: "Unknown", Props: map[string]string{}}

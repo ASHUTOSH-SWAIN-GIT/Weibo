@@ -123,32 +123,64 @@ type CapabilityProvider interface {
 	SourceCapabilities() Capabilities
 }
 
+// Unwrapper is implemented by a Source that wraps another Source — for
+// example WatermarkSource, the standard way to drive event-time windows.
+// A wrapper must not itself claim every optional capability (CheckpointSource,
+// Drainable, ...) its wrapped source might implement: Go's static interfaces
+// would make the wrapper "implement" that interface unconditionally the
+// moment it added the method, even when wrapping a source that has no such
+// capability. So wrappers implement Unwrap instead, and callers that need an
+// optional capability use As, which sees through any number of wrapper
+// layers to find it.
+type Unwrapper interface {
+	Unwrap() Source
+}
+
+// As reports whether src, or something it wraps (see Unwrapper), implements
+// T, and returns that value. Use this instead of a direct type assertion
+// (src.(T)) for any optional Source capability interface, so wrapping a
+// source (e.g. in WatermarkSource) never silently hides what it wraps.
+func As[T any](src Source) (T, bool) {
+	for {
+		if t, ok := src.(T); ok {
+			return t, true
+		}
+		u, ok := src.(Unwrapper)
+		if !ok {
+			var zero T
+			return zero, false
+		}
+		src = u.Unwrap()
+	}
+}
+
 // CapabilitiesOf returns a source's declared capabilities plus any capabilities
-// implied by the legacy optional interfaces it implements.
+// implied by the legacy optional interfaces it implements, seeing through
+// any Unwrapper layers (see As).
 func CapabilitiesOf(src Source) Capabilities {
 	var caps Capabilities
 	if src == nil {
 		return caps
 	}
-	if p, ok := src.(CapabilityProvider); ok {
+	if p, ok := As[CapabilityProvider](src); ok {
 		caps = p.SourceCapabilities()
 	}
-	if _, ok := src.(CheckpointSource); ok {
+	if _, ok := As[CheckpointSource](src); ok {
 		caps.CheckpointOffsets = true
 	}
-	if _, ok := src.(PositionedCheckpointSource); ok {
+	if _, ok := As[PositionedCheckpointSource](src); ok {
 		caps.PositionedCheckpoints = true
 	}
-	if _, ok := src.(Drainable); ok {
+	if _, ok := As[Drainable](src); ok {
 		caps.Drain = true
 	}
-	if _, ok := src.(OffsetCommitter); ok {
+	if _, ok := As[OffsetCommitter](src); ok {
 		caps.CommitOffsets = true
 	}
-	if _, ok := src.(OperationalStateProvider); ok {
+	if _, ok := As[OperationalStateProvider](src); ok {
 		caps.OperationalState = true
 	}
-	if _, ok := src.(Describable); ok {
+	if _, ok := As[Describable](src); ok {
 		caps.Describe = true
 	}
 	return caps

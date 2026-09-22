@@ -27,25 +27,14 @@ func NewWatermarkSource(src Source, gen watermark.WatermarkGenerator, interval t
 	}
 }
 
-// Describe forwards to the wrapped source when it exposes dashboard
-// metadata. Without this, every watermarked pipeline (the standard way to
-// drive event-time windows) would show "Unknown" regardless of what the
-// wrapped source implements.
-func (ws *WatermarkSource) Describe() SourceInfo {
-	if d, ok := ws.Source.(Describable); ok {
-		return d.Describe()
-	}
-	return SourceInfo{}
-}
-
-// OperationalState forwards to the wrapped source when it exposes live
-// state, for the same reason as Describe.
-func (ws *WatermarkSource) OperationalState() any {
-	if p, ok := ws.Source.(OperationalStateProvider); ok {
-		return p.OperationalState()
-	}
-	return nil
-}
+// Unwrap exposes the wrapped source so optional-capability lookups (As, and
+// anything built on it — dashboard identity/position, checkpointing, drain,
+// offset commit) see through this wrapper instead of silently losing
+// whatever the wrapped source implements. Without this, every watermarked
+// pipeline (the standard way to drive event-time windows) would show
+// "Unknown" in the dashboard and — far more seriously — silently lose a
+// wrapped Kafka source's exactly-once checkpointing.
+func (ws *WatermarkSource) Unwrap() Source { return ws.Source }
 
 // Run starts the underlying source, intercepts every record to update
 // the watermark generator, and periodically injects watermark records.

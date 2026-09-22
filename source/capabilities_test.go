@@ -38,3 +38,43 @@ func TestCapabilitiesOfPreservesExplicitSourceCapabilities(t *testing.T) {
 		t.Fatalf("CheckpointOffsets: got true, want false: %+v", caps)
 	}
 }
+
+// TestCapabilitiesOfSeesThroughWatermarkSource guards the exact bug behind
+// issue #25: wrapping a checkpoint-capable source (e.g. Kafka) in
+// WatermarkSource — the standard way to drive event-time windows — must
+// not silently hide its checkpoint/offset capabilities from the engine.
+func TestCapabilitiesOfSeesThroughWatermarkSource(t *testing.T) {
+	inner := capabilityCheckpointSource{}
+	wrapped := NewWatermarkSource(inner, nil, 0)
+
+	caps := CapabilitiesOf(wrapped)
+	if !caps.CheckpointOffsets {
+		t.Fatalf("CheckpointOffsets: got false for a WatermarkSource-wrapped CheckpointSource, want true: %+v", caps)
+	}
+
+	cps, ok := As[CheckpointSource](wrapped)
+	if !ok {
+		t.Fatal("As[CheckpointSource] on a wrapped source: got false, want true")
+	}
+	if _, err := cps.CheckpointOffset(); err != nil {
+		t.Fatalf("CheckpointOffset() through the unwrap chain: %v", err)
+	}
+}
+
+// TestAsDoesNotFalselyReportCapabilityForBareWrapper guards the other side:
+// a WatermarkSource wrapping a source with NO checkpoint capability must
+// not claim one just because WatermarkSource itself became Unwrapper.
+func TestAsDoesNotFalselyReportCapabilityForBareWrapper(t *testing.T) {
+	wrapped := NewWatermarkSource(plainSource{}, nil, 0)
+	if _, ok := As[CheckpointSource](wrapped); ok {
+		t.Fatal("As[CheckpointSource] on a wrapped plain source: got true, want false")
+	}
+	caps := CapabilitiesOf(wrapped)
+	if caps.CheckpointOffsets {
+		t.Fatalf("CheckpointOffsets: got true for a non-checkpointing wrapped source, want false: %+v", caps)
+	}
+}
+
+type plainSource struct{}
+
+func (plainSource) Run(context.Context, chan<- types.Record) error { return nil }
