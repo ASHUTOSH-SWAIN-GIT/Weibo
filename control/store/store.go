@@ -88,6 +88,10 @@ const (
 	// making progress (e.g. Docker-paused) — set while Phase is still
 	// Running so it surfaces in diagnostics instead of reading healthy.
 	FailureContainerUnhealthy = "container_unhealthy"
+	// FailureOOMKilled marks a run whose container was killed by the OS/
+	// kernel OOM killer, distinct from an ordinary nonzero exit so an
+	// operator sees "raise the memory limit" instead of a generic failure.
+	FailureOOMKilled = "oom_killed"
 )
 
 // Transition is an append-only lifecycle audit record.

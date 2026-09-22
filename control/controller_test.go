@@ -603,6 +603,45 @@ func TestReconcileRestartsOnCrash(t *testing.T) {
 	}
 }
 
+// TestReconcileDistinguishesOOMKillFromOrdinaryCrash guards against an
+// OOM-killed container being indistinguishable from any other crash: the
+// run must carry FailureOOMKilled and an "out of memory" reason, not the
+// generic "nonzero exit", so an operator sees "raise the memory limit"
+// instead of "check the logs for a bug".
+func TestReconcileDistinguishesOOMKillFromOrdinaryCrash(t *testing.T) {
+	fake := backend.NewFake()
+	c, _ := newController(t, fake, lifecycle.RestartPolicy{MaxAttempts: 1, BaseBackoff: 0})
+	job, _ := c.Submit(context.Background(), []byte(validSDKManifest), nil)
+
+	run, _ := c.LatestRun(job.ID)
+	fake.SetPhase(run.ContainerID, backend.PhaseExited, 137)
+	fake.SetOOMKilled(run.ContainerID, true)
+
+	if err := c.Reconcile(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	// MaxAttempts:1 means attempt 1 exhausts the policy: no restart, the
+	// run lands terminally Failed with the OOM signal intact.
+	final, err := c.LatestRun(job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if final.Phase != string(lifecycle.Failed) {
+		t.Fatalf("final phase: got %q, want failed", final.Phase)
+	}
+	if final.FailureKind != store.FailureOOMKilled {
+		t.Errorf("FailureKind: got %q, want %q", final.FailureKind, store.FailureOOMKilled)
+	}
+	if final.Error != "out of memory" {
+		t.Errorf("Error: got %q, want %q", final.Error, "out of memory")
+	}
+
+	diag := control.DiagnoseFailure(final)
+	if diag == nil || diag.Kind != store.FailureOOMKilled {
+		t.Fatalf("DiagnoseFailure: got %+v, want kind %q", diag, store.FailureOOMKilled)
+	}
+}
+
 func TestInitialLaunchFailureRetriesOnReconcile(t *testing.T) {
 	fake := backend.NewFake()
 	fake.LaunchErr = backend.TransientLaunchErrorf("temporary backend unavailable")

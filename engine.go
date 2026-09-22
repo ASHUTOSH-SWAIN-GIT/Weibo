@@ -373,7 +373,7 @@ func (env *StreamExecutionEnv) JoinSourcesWithin(leftName string, left source.So
 // SourceOperationalState returns connector-specific, read-only live state for
 // the job agent. Nil means the configured source does not expose it.
 func (env *StreamExecutionEnv) SourceOperationalState() any {
-	if p, ok := env.source.(source.OperationalStateProvider); ok {
+	if p, ok := source.As[source.OperationalStateProvider](env.source); ok {
 		return p.OperationalState()
 	}
 	return nil
@@ -425,7 +425,7 @@ func (env *StreamExecutionEnv) Execute(ctx context.Context) error {
 		if !sourceCaps.CheckpointOffsets {
 			return fmt.Errorf("weibo: exactly-once requires a source with CheckpointOffsets capability (source.CheckpointSource)")
 		}
-		if _, ok := env.source.(source.CheckpointSource); !ok {
+		if _, ok := source.As[source.CheckpointSource](env.source); !ok {
 			return fmt.Errorf("weibo: source declares CheckpointOffsets but does not implement source.CheckpointSource")
 		}
 	}
@@ -540,7 +540,7 @@ func (env *StreamExecutionEnv) Execute(ctx context.Context) error {
 		env.coord.AbortSink = coordinatedSink.Abort
 		env.coord.Hook = env.checkpointHook
 		env.coord.OnCompleted = env.notifyCheckpoint
-		if oc, ok := env.source.(source.OffsetCommitter); ok {
+		if oc, ok := source.As[source.OffsetCommitter](env.source); ok {
 			env.coord.CommitOffsets = oc.CommitOffsets
 		}
 		coordinatedSink.SetOnPrepared(env.coord.OnSinkPrepared)
@@ -888,7 +888,7 @@ func (env *StreamExecutionEnv) runJoinSource(ctx, hardCtx context.Context, name 
 	go func() {
 		defer close(raw)
 		err := src.Run(ctx, raw)
-		if d, ok := src.(source.Drainable); ok {
+		if d, ok := source.As[source.Drainable](src); ok {
 			flushCtx, cancel := context.WithTimeout(context.Background(), env.shutdownTimeout)
 			defer cancel()
 			if drainErr := d.Drain(flushCtx); drainErr != nil && err == nil {
@@ -1069,7 +1069,7 @@ func (env *StreamExecutionEnv) injectBarriers(ctx, hardCtx context.Context, sour
 		// records reflected in the map — the alignment invariant.
 		offsets := make(map[source.PositionKey]int64)
 		positionKey := func(record types.Record) source.PositionKey {
-			if positioned, ok := env.source.(source.PositionedCheckpointSource); ok {
+			if positioned, ok := source.As[source.PositionedCheckpointSource](env.source); ok {
 				return positioned.CheckpointPosition(record)
 			}
 			return source.PositionKey{Partition: record.Partition}
@@ -1157,7 +1157,7 @@ func (env *StreamExecutionEnv) registerAlignedOffsets(id string, offsets map[sou
 	env.noteCheckpointStart(id)
 	var data []byte
 	var err error
-	if _, topicAware := env.source.(source.PositionedCheckpointSource); topicAware {
+	if _, topicAware := source.As[source.PositionedCheckpointSource](env.source); topicAware {
 		positions := make([]source.Position, 0, len(offsets))
 		for key, off := range offsets {
 			positions = append(positions, source.Position{Source: key.Source, Partition: key.Partition, Offset: off})
@@ -1392,13 +1392,13 @@ func (env *StreamExecutionEnv) saveCheckpoint(id string) {
 		StateDirs: dirs,
 	}
 
-	if _, ok := env.source.(source.CheckpointSource); ok {
+	if _, ok := source.As[source.CheckpointSource](env.source); ok {
 		// Prefer the barrier-aligned offsets captured at injection;
 		// fall back to the source's live position only if the barrier
 		// predates offset tracking (shouldn't happen in practice).
 		if aligned, ok := env.takeAlignedOffsets(id); ok {
 			data.Source["offset"] = aligned
-		} else if cps, ok := env.source.(source.CheckpointSource); ok {
+		} else if cps, ok := source.As[source.CheckpointSource](env.source); ok {
 			offset, err := cps.CheckpointOffset()
 			if err != nil {
 				env.log().Warn("checkpoint source offset failed", "checkpoint", id, "error", err)
@@ -1425,7 +1425,7 @@ func (env *StreamExecutionEnv) addNativeJoinSourceOffsets(data *checkpoint.Check
 	if data.Source == nil {
 		data.Source = make(map[string][]byte)
 	}
-	if cps, ok := env.join.left.(source.CheckpointSource); ok {
+	if cps, ok := source.As[source.CheckpointSource](env.join.left); ok {
 		offset, err := cps.CheckpointOffset()
 		if err != nil {
 			env.log().Warn("checkpoint left join source offset failed", "checkpoint", data.ID, "error", err)
@@ -1433,7 +1433,7 @@ func (env *StreamExecutionEnv) addNativeJoinSourceOffsets(data *checkpoint.Check
 			data.Source[nativeJoinLeftOffsetKey] = offset
 		}
 	}
-	if cps, ok := env.join.right.(source.CheckpointSource); ok {
+	if cps, ok := source.As[source.CheckpointSource](env.join.right); ok {
 		offset, err := cps.CheckpointOffset()
 		if err != nil {
 			env.log().Warn("checkpoint right join source offset failed", "checkpoint", data.ID, "error", err)
@@ -1447,14 +1447,14 @@ func (env *StreamExecutionEnv) restoreNativeJoinSourceOffsets(data *checkpoint.C
 	if env.join == nil || data == nil {
 		return
 	}
-	if cps, ok := env.join.left.(source.CheckpointSource); ok {
+	if cps, ok := source.As[source.CheckpointSource](env.join.left); ok {
 		if offsetData, exists := data.Source[nativeJoinLeftOffsetKey]; exists {
 			if err := cps.RestoreOffset(offsetData); err != nil {
 				env.log().Warn("restore left join source offset failed", "checkpoint", data.ID, "error", err)
 			}
 		}
 	}
-	if cps, ok := env.join.right.(source.CheckpointSource); ok {
+	if cps, ok := source.As[source.CheckpointSource](env.join.right); ok {
 		if offsetData, exists := data.Source[nativeJoinRightOffsetKey]; exists {
 			if err := cps.RestoreOffset(offsetData); err != nil {
 				env.log().Warn("restore right join source offset failed", "checkpoint", data.ID, "error", err)
@@ -1469,7 +1469,7 @@ func (env *StreamExecutionEnv) restoreSourceOffset(data *checkpoint.CheckpointDa
 	if data == nil {
 		return
 	}
-	if cps, ok := env.source.(source.CheckpointSource); ok {
+	if cps, ok := source.As[source.CheckpointSource](env.source); ok {
 		if offsetData, exists := data.Source["offset"]; exists {
 			if err := cps.RestoreOffset(offsetData); err != nil {
 				env.log().Warn("restore source offset failed", "checkpoint", data.ID, "error", err)

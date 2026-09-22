@@ -69,7 +69,7 @@ func (s *SourceStage) Run(runCtx, hardCtx context.Context, _ <-chan types.Record
 			}
 		}
 		// Flush pending offset commits before downstream drains.
-		if d, ok := s.Source.(source.Drainable); ok {
+		if d, ok := source.As[source.Drainable](s.Source); ok {
 			flushCtx, cancel := context.WithTimeout(context.Background(), s.DrainTimeout)
 			defer cancel()
 			if drainErr := d.Drain(flushCtx); drainErr != nil && err == nil {

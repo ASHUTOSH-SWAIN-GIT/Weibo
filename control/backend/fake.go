@@ -176,6 +176,16 @@ func (f *Fake) SetPhase(id string, phase Phase, exitCode int) {
 	}
 }
 
+// SetOOMKilled marks a container's status as OOM-killed, for tests that
+// need PhaseExited with OOMKilled set (SetPhase does not set it).
+func (f *Fake) SetOOMKilled(id string, oomKilled bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if c, ok := f.containers[id]; ok {
+		c.status.OOMKilled = oomKilled
+	}
+}
+
 // SetLogs sets the log text a container returns.
 func (f *Fake) SetLogs(id, logs string) {
 	f.mu.Lock()

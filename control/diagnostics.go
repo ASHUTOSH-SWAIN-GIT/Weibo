@@ -64,6 +64,7 @@ var failureHints = map[string][2]string{
 	store.FailureLaunchRecord:       {"Launch bookkeeping failure", "The container started but recording it failed — check controller logs; orphan cleanup ran."},
 	store.FailureSecretBlocked:      {"Blocked on secrets", "A durable secret reference cannot resolve — set the missing value and the reconciler retries."},
 	store.FailureContainerUnhealthy: {"Container unhealthy", "The container is up but not making progress (e.g. paused) — check its state and resume or restart it manually."},
+	store.FailureOOMKilled:          {"Out of memory", "The container exceeded its memory limit and was killed by the OS — the reconciler retries automatically with backoff, but it will keep happening until the job's memory limit is raised."},
 	"restarting":                    {"Restart scheduled", "The last attempt failed — retrying automatically with backoff."},
 }
 

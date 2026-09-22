@@ -162,11 +162,12 @@ const (
 
 // Status is a point-in-time container status.
 type Status struct {
-	Phase    Phase
-	ExitCode int    // meaningful when Phase == PhaseExited
-	Reason   string // backend-native explanation for pending/failure states
-	HostPort int    // reachable host port mapped to ControlPort, 0 if none
-	Address  string // host:port for the control surface, empty if unreachable
+	Phase     Phase
+	ExitCode  int    // meaningful when Phase == PhaseExited
+	OOMKilled bool   // meaningful when Phase == PhaseExited: killed by the OOM killer, not a normal exit
+	Reason    string // backend-native explanation for pending/failure states
+	HostPort  int    // reachable host port mapped to ControlPort, 0 if none
+	Address   string // host:port for the control surface, empty if unreachable
 }
 
 // ContainerBackend launches and manages one container per job.

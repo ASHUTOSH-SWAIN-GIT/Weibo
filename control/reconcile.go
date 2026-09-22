@@ -231,7 +231,7 @@ func (c *Controller) reconcileRun(ctx context.Context, job *store.Job, run *stor
 		}
 
 	case backend.PhaseExited:
-		return c.handleExit(ctx, job, run, st.ExitCode)
+		return c.handleExit(ctx, job, run, st.ExitCode, st.OOMKilled)
 
 	case backend.PhaseGone:
 		// The container vanished (e.g. host reboot removed it).
@@ -252,18 +252,31 @@ func (c *Controller) reconcileRun(ctx context.Context, job *store.Job, run *stor
 
 // handleExit records a stopped container's terminal phase and applies the
 // restart policy when the job should still be running.
-func (c *Controller) handleExit(ctx context.Context, job *store.Job, run *store.Run, exitCode int) error {
+func (c *Controller) handleExit(ctx context.Context, job *store.Job, run *store.Run, exitCode int, oomKilled bool) error {
 	var to lifecycle.Phase
 	reason := "container exited"
+	failureKind := ""
 	switch {
 	case job.Desired == store.DesiredStopped:
 		to = lifecycle.Cancelled
 		reason = "stopped by request"
 	case exitCode == 0:
 		to = lifecycle.Finished
+	case oomKilled:
+		// Distinct from a generic nonzero exit: an operator needs "raise
+		// the memory limit", not "check the logs for a bug" — and without
+		// this, OOM kills are indistinguishable from any other crash and
+		// the job goes silently dead once restart attempts run out.
+		to = lifecycle.Failed
+		reason = "out of memory"
+		failureKind = store.FailureOOMKilled
 	default:
 		to = lifecycle.Failed
 		reason = "nonzero exit"
+	}
+	if to == lifecycle.Failed {
+		run.FailureKind = failureKind
+		run.Error = reason
 	}
 	if to == lifecycle.Failed && c.restart.ShouldRestart(lifecycle.Failed, run.Attempt) {
 		if err := c.scheduleRestart(job, run, reason); err != nil {

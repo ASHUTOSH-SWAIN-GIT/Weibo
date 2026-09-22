@@ -14,8 +14,10 @@ import (
 
 	"github.com/ASHUTOSH-SWAIN-GIT/weibo"
 	"github.com/ASHUTOSH-SWAIN-GIT/weibo/checkpoint"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/source"
 	"github.com/ASHUTOSH-SWAIN-GIT/weibo/state"
 	"github.com/ASHUTOSH-SWAIN-GIT/weibo/types"
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/watermark"
 )
 
 func stateBackends(t *testing.T) []struct {
@@ -307,6 +309,85 @@ func TestRecovery_CrashResumeFromMultiPartitionOffsets(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestRecovery_CrashResumeThroughWatermarkSource is TestRecovery_CrashResumeFromMultiPartitionOffsets
+// with the source wrapped in source.NewWatermarkSource — the standard way
+// to drive event-time windows. Guards issue #25: WatermarkSource must
+// forward the wrapped source's CheckpointSource capability instead of
+// silently hiding it, or a windowed pipeline over a real checkpointed
+// source (e.g. Kafka) would silently lose exactly-once recovery.
+func TestRecovery_CrashResumeThroughWatermarkSource(t *testing.T) {
+	const perPart = 40
+	dir := t.TempDir()
+	storage := checkpoint.NewFileStorage(dir)
+
+	mkParts := func() [][]types.Record {
+		parts := make([][]types.Record, 2)
+		for p := range parts {
+			for i := 0; i < perPart; i++ {
+				parts[p] = append(parts[p], types.NewRecord(
+					[]byte("key-"+strconv.Itoa(p)), []byte("v"+strconv.Itoa(i))))
+			}
+		}
+		return parts
+	}
+
+	inner1 := newReplaySource(mkParts())
+	inner1.emitDelay = time.Millisecond
+	src1 := source.NewWatermarkSource(inner1, watermark.NewBoundedOutOfOrderness(0), 5*time.Millisecond)
+	sink1 := newCaptureSink()
+	sink1.failWhen = func(seen int) bool {
+		return seen >= 20 && checkpointOffsets(storage) != nil
+	}
+
+	env1 := weibo.NewEnv().WithBufferSize(16).WithCheckpointing(5*time.Millisecond, storage)
+	env1.FromSource(src1).
+		Map(func(r types.Record) types.Record { return r }, "pass").
+		ToSink(sink1)
+
+	if err := env1.Execute(context.Background()); err == nil {
+		t.Fatal("run 1: expected pipeline to fail from injected sink crash, got nil")
+	}
+
+	saved := checkpointOffsets(storage)
+	if saved == nil {
+		t.Fatal("run 1: no checkpoint was saved before the crash — WatermarkSource is hiding CheckpointSource again")
+	}
+	if len(saved) != 2 {
+		t.Fatalf("checkpoint should hold offsets for both partitions, got %v", saved)
+	}
+
+	inner2 := newReplaySource(mkParts())
+	src2 := source.NewWatermarkSource(inner2, watermark.NewBoundedOutOfOrderness(0), 5*time.Millisecond)
+	sink2 := newCaptureSink()
+	env2 := weibo.NewEnv().WithBufferSize(16).WithCheckpointing(5*time.Millisecond, storage)
+	env2.FromSource(src2).
+		Map(func(r types.Record) types.Record { return r }, "pass").
+		ToSink(sink2)
+
+	if err := env2.Execute(context.Background()); err != nil {
+		t.Fatalf("run 2: Execute failed: %v", err)
+	}
+
+	start := inner2.startPositions()
+	for p := 0; p < 2; p++ {
+		want := saved[strconv.Itoa(p)]
+		if start[p] != want {
+			t.Errorf("partition %d resumed at %d, checkpoint says %d", p, start[p], want)
+		}
+	}
+
+	sink2.mu.Lock()
+	defer sink2.mu.Unlock()
+	for p := 0; p < 2; p++ {
+		for off := saved[strconv.Itoa(p)]; off < perPart; off++ {
+			id := strconv.Itoa(p) + "/" + strconv.FormatInt(off, 10)
+			if !sink2.seen[id] {
+				t.Errorf("record %s (post-checkpoint) never delivered after recovery", id)
+			}
+		}
 	}
 }
 
