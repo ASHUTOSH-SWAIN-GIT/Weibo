@@ -66,7 +66,15 @@ sample.
 ## Normalization rules
 
 - Source identity comes from `/describe`; source position comes from `/state`;
-  source counters/errors come from `/metrics`.
+  source counters/errors come from `/metrics`. Both require the connector to
+  implement the optional `Describable`/`OperationalStateProvider` interfaces
+  (see `source/source.go`); a source that implements neither is expected to
+  show identity as "Unknown" and position/lag as "not reported" — that is not
+  a bug, it's a connector that hasn't opted in. Kafka and the generator/slice
+  sources implement both; a custom `Source` you write yourself will show
+  "Unknown" until it does too. Wrapping a source in `WatermarkSource` (the
+  standard way to drive event-time windows) forwards both from the wrapped
+  source automatically.
 - Sink identity comes from `/describe`; sink counters/errors come from
   `/metrics`.
 - Logical operators come from `/describe`; runtime stages and edges come from

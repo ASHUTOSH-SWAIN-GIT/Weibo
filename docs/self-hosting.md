@@ -32,6 +32,15 @@ developer ──(REST + bearer token)──▶ controller (weibo dashboard) ─�
    weibo deploy / jobs / logs           API + UI on :9000                 one per job
 ```
 
+**Running more than one controller process:** the design above assumes a
+single controller. If you run two `weibo dashboard` processes (e.g. during a
+botched restart, or intentionally for HA), point them at the **same** SQLite
+store file — a UNIQUE constraint on the runs table then guarantees at most
+one of them ever launches a container for a given job, even if both try at
+once. Never point two controllers with *different* store files at jobs that
+share a Kafka transactional ID: nothing at the store layer can fence that,
+and you'd get two live producers racing under the same transactional ID.
+
 ---
 
 ## Operator quickstart

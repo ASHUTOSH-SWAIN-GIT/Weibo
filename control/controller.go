@@ -691,6 +691,17 @@ func (c *Controller) startRun(ctx context.Context, job *store.Job, attempt int, 
 	// Single-live-run fencing: never run two containers for one job at
 	// once — two live transactional producers with the same id would
 	// break exactly-once. Callers stop the prior run before relaunching.
+	//
+	// This check alone only protects against races within one process
+	// (jobLocks is in-process). What makes it safe across two controller
+	// processes sharing the same SQLite store file — a botched restart, a
+	// stray second instance — is idx_runs_one_active_per_job in
+	// store/sqlite.go: CreateRunWithTransition below fails with a UNIQUE
+	// constraint violation if another process already inserted an active
+	// run for this job, so at most one process ever reaches c.backend.Launch.
+	// See TestStartRunFencesAcrossProcessesSharingStoreFile. This guarantee
+	// requires the two processes to share one store file — never point two
+	// controllers with different store files at the same job/transactional id.
 	runs, err := c.store.ListRuns(job.ID)
 	if err != nil {
 		return err

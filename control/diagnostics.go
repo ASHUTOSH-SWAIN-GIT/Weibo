@@ -59,11 +59,12 @@ type FailureDiagnosis struct {
 // failureHints maps store failure kinds to operator guidance. Unknown
 // kinds fall back to a generic title so new kinds never render blank.
 var failureHints = map[string][2]string{
-	store.FailureLaunchTransient: {"Temporary launch failure", "The backend hiccupped — the reconciler retries automatically with backoff."},
-	store.FailureLaunchPermanent: {"Permanent launch failure", "Needs operator action: check the image reference, manifest, and backend credentials."},
-	store.FailureLaunchRecord:    {"Launch bookkeeping failure", "The container started but recording it failed — check controller logs; orphan cleanup ran."},
-	store.FailureSecretBlocked:   {"Blocked on secrets", "A durable secret reference cannot resolve — set the missing value and the reconciler retries."},
-	"restarting":                 {"Restart scheduled", "The last attempt failed — retrying automatically with backoff."},
+	store.FailureLaunchTransient:    {"Temporary launch failure", "The backend hiccupped — the reconciler retries automatically with backoff."},
+	store.FailureLaunchPermanent:    {"Permanent launch failure", "Needs operator action: check the image reference, manifest, and backend credentials."},
+	store.FailureLaunchRecord:       {"Launch bookkeeping failure", "The container started but recording it failed — check controller logs; orphan cleanup ran."},
+	store.FailureSecretBlocked:      {"Blocked on secrets", "A durable secret reference cannot resolve — set the missing value and the reconciler retries."},
+	store.FailureContainerUnhealthy: {"Container unhealthy", "The container is up but not making progress (e.g. paused) — check its state and resume or restart it manually."},
+	"restarting":                    {"Restart scheduled", "The last attempt failed — retrying automatically with backoff."},
 }
 
 // DiagnoseFailure classifies a run's health for display. It returns nil

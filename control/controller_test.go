@@ -715,6 +715,61 @@ func TestReconcileBackoffDoesNotBlockOtherJobs(t *testing.T) {
 	}
 }
 
+// failGetRunStore fails GetRun for one specific run ID and delegates
+// everything else, simulating a store hiccup limited to a single row.
+type failGetRunStore struct {
+	store.Store
+	failRunID string
+	err       error
+}
+
+func (s *failGetRunStore) GetRun(id string) (*store.Run, error) {
+	if id == s.failRunID {
+		return nil, s.err
+	}
+	return s.Store.GetRun(id)
+}
+
+// TestReconcilePerRunStoreErrorDoesNotBlockOtherJobs guards against a
+// regression where a transient store error on one job's GetRun aborted the
+// entire reconcile pass, silently starving every other active job of
+// restart/recovery until the next tick.
+func TestReconcilePerRunStoreErrorDoesNotBlockOtherJobs(t *testing.T) {
+	fake := backend.NewFake()
+	st, err := store.OpenSQLite(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	c1 := control.New(control.Options{Store: st, Backend: fake, StopTimeout: time.Second})
+	job1, _ := c1.Submit(context.Background(), []byte(validSDKManifest), nil)
+	job2, _ := c1.Submit(context.Background(), []byte(validSDKManifest), nil)
+	run1, _ := c1.LatestRun(job1.ID)
+	run2, _ := c1.LatestRun(job2.ID)
+
+	// job2's container crashes; a healthy reconcile pass should restart it
+	// even though job1's GetRun call is about to fail.
+	fake.SetPhase(run2.ContainerID, backend.PhaseExited, 1)
+
+	wrapped := &failGetRunStore{Store: st, failRunID: run1.ID, err: errors.New("store hiccup")}
+	c2 := control.New(control.Options{Store: wrapped, Backend: fake, Restart: lifecycle.DefaultRestartPolicy(), StopTimeout: time.Second})
+	if err := c2.Reconcile(context.Background()); err != nil {
+		t.Fatalf("Reconcile must not abort on a single run's store error: %v", err)
+	}
+
+	// job2's crash should still be picked up and scheduled for restart in
+	// this same pass, proving job1's store error didn't abort reconcile
+	// before job2 was even reached.
+	restarted, err := c2.LatestRun(job2.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if restarted.Phase != string(lifecycle.Restarting) || restarted.RestartAt == nil {
+		t.Fatalf("job2 was not reconciled despite job1's store error: %+v", restarted)
+	}
+}
+
 func TestScheduledRestartSurvivesControllerRestart(t *testing.T) {
 	fake := backend.NewFake()
 	st, err := store.OpenSQLite(":memory:")

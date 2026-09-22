@@ -308,6 +308,12 @@ func (d *Docker) Status(ctx context.Context, id string) (Status, error) {
 	}
 	st := Status{}
 	switch {
+	case info.State != nil && info.State.Running && info.State.Paused:
+		// `docker pause` freezes the process without stopping it: the
+		// container stays "Running" as far as Docker is concerned, so
+		// without this check a frozen job reports healthy indefinitely.
+		st.Phase = PhaseUnhealthy
+		st.Reason = "container paused"
 	case info.State != nil && info.State.Running:
 		st.Phase = PhaseRunning
 	default:

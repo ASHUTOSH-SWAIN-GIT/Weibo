@@ -118,6 +118,18 @@ var (
 		Name: "weibo_stage_send_block_seconds_total",
 		Help: "Cumulative time a stage spent blocked sending to its output edge (backpressure wait).",
 	}, []string{"stage"})
+
+	CheckpointDurationSeconds = prometheus.NewHistogram(prometheus.HistogramOpts{
+		Name:    "weibo_checkpoint_duration_seconds",
+		Help:    "Time from checkpoint barrier injection to completion, in seconds.",
+		Buckets: prometheus.ExponentialBuckets(0.001, 2, 14), // 1ms to ~8s
+	})
+
+	CheckpointSizeBytes = prometheus.NewHistogram(prometheus.HistogramOpts{
+		Name:    "weibo_checkpoint_size_bytes",
+		Help:    "Inline snapshot size of a completed checkpoint, in bytes.",
+		Buckets: prometheus.ExponentialBuckets(1024, 4, 12), // 1KiB to ~4GiB
+	})
 )
 
 // All returns all registered metrics for use with a custom registry
@@ -143,5 +155,7 @@ func All() []prometheus.Collector {
 		StageErrorsTotal,
 		StageWorkers,
 		StageSendBlockSeconds,
+		CheckpointDurationSeconds,
+		CheckpointSizeBytes,
 	}
 }

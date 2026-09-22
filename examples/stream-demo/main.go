@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"sync/atomic"
 	"time"
 
 	"github.com/ASHUTOSH-SWAIN-GIT/weibo"
@@ -80,6 +81,28 @@ func main() {
 // is cancelled — a stand-in for a Kafka topic so the demo runs anywhere.
 type liveOrderSource struct {
 	perSecond int
+	emitted   atomic.Int64
+}
+
+// Describe returns metadata for the dashboard's Sources view. Without this,
+// the demo shows "Unknown" identity even though it's a well-defined
+// synthetic generator, not a real gap in what the connector can report.
+func (s *liveOrderSource) Describe() source.SourceInfo {
+	return source.SourceInfo{
+		Type: "Synthetic",
+		Props: map[string]string{
+			"recordsPerSecond": strconv.Itoa(s.perSecond),
+		},
+	}
+}
+
+// OperationalState reports how many synthetic records this run has emitted
+// so far. There's no external system to report lag against, so unlike
+// Kafka there is no "lag" figure — that's expected for a generator source.
+func (s *liveOrderSource) OperationalState() any {
+	return struct {
+		Emitted int64 `json:"emitted"`
+	}{Emitted: s.emitted.Load()}
 }
 
 func (s *liveOrderSource) Run(ctx context.Context, out chan<- types.Record) error {
@@ -112,6 +135,7 @@ func (s *liveOrderSource) Run(ctx context.Context, out chan<- types.Record) erro
 			}
 			select {
 			case out <- rec:
+				s.emitted.Add(1)
 			case <-ctx.Done():
 				return ctx.Err()
 			}
