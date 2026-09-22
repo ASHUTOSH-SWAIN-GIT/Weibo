@@ -186,7 +186,19 @@ func (s *Stream) ProcessKeyed(fn operator.KeyedProcessFn, onTimer operator.Timer
 
 // Window groups records into time-based windows. Must be used after KeyBy.
 // Records are buffered into windows, and when a watermark passes a window's
-// end time, the window fires — all its records are emitted as a single result.
+// end time, the window fires — all its records are emitted, tagged with
+// window_start/window_end headers, for a downstream operator to consume.
+//
+// Followed by Reduce, this does NOT collapse a window into one output
+// record. Reduce still emits its updated accumulator after every record
+// (see Reduce's doc) — Window only tags each one with its window's bounds
+// and evicts state once the window closes. A 5-minute window with 1000
+// records in it produces 1000 downstream records, the last of which holds
+// the final total; a sink that writes every record through (S3, Kafka,
+// Postgres) will write all 1000, not one row per window. If only the final
+// per-window value matters, downstream code must dedupe by (key, window_end)
+// itself and keep the last record seen — there is no built-in "this is the
+// window's final record" marker.
 //
 // Supported window types:
 //   - window.Tumbling(size):   fixed-size, non-overlapping (e.g. 5-minute buckets)
