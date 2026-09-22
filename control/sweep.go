@@ -83,7 +83,7 @@ func (c *Controller) SweepOrphans(ctx context.Context) (rep SweepReport, err err
 				continue
 			}
 			switch st.Phase {
-			case backend.PhaseRunning, backend.PhasePending:
+			case backend.PhaseRunning, backend.PhasePending, backend.PhaseUnhealthy:
 				rep.RunningOrphans = append(rep.RunningOrphans, ctr.ID)
 				continue
 			}

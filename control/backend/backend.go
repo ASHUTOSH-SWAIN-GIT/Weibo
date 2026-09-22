@@ -22,6 +22,10 @@ const (
 	PhaseExited Phase = "exited"
 	// PhaseGone: no such container (never launched, or removed).
 	PhaseGone Phase = "gone"
+	// PhaseUnhealthy: the container process exists but is not making
+	// progress on its own (e.g. Docker-paused) — distinct from Running
+	// so a frozen job doesn't read as healthy indefinitely.
+	PhaseUnhealthy Phase = "unhealthy"
 )
 
 // LaunchSpec is everything the backend needs to start one job container.

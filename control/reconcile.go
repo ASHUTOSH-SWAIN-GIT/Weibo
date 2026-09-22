@@ -27,6 +27,12 @@ func (c *Controller) Reconcile(ctx context.Context) (err error) {
 	return c.reconcile(ctx)
 }
 
+// reconcile drives every active run toward its desired state once. A
+// per-run error (a store hiccup, a transient status probe failure, ...) is
+// logged and skipped rather than aborting the pass: one bad row must not
+// stall restart/recovery for every other job in the fleet. Only a failure
+// of ActiveRuns() itself — which means the run list can't be trusted at
+// all — aborts the whole pass.
 func (c *Controller) reconcile(ctx context.Context) error {
 	active, err := c.store.ActiveRuns()
 	if err != nil {
@@ -35,11 +41,13 @@ func (c *Controller) reconcile(ctx context.Context) error {
 	for _, run := range active {
 		unlock := c.lockJob(run.JobID)
 		current, err := c.store.GetRun(run.ID)
-		if err != nil || current.Stopped != nil {
+		if err != nil {
+			c.log().Warn("reconcile: get run", "run", run.ID, "job", run.JobID, "error", err)
 			unlock()
-			if err != nil {
-				return err
-			}
+			continue
+		}
+		if current.Stopped != nil {
+			unlock()
 			continue
 		}
 		run = current
@@ -49,27 +57,24 @@ func (c *Controller) reconcile(ctx context.Context) error {
 			continue // job deleted out from under a run; skip
 		}
 		if lifecycle.Phase(run.Phase) == lifecycle.Blocked {
-			err := c.maybeUnblock(ctx, job, run)
-			unlock()
-			if err != nil {
-				return err
+			if err := c.maybeUnblock(ctx, job, run); err != nil {
+				c.log().Warn("reconcile: unblock", "run", run.ID, "job", job.ID, "error", err)
 			}
+			unlock()
 			continue
 		}
 		if lifecycle.Phase(run.Phase) == lifecycle.Restarting {
-			err := c.maybeRestart(ctx, job, run)
-			unlock()
-			if err != nil {
-				return err
+			if err := c.maybeRestart(ctx, job, run); err != nil {
+				c.log().Warn("reconcile: restart", "run", run.ID, "job", job.ID, "error", err)
 			}
+			unlock()
 			continue
 		}
 		if run.ContainerID == "" {
-			err := c.reattachUnrecordedBackendRun(ctx, job, run)
-			unlock()
-			if err != nil {
-				return err
+			if err := c.reattachUnrecordedBackendRun(ctx, job, run); err != nil {
+				c.log().Warn("reconcile: reattach", "run", run.ID, "job", job.ID, "error", err)
 			}
+			unlock()
 			continue
 		}
 		st, err := c.backend.Status(ctx, run.ContainerID)
@@ -78,11 +83,10 @@ func (c *Controller) reconcile(ctx context.Context) error {
 			unlock()
 			continue
 		}
-		err = c.reconcileRun(ctx, job, run, st)
-		unlock()
-		if err != nil {
-			return err
+		if err := c.reconcileRun(ctx, job, run, st); err != nil {
+			c.log().Warn("reconcile: run", "run", run.ID, "job", job.ID, "error", err)
 		}
+		unlock()
 	}
 	return nil
 }
@@ -184,12 +188,43 @@ func (c *Controller) reconcileRun(ctx context.Context, job *store.Job, run *stor
 			}
 			return c.finishRun(run, lifecycle.Running, lifecycle.Cancelled, "desired stopped")
 		}
-		// Keep the live host port fresh (e.g. after a controller restart).
-		if run.Phase != string(lifecycle.Running) || (st.HostPort != 0 && run.HostPort != st.HostPort) {
+		// Keep the live host port fresh (e.g. after a controller restart),
+		// and clear an "unhealthy" mark left by a prior pause once the
+		// container is confirmed running again.
+		recovered := run.FailureKind == store.FailureContainerUnhealthy
+		if run.Phase != string(lifecycle.Running) || (st.HostPort != 0 && run.HostPort != st.HostPort) || recovered {
 			run.Phase = string(lifecycle.Running)
 			if st.HostPort != 0 {
 				run.HostPort = st.HostPort
 			}
+			if recovered {
+				run.Error = ""
+				run.FailureKind = ""
+			}
+			if err := c.store.UpdateRun(run); err != nil {
+				return err
+			}
+		}
+
+	case backend.PhaseUnhealthy:
+		// A frozen container (e.g. Docker-paused) is not making progress
+		// but hasn't exited, so it isn't safe to auto-restart on the
+		// operator's behalf — surface it distinctly instead of leaving
+		// the run silently reporting "running".
+		if job.Desired == store.DesiredStopped {
+			if err := c.backend.Stop(ctx, run.ContainerID, c.stopTimeout); err != nil {
+				run.Error = err.Error()
+				if updateErr := c.store.UpdateRun(run); updateErr != nil {
+					return updateErr
+				}
+				return nil
+			}
+			return c.finishRun(run, lifecycle.Running, lifecycle.Cancelled, "desired stopped")
+		}
+		if run.Error != st.Reason || run.FailureKind != store.FailureContainerUnhealthy {
+			c.log().Warn("reconcile: container unhealthy", "job", job.ID, "run", run.ID, "container", run.ContainerID, "reason", st.Reason)
+			run.Error = st.Reason
+			run.FailureKind = store.FailureContainerUnhealthy
 			if err := c.store.UpdateRun(run); err != nil {
 				return err
 			}

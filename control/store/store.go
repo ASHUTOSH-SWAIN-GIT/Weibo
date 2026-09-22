@@ -84,6 +84,10 @@ const (
 	FailureLaunchPermanent = "launch_permanent"
 	FailureLaunchRecord    = "launch_record"
 	FailureSecretBlocked   = "secret_blocked"
+	// FailureContainerUnhealthy marks a run whose container is up but not
+	// making progress (e.g. Docker-paused) — set while Phase is still
+	// Running so it surfaces in diagnostics instead of reading healthy.
+	FailureContainerUnhealthy = "container_unhealthy"
 )
 
 // Transition is an append-only lifecycle audit record.
