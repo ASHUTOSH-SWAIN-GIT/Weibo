@@ -3,6 +3,7 @@ package checkpoint
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -85,6 +86,21 @@ type FileStorage struct {
 	retainCompleted int
 	mu              sync.Mutex
 	startupErr      error
+	// Logger receives a warning whenever a checkpoint file fails to parse
+	// (corruption, truncation, partial write) and is skipped, and an error
+	// when recovery falls all the way through to no checkpoint at all.
+	// Both cases previously failed completely silently: state that lives
+	// only in the checkpoint (keyed/window operator accumulators) would
+	// reset to empty on recovery with nothing in the logs to explain why.
+	// Nil uses slog.Default().
+	Logger *slog.Logger
+}
+
+func (fs *FileStorage) log() *slog.Logger {
+	if fs.Logger != nil {
+		return fs.Logger
+	}
+	return slog.Default()
 }
 
 type FileStorageOptions struct{ RetainCompleted int }
@@ -302,10 +318,16 @@ func (fs *FileStorage) loadLatestLocked() (*CheckpointData, error) {
 
 func (fs *FileStorage) loadPointerLocked(name string, completedOnly bool) (*CheckpointData, error) {
 	idBytes, err := os.ReadFile(filepath.Join(fs.dir, name))
-	if err == nil {
-		data, loadErr := fs.loadSpecificLocked(strings.TrimSpace(string(idBytes)))
+	pointerExisted := err == nil
+	if pointerExisted {
+		pointedID := strings.TrimSpace(string(idBytes))
+		data, loadErr := fs.loadSpecificLocked(pointedID)
 		if loadErr == nil && data != nil && (!completedOnly || data.Completed()) {
 			return data, nil
+		}
+		if loadErr != nil {
+			fs.log().Error("checkpoint: pointer target unreadable, falling back to a scan",
+				"pointer", name, "checkpoint", pointedID, "error", loadErr)
 		}
 	}
 	checkpoints, scanErr := fs.scanLocked()
@@ -320,6 +342,16 @@ func (fs *FileStorage) loadPointerLocked(name string, completedOnly bool) (*Chec
 			return nil, err
 		}
 		return checkpoints[i], nil
+	}
+	if pointerExisted {
+		// A pointer file existed — meaning this job has checkpointed
+		// before — yet nothing usable was found by either the pointer or
+		// the fallback scan. Recovery is about to proceed with NO
+		// checkpoint: any keyed/window operator state resets to empty,
+		// and from here on this looks identical to "first run of a
+		// brand-new job." That must never be silent.
+		fs.log().Error("checkpoint: pointer existed but no usable checkpoint was found; resuming with no prior state",
+			"dir", fs.dir, "pointer", name, "completed_only", completedOnly)
 	}
 	return nil, nil
 }
@@ -399,7 +431,13 @@ func (fs *FileStorage) scanLocked() ([]*CheckpointData, error) {
 			return nil, err
 		}
 		var data CheckpointData
-		if json.Unmarshal(b, &data) != nil || data.ID == "" {
+		if unmarshalErr := json.Unmarshal(b, &data); unmarshalErr != nil || data.ID == "" {
+			reason := "empty or missing id"
+			if unmarshalErr != nil {
+				reason = unmarshalErr.Error()
+			}
+			fs.log().Warn("checkpoint: skipping unreadable checkpoint file",
+				"file", name, "reason", reason)
 			continue
 		}
 		out = append(out, &data)
