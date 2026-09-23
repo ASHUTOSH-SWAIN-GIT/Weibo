@@ -2,6 +2,12 @@ module github.com/ASHUTOSH-SWAIN-GIT/weibo
 
 go 1.26.6
 
+// Retracted: v1.0.0 through v1.0.2 can silently lose records. Window state
+// buffered at checkpoint time was overwritten after a restart (Pebble backend),
+// and Kafka watermarks followed the fastest partition so slower partitions'
+// records were dropped as late. Both are fixed in v1.0.3; use v1.0.3 or later.
+retract [v1.0.0, v1.0.2]
+
 require (
 	github.com/aws/aws-sdk-go-v2/config v1.32.35
 	github.com/aws/aws-sdk-go-v2/credentials v1.19.34
