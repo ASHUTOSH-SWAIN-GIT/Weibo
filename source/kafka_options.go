@@ -25,6 +25,7 @@ type kafkaSourceConfig struct {
 	// Phase 3 (watermarks / deserialize).
 	watermarkOutOfOrderness time.Duration
 	watermarkInterval       time.Duration
+	watermarkIdleTimeout    time.Duration
 	deserializer            Deserializer
 	deserFailPolicy         DeserFailurePolicy
 	deserDLQ                RecordSink
@@ -147,13 +148,33 @@ func KafkaDeserializeDLQ(dlq RecordSink) KafkaSourceOption {
 
 // KafkaWithWatermarks enables automatic watermark injection so that
 // downstream windows fire without manually wrapping the source.
-// maxOutOfOrderness is the maximum expected delay between events;
-// the watermark is set to (maxTimestampSeen - maxOutOfOrderness).
+// maxOutOfOrderness is the maximum expected delay between events.
+//
+// Watermarks are tracked per partition: each partition's watermark is
+// (its max timestamp seen - maxOutOfOrderness), and the watermark the job
+// sees is the MINIMUM across partitions that are not idle (see
+// KafkaPartitionIdleTimeout). It therefore waits for the slowest partition.
+// A single watermark over all partitions would follow the fastest one, and
+// records from slower partitions would be dropped as late.
+//
+// maxOutOfOrderness must still cover disorder WITHIN a partition. A record
+// older than the watermark is dropped by the window operator (unless it has
+// a LateSink), with no error.
 func KafkaWithWatermarks(maxOutOfOrderness time.Duration) KafkaSourceOption {
 	return func(c *kafkaSourceConfig) {
 		c.watermarkOutOfOrderness = maxOutOfOrderness
 		c.watermarkInterval = 500 * time.Millisecond
 	}
+}
+
+// KafkaPartitionIdleTimeout sets how long a partition may deliver no records
+// before it stops holding the watermark back. Watermarks are tracked per
+// partition and the job's watermark is the minimum, so an empty or dead
+// partition would otherwise stall every window. Default 30s; a negative value
+// disables idleness (the watermark then always waits for every partition seen).
+// Only meaningful when KafkaWithWatermarks is also set.
+func KafkaPartitionIdleTimeout(d time.Duration) KafkaSourceOption {
+	return func(c *kafkaSourceConfig) { c.watermarkIdleTimeout = d }
 }
 
 // KafkaWatermarkInterval overrides the default 500ms watermark emission

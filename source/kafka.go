@@ -98,6 +98,7 @@ func NewKafkaSource(opts ...KafkaSourceOption) *KafkaSource {
 		wm: watermarkTracker{
 			outOfOrderness: cfg.watermarkOutOfOrderness,
 			interval:       cfg.watermarkInterval,
+			idleTimeout:    cfg.watermarkIdleTimeout,
 		},
 	}
 
