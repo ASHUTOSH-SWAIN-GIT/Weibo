@@ -295,7 +295,15 @@ func (ls *pebbleListState) Append(value []byte) {
 	}
 	p.mu.Lock()
 	sk := seqKey{namespace: ls.namespace, key: ls.key}
-	seq := p.seqs[sk]
+	seq, seeded := p.seqs[sk]
+	if !seeded {
+		// The counter is in-memory only, but the DB may already hold entries
+		// for this key that this process never appended: an existing DB
+		// opened after a restart, or one swapped in by RestoreFrom. Starting
+		// at 0 there would overwrite the oldest stored entries with new
+		// ones — losing every record buffered in a window at checkpoint time.
+		seq = p.nextListSeq(ls.namespace, ls.key)
+	}
 	p.seqs[sk] = seq + 1
 	p.mu.Unlock()
 
@@ -303,6 +311,26 @@ func (ls *pebbleListState) Append(value []byte) {
 	if err := p.db.Set(listKey, value, noSync); err != nil {
 		panic(fmt.Sprintf("state/pebble: ListState.Append: %v", err))
 	}
+}
+
+// nextListSeq returns the first unused sequence number for a list key: one past
+// the highest entry already stored, or 0 if there are none. Caller holds p.mu
+// and p.life (read); the DB is open.
+func (p *PebbleBackend) nextListSeq(namespace, key string) uint64 {
+	prefix := listPrefixBytes(namespace, key)
+	iter, err := p.db.NewIter(&pebble.IterOptions{
+		LowerBound: prefix,
+		UpperBound: prefixUpperBound(prefix),
+	})
+	if err != nil {
+		panic(fmt.Sprintf("state/pebble: ListState.Append: seed sequence: %v", err))
+	}
+	defer iter.Close()
+	if !iter.Last() {
+		return 0
+	}
+	k := iter.Key()
+	return binary.BigEndian.Uint64(k[len(k)-8:]) + 1
 }
 
 func (ls *pebbleListState) GetAll() [][]byte {
