@@ -4,16 +4,16 @@
 
 All originally planned phases are implemented:
 
-- ✅ **Core pipeline** — Record, fluent Stream API, Map/Filter/FlatMap/Process, sources and sinks.
-- ✅ **Stateful processing** — per-key state, Reduce, `Process` with failure policies + DLQ.
-- ✅ **Windowing & watermarks** — tumbling/sliding/session windows, bounded out-of-orderness watermarks, allowed lateness, late-record side output hooks, final source-completion firing.
-- ✅ **Production connectors** — multi-partition Kafka source (consumer groups, SASL/TLS, deserializers, per-partition offset checkpointing), checkpoint-aware file source, Kafka/Postgres/HTTP/S3/file sinks with batching/retries/serializers where appropriate, and transactional Kafka output.
-- ✅ **Checkpointing & recovery** — barrier-based snapshots, file storage, restore of operator state + per-partition source offsets on restart.
-- ✅ **Keyed parallelism** — `WithPartitions(n)`: router → N stateful workers with cloned operators and isolated state; barriers/watermarks broadcast and re-aligned so checkpoints stay consistent.
-- ✅ **Stage-based execution & backpressure** — operators grouped into stages, direct function-call chaining inside a stage, bounded edges between stages, `WithParallelism(n)` for stateless workers, two-phase graceful shutdown.
-- ✅ **Observability** — Prometheus metrics (pipeline, operator, worker, stage, edge) and a built-in dashboard.
-- ✅ **End-to-end exactly-once (Kafka → Kafka)** — coordinated two-phase checkpoints: barrier-aligned source offsets, synchronous operator snapshots at barrier passage, transactional sink (`TxnKafkaSink` on franz-go) with per-checkpoint transaction markers for crash recovery. See Delivery Guarantees below.
-- ✅ **Durable state backend (Pebble)** — per-worker disk-backed LSM state selected via `WithStateBackend`; Reduce accumulators and Window records/watermark both live in the backend, so state is bounded by disk, not RAM. Native hard-link checkpoints make checkpoint cost scale with changed data, not total state. See [Concepts — State](concepts.md#state).
+- **Core pipeline** — Record, fluent Stream API, Map/Filter/FlatMap/Process, sources and sinks.
+- **Stateful processing** — per-key state, Reduce, `Process` with failure policies + DLQ.
+- **Windowing & watermarks** — tumbling/sliding/session windows, bounded out-of-orderness watermarks, allowed lateness, late-record side output hooks, final source-completion firing.
+- **Production connectors** — multi-partition Kafka source (consumer groups, SASL/TLS, deserializers, per-partition offset checkpointing), checkpoint-aware file source, Kafka/Postgres/HTTP/S3/file sinks with batching/retries/serializers where appropriate, and transactional Kafka output.
+- **Checkpointing & recovery** — barrier-based snapshots, file storage, restore of operator state + per-partition source offsets on restart.
+- **Keyed parallelism** — `WithPartitions(n)`: router → N stateful workers with cloned operators and isolated state; barriers/watermarks broadcast and re-aligned so checkpoints stay consistent.
+- **Stage-based execution & backpressure** — operators grouped into stages, direct function-call chaining inside a stage, bounded edges between stages, `WithParallelism(n)` for stateless workers, two-phase graceful shutdown.
+- **Observability** — Prometheus metrics (pipeline, operator, worker, stage, edge) and a built-in dashboard.
+- **End-to-end exactly-once (Kafka → Kafka)** — coordinated two-phase checkpoints: barrier-aligned source offsets, synchronous operator snapshots at barrier passage, transactional sink (`TxnKafkaSink` on franz-go) with per-checkpoint transaction markers for crash recovery. See Delivery Guarantees below.
+- **Durable state backend (Pebble)** — per-worker disk-backed LSM state selected via `WithStateBackend`; Reduce accumulators and Window records/watermark both live in the backend, so state is bounded by disk, not RAM. Native hard-link checkpoints make checkpoint cost scale with changed data, not total state. See [Concepts — State](concepts.md#state).
 
 Up next (roughly in order): multi-stream joins, typed `Stream[T]` API.
 

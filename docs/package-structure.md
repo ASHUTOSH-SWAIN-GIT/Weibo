@@ -42,6 +42,12 @@ weibo/
 ├── control/               # Control plane: separate Go module, REST API + UI +
 │                          #   job lifecycle. See ARCHITECTURE.md view 7.
 ├── workflow/               # YAML/JSON declarative pipeline parser, validator, compiler
+├── jobagent/              # In-job control surface: serves /state, /metrics, /cancel and
+│                          #   /savepoint, and supervises the pipeline run in a job container
+├── sdk/                   # Harness for SDK (Go) jobs: sdk.Run / sdk.Serve
+├── telemetry/             # Separate Go module: OpenTelemetry bridge (OTLP/HTTP tracing)
+├── scripts/               # CI and quality scripts (coverage gate, static checks, fuzz smoke, demos)
+├── plans/                 # Design docs and roadmaps
 ├── bench/                 # State-backend scaling benchmarks (memory vs Pebble)
 ├── examples/
 │   ├── wordcount/         # FlatMap → KeyBy → Reduce

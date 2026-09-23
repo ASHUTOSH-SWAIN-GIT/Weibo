@@ -417,7 +417,7 @@ adapter is a drop-in `Blobstore` implementation later.
 - `compiler.CheckpointDir` exposed on `CompiledWorkflow` so the runner seeds the
   right storage; engine checkpoint-listener already added in P1.
 
-**Gate.** ✅ Savepoint → restart-from-savepoint round-trips state end-to-end on
+**Gate (met).** Savepoint → restart-from-savepoint round-trips state end-to-end on
 Docker (restored reduce count exceeds a single run's total → carryover proven);
 unit tests isolate savepoint restore into a *fresh* storage (the cross-job
 case). Exactly-once fencing (single-live-run guard, stable txn id) is
@@ -449,7 +449,7 @@ dashboard in the weibo "field-manual" identity.
 - Backend additions: `Controller.Validate`, `POST /validate`, and `GET /jobs`
   enriched with each job's latest-run phase. UI served at `GET /{$}`.
 
-**Gate.** ✅ Verified in a real browser: submitted a workflow via the form
+**Gate (met).** Verified in a real browser: submitted a workflow via the form
 (preview → deploy), watched it on the live list + detail, and drove
 cancel/restart/savepoint — no curl. API-level tests cover `/validate`, the
 enriched list, and UI serving; screenshots in `.playwright-mcp/shots/`.
@@ -514,7 +514,7 @@ kind on one submit path — no separate SDK endpoint. Controller-compiles-source
 - Example: `weibo-test/sdk-job/` (a first-letter word count — custom Go the
   declarative operators can't express) + Dockerfile + `weibo.yaml`.
 
-**Gate.** ✅ Verified end-to-end on Docker: submitted `sdk-job/weibo.yaml`,
+**Gate (met).** Verified end-to-end on Docker: submitted `sdk-job/weibo.yaml`,
 the controller auto-detected `kind: sdk`, ran the prebuilt image, and the job
 appeared in the dashboard and produced its custom output
 (`{"letter":"A","count":3}`, …). Unit tests cover the harness, the

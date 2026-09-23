@@ -60,6 +60,7 @@ including running examples and the control-plane dashboard.
 | [Design Decisions](docs/design-decisions.md) | Why single-process, why barrier checkpointing, delivery guarantees, comparison with Flink, implementation status |
 | [Dashboard](docs/dashboard.md) | The control-plane web UI, with screenshots, and how to run a demo job against it |
 | [Dashboard data contract](docs/dashboard-data-contract.md) | Source-of-truth inventory of dashboard endpoints/fields |
+| [Benchmarks](docs/benchmarks.md) | Correctness under load with injected failures, recovery timings, microbenchmarks, and what the testing found |
 | [Checkpoints & API compatibility](docs/checkpoints-and-api.md) | On-disk checkpoint schema, savepoints, API compatibility |
 | [Self-hosting](docs/self-hosting.md) | Running the control plane on a VM: Docker vs Kubernetes backends, security checklist |
 

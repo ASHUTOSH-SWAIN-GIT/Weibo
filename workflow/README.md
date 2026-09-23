@@ -214,6 +214,12 @@ sink:
     onError: drop
 ```
 
+Every `${VAR}` must resolve when the workflow is loaded. With the default resolver
+that means an environment variable; if one is missing, `weibo-workflow -dry-run`
+(and a job launch) fails with `secret "VAR" could not be resolved`. The Kafka and
+Postgres examples in `examples/workflows/` reference `KAFKA_USERNAME`,
+`KAFKA_PASSWORD` and `POSTGRES_DSN`, so set those before running them.
+
 The Postgres row mapping is fully declarative: a single fixed `table`
 and a `mapping` of JSON field paths to column names. A workflow cannot
 generate arbitrary table names per record, and table/column names are

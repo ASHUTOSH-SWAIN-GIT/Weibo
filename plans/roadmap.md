@@ -18,7 +18,7 @@ observable failure behavior.
 
 ## P0 — Checkpoint and delivery correctness
 
-### 1. Make source positions topic-aware end to end — ✅ DONE
+### 1. Make source positions topic-aware end to end — DONE
 
 **Finding:** Kafka operational state is keyed by `(topic, partition)`, but
 `offsetTracker.consumed` and the barrier injector in the execution engine used only
@@ -36,7 +36,7 @@ positions from the checkpoint before normal reading begins.
 **Exit criteria:** collision unit tests, restart tests, and a real Kafka
 multi-topic exactly-once E2E test.
 
-### 2. Complete filesystem crash durability and retention — ✅ DONE
+### 2. Complete filesystem crash durability and retention — DONE
 
 **Finding:** checkpoint/blob files are fsynced before rename, but parent
 directories are not fsynced after renames. `SweepOrphans` and state-dir deletion
@@ -56,7 +56,7 @@ state directories with expired checkpoint metadata. YAML exposes
 **Exit criteria:** fault-injection tests for partial files, missing pointers,
 orphan directories, prepared checkpoints, and retention boundaries.
 
-### 3. Replace timeout-based transaction-marker absence detection — ✅ DONE
+### 3. Replace timeout-based transaction-marker absence detection — DONE
 
 `TxnKafkaSink.WasCommitted` currently uses two empty five-second polls to infer
 absence. Read marker partitions explicitly and terminate from consumer position
@@ -69,7 +69,7 @@ partitions reach those boundaries. Timeouts are no longer evidence of absence;
 broker failures and cancellation propagate as errors. Unit boundary tests and a
 real-Kafka committed/aborted/absent integration test cover the protocol.
 
-### 4. Expand the crash-consistency matrix — ✅ DONE
+### 4. Expand the crash-consistency matrix — DONE
 
 Cover failures around barrier injection, operator snapshot, prepared-file
 persistence, sink commit, completed promotion, and advisory offset commit.
@@ -118,7 +118,7 @@ Add a `SecretProvider` abstraction with environment and Kubernetes Secret
 references. Never return resolved values. If references cannot resolve, place
 the job in an explicit blocked state instead of launching incomplete.
 
-### 8. Add backend resource garbage collection — ✅ DONE
+### 8. Add backend resource garbage collection — DONE
 
 **Finding:** restarts stopped the old container without removing it (one
 leaked exited container / Job+Service+ConfigMap+Secret set per attempt),
@@ -182,7 +182,7 @@ Reject incompatible combinations before execution.
 
 ## P3 — Observability and operations
 
-### 14. Add controller-native metrics aggregation and discovery — ✅ DONE
+### 14. Add controller-native metrics aggregation and discovery — DONE
 
 **Shipped:** `ControllerMetrics` on a private registry (process + Go
 collectors, reconcile count/duration, launch outcomes
@@ -199,7 +199,7 @@ most 8 concurrent backend probes under a 15s deadline. Includes
 **Exit criteria:** endpoint, route-normalization, cardinality,
 launch-kind, and discovery unit tests; k8s-tagged backend suite green.
 
-### 15. Add short metrics history and Grafana links — ✅ DONE
+### 15. Add short metrics history and Grafana links — DONE
 
 **Shipped:** the controller samples every live job's agent (`/state` plus
 edge-queue/error counters parsed from agent `/metrics`) on a tick
@@ -217,7 +217,7 @@ exposition-parser, history/config API, and dashboard-hook unit tests;
 sampling reuses the bounded discovery probes (8 concurrent, 15s deadline,
 5s per-target timeout).
 
-### 16. Improve diagnostic APIs — ✅ DONE
+### 16. Improve diagnostic APIs — DONE
 
 **Shipped:** engine `CheckpointReport` observer (barrier injection →
 completion duration plus inline snapshot bytes on both completion paths;
@@ -236,7 +236,7 @@ button. CLI: `weibo runs`, `weibo logs -follow`.
 restart-countdown, run-logs 404/410, paging cursor, SSE burst, sampler
 checkpoint-stats, and dashboard-hook unit tests; suites green.
 
-### 17. Add tracing and structured logging — ✅ DONE
+### 17. Add tracing and structured logging — DONE
 
 **Shipped:** stdlib `observability/log` (levels, text/JSON, `Secret`
 redaction type, env-key-names helper) and `observability/trace`
@@ -259,7 +259,7 @@ tests; engine, control (both tag sets), and telemetry suites green.
 
 ## P4 — Kubernetes and production hardening
 
-### 18. Ship deployable controller manifests — ✅ DONE
+### 18. Ship deployable controller manifests — DONE
 
 **Shipped:** `control/kubernetes-controller.yaml` provides a controller
 ServiceAccount/Role/RoleBinding, ConfigMap, SQLite PVC, single-replica
@@ -270,7 +270,7 @@ controller image, setting `WEIBO_RUNNER_IMAGE`, and the SQLite single-replica
 constraint until leader election/shared storage exists. A manifest test checks
 the production basics.
 
-### 19. Harden job isolation — ✅ DONE
+### 19. Harden job isolation — DONE
 
 **Shipped:** Kubernetes runner pods can use a dedicated `weibo-runner`
 ServiceAccount (base manifest creates it with no RoleBinding and token automount
@@ -282,7 +282,7 @@ knobs (`-job-service-account`, `-job-runtime-class`, `-job-priority-class`,
 NetworkPolicy examples document controller ingress and controller-to-runner
 traffic; docs cover PVC count/storage `ResourceQuota` guidance.
 
-### 20. Improve Kubernetes operability — ✅ DONE
+### 20. Improve Kubernetes operability — DONE
 
 **Shipped:** backend status now includes recent Kubernetes pod/job events in
 pending/failure reasons, so image-pull, scheduling, quota, and PVC binding
@@ -293,7 +293,7 @@ existing explicit PVC/data deletion behavior. Watch/informer conversion and
 scheduled real-kind suites remain good follow-up depth work, but the immediate
 operator-facing gaps are closed.
 
-### 21. Add object-store savepoints/checkpoints — ✅ DONE
+### 21. Add object-store savepoints/checkpoints — DONE
 
 **Shipped:** `checkpoint.S3Blobstore` implements the existing savepoint
 `Blobstore` contract against S3/S3-compatible APIs with endpoint/path-style
@@ -332,7 +332,7 @@ workflow permissions, and release binary provenance attestations.
 
 ## P6 — Test, CI, and developer experience
 
-### 25. Keep local and hosted CI equivalent — ✅ DONE
+### 25. Keep local and hosted CI equivalent — DONE
 
 **Finding:** the Makefile still tests only `test/unit_tests/...`, while hosted
 CI tests all root, control, and Kubernetes-tagged packages.
@@ -351,7 +351,7 @@ all three modules (hosted security job matches).
 adding a workflow/Dockerfile/shell/docs-link violation fails both locally
 and hosted.
 
-### 26. Add missing integration tiers — ✅ DONE
+### 26. Add missing integration tiers — DONE
 
 **Shipped:** `test/integration/` (root module) covers Kafka (multi-topic
 recovery, transaction commit/abort/absent probes, auth/TLS surface, position
@@ -376,7 +376,7 @@ wrap both modes.
 each live tier skips cleanly without its backend and exercises the real
 backend on nightly; fake-client suites stay in the PR path.
 
-### 27. Add fuzzing and quality gates — ✅ DONE
+### 27. Add fuzzing and quality gates — DONE
 
 **Shipped:** fuzzing now covers workflow parsing, record paths
 (`FuzzRecordFieldPaths`: arbitrary docs/paths with set→get→delete→encode
@@ -398,7 +398,7 @@ corpus and a stated invariant; the coverage gate passes on test-only PRs
 and fails with package + percentage when a touched package drops below the
 floor (verified both directions).
 
-### 28. Clean naming and documentation drift — ✅ DONE
+### 28. Clean naming and documentation drift — DONE
 
 **Shipped:** renamed `mailer.go` to `engine.go`; documented controller/job
 `/livez` versus `/readyz` probes and kept `/healthz` as compatibility; corrected
@@ -413,7 +413,7 @@ API compatibility; removed tracked generated binaries (`kafka-orders`,
 ## P7 — Product features (after P0–P3)
 
 29. Multi-stream joins with watermark alignment and checkpointed join state —
-    ✅ DONE. Shipped `operator.IntervalJoin` / `JoinWithin` plus SDK
+    DONE. Shipped `operator.IntervalJoin` / `JoinWithin` plus SDK
     `Stream.IntervalJoin` / `JoinWithin` for multiplexed sources that tag
     `Record.Source`. The operator buffers both sides by key in an injected
     state backend, snapshots/restores buffered join state, aligns output
@@ -425,7 +425,7 @@ API compatibility; removed tracked generated binaries (`kafka-orders`,
     graph. Declarative workflows support both multiplexed `source:` joins and
     native named `sources:` workflows whose first operator is `type: join`.
 30. Typed `Stream[T]` API with a migration path from `[]byte` records —
-    ✅ DONE. Added a compatibility typed SDK layer over the existing
+    DONE. Added a compatibility typed SDK layer over the existing
     `types.Record` runtime. `FromTypedSource[T]`, `FromTypedRecords[T]`,
     `FromTypedValues[T]`, `AsTyped[T]`, typed `Filter`/`Map`/`FlatMap`/
     `Process`/`KeyBy`, `Untyped`, `ToTypedSink`, `TypedSinkFunc`, and
@@ -433,7 +433,7 @@ API compatibility; removed tracked generated binaries (`kafka-orders`,
     while decoding from `Record.Parsed` or JSON `Record.Value` and re-encoding
     typed outputs for existing untyped operators/sinks.
 31. User-facing keyed state/process functions with timers —
-    ✅ DONE. Added `operator.KeyedProcess` plus raw `Stream.ProcessKeyed`
+    DONE. Added `operator.KeyedProcess` plus raw `Stream.ProcessKeyed`
     and typed `TypedStream.ProcessKeyed` APIs. User functions get a
     `KeyedContext` with current key/timestamp/watermark, per-key
     `ValueState` helpers (`Get`/`Set`/`Clear`, `GetJSON`/`SetJSON`), and
@@ -443,13 +443,13 @@ API compatibility; removed tracked generated binaries (`kafka-orders`,
     `NativeSnapshotter`, so it runs inside keyed workers and participates in
     memory/Pebble checkpoints.
 32. Declarative function registry for map/flatMap/process references —
-    ✅ DONE. Added `compiler.FunctionRegistry` with `RegisterMap`,
+    DONE. Added `compiler.FunctionRegistry` with `RegisterMap`,
     `RegisterFlatMap`, and `RegisterProcess`. Ref-based workflow operators now
     compile when the registry supplies the named function, preserving YAML
     `label`/`parallelism`; nil or missing registries still reject refs with a
     clear missing-ref error.
 33. New production connectors after capability/lifecycle contracts stabilize —
-    ✅ DONE. Added a checkpoint-aware `source.FileSource` that reads one
+    DONE. Added a checkpoint-aware `source.FileSource` that reads one
     record per line, records source identity/line offsets, supports
     `CheckpointOffset`/`RestoreOffset`, and can deserialize JSON lines into
     `Record.Parsed`. Added `sink.FileSink` for truncate/append local exports

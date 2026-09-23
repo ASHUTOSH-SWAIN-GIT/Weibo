@@ -204,6 +204,9 @@ requiring an immediate `kubectl describe`.
 | `POST /jobs`                  | Submit a workflow. Body: raw YAML, or JSON `{"workflow": "...", "env": {...}, "envRefs": {...}}` to pass launch env and durable secret refs. Validated (dry-run compile) before launch. |
 | `GET  /jobs`                  | List jobs. |
 | `GET  /jobs/{id}`             | Job detail: job + latest run + transition log. |
+| `GET  /jobs/{id}/transitions` | Paged lifecycle audit log, newest first: `?limit=N` (default 50, max 200) and `?before=<id>` cursor; the response carries `nextBefore` (0 when exhausted). |
+| `POST /validate`              | Dry run: compile a workflow or SDK manifest without launching it; returns the name, delivery guarantee and graph the submit would produce. |
+| `GET  /cluster`               | Backend capacity snapshot: health, job slots, reserved/available CPU and memory, host stats, running containers. |
 | `DELETE /jobs/{id}`           | Stop/remove known backend run resources, then delete job/run/history rows. Durable state volumes/savepoints are preserved unless `?deleteData=true` (wipes the Docker volume / K8s PVC irreversibly). |
 | `POST /jobs/{id}/cancel`      | Graceful stop; desired state → stopped. |
 | `POST /jobs/{id}/restart`     | Stop any live run and launch a fresh one. Body `{"savepoint":"<label>"}` resumes from a savepoint. |

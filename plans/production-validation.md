@@ -1,7 +1,10 @@
 # Production-style validation of Weibo
 
-Status: Phase 0 done. Phase 1 infra built and verified; gate is partially red on real findings
-(see Phase 1). Phases 2-5 not started. Owner: @ASHUTOSH-SWAIN-GIT.
+Status (2026-09-24): partly carried out. Phase 0 done; Phase 1 infra built. A real AWS deploy
+(Phase 5) and a 10,000 events/s load test with injected failures were run on EC2; their results
+and the bugs they found are recorded in [docs/benchmarks.md](../docs/benchmarks.md). Phases 2-4
+(source-path fidelity, the full failure-injection drill list, and a load/soak baseline) were not
+carried out as written below. Owner: @ASHUTOSH-SWAIN-GIT.
 
 ## Context
 

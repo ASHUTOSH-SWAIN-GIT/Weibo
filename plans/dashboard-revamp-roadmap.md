@@ -312,11 +312,11 @@ not the final navigation.
 
 Build in this order:
 
-1. **Sources** — ✅ live inventory pass complete; visible section.
-2. **Sinks** — ✅ live inventory and delivery guarantee pass complete; visible section.
-3. **Pipeline** — ✅ live operator/stage/backpressure pass complete; visible section.
-4. **Reliability** — ✅ checkpoint/run/diagnostic recovery pass complete; visible section.
-5. **Overview** — ✅ default fleet summary rebuilt from section summaries.
+1. **Sources** — live inventory pass complete; visible section.
+2. **Sinks** — live inventory and delivery guarantee pass complete; visible section.
+3. **Pipeline** — live operator/stage/backpressure pass complete; visible section.
+4. **Reliability** — checkpoint/run/diagnostic recovery pass complete; visible section.
+5. **Overview** — default fleet summary rebuilt from section summaries.
 
 Each section should be designed, implemented, and tested before the next section
 is exposed in navigation. Dashboard revamp is complete; remaining work is
@@ -326,7 +326,7 @@ validation/polish only.
 
 ## Data-contract roadmap
 
-### Phase D1 — Inventory the current truth sources — ✅ DONE
+### Phase D1 — Inventory the current truth sources — DONE
 
 Status:
 
@@ -361,7 +361,7 @@ Exit criteria:
 - No dashboard section uses guessed data when an API field is missing.
 - Missing live-agent endpoints render clearly instead of failing the whole page.
 
-### Phase D2 — Normalize dashboard models in JS — ✅ DONE
+### Phase D2 — Normalize dashboard models in JS — DONE
 
 Status:
 
@@ -390,7 +390,7 @@ Exit criteria:
 - Every model includes `fresh`, `source`, and `missingReason` fields where
   appropriate.
 
-### Phase D3 — Minimal shell and visual system — ✅ DONE
+### Phase D3 — Minimal shell and visual system — DONE
 
 Status:
 
@@ -424,7 +424,7 @@ Exit criteria:
 - Design stays usable at 1280px width.
 - No horizontal scrolling except for log/code blocks and large tables.
 
-### Phase D4 — Sources section — ✅ DONE
+### Phase D4 — Sources section — DONE
 
 Status:
 
@@ -446,7 +446,7 @@ Exit criteria:
 - If `/state.source` is absent, the UI says so and keeps the rest of the page
   functional.
 
-### Phase D5 — Operators and stages section — ✅ DONE
+### Phase D5 — Operators and stages section — DONE
 
 Status:
 
@@ -472,7 +472,7 @@ Exit criteria:
 - Logical operators and runtime stages are not conflated.
 - A slow sink/backpressure demo clearly shows which edge/stage is blocking.
 
-### Phase D6 — Sinks section — ✅ DONE
+### Phase D6 — Sinks section — DONE
 
 Status:
 
@@ -490,7 +490,7 @@ Deliverables:
 - File/HTTP/S3/Postgres/Kafka-specific detail rows.
 
 ---
-### Phase D7 — Pipeline section — ✅ DONE
+### Phase D7 — Pipeline section — DONE
 
 Status:
 
@@ -508,7 +508,7 @@ Deliverables:
 - Accuracy tests for Pipeline navigation and detail rendering.
 
 ---
-### Phase D8 — Reliability section — ✅ DONE
+### Phase D8 — Reliability section — DONE
 
 Status:
 
@@ -526,7 +526,7 @@ Deliverables:
 - Accuracy tests for Reliability navigation and detail rendering.
 
 ---
-### Phase D9 — Overview section — ✅ DONE
+### Phase D9 — Overview section — DONE
 
 Status:
 
@@ -549,7 +549,7 @@ Exit criteria:
 - Transactional Kafka shows exactly-once only when paired with checkpointing and
   compatible source settings.
 
-### Phase D7 — Checkpoints, state, and savepoints — ✅ DONE
+### Phase D7 — Checkpoints, state, and savepoints — DONE
 
 Status:
 
@@ -570,7 +570,7 @@ Exit criteria:
 - Running jobs with stale checkpoints are visibly flagged.
 - Disabled checkpointing is displayed as a configured state, not an error.
 
-### Phase D8 — Runs, diagnostics, and logs polish — ✅ DONE
+### Phase D8 — Runs, diagnostics, and logs polish — DONE
 
 Status:
 
@@ -593,7 +593,7 @@ Exit criteria:
 - A failed job can be debugged without leaving the dashboard.
 - Terminal jobs do not attempt live-agent polling forever.
 
-### Phase D9 — Accuracy tests and regression gates — ✅ DONE
+### Phase D9 — Accuracy tests and regression gates — DONE
 
 Status:
 
