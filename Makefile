@@ -117,6 +117,10 @@ coverage-gate: test-coverage ## Enforce changed-package coverage minimums (roadm
 coverage-report: test-coverage ## Print per-package coverage for root and control separately
 	./scripts/check-coverage.sh
 
+.PHONY: bench
+bench: ## Run the committed benchmarks (state scale, pipeline stage, keyby route) and report timings
+	$(GO) test -run=^$$ -bench=. -benchmem -short ./bench/... ./operator/... ./pipeline/...
+
 .PHONY: fuzz-smoke
 fuzz-smoke: ## Run every fuzz target briefly (FUZZTIME=10s default, override FUZZTIME=30s)
 	FUZZTIME=$(FUZZTIME) ./scripts/fuzz-smoke.sh
