@@ -16,6 +16,9 @@ import (
 type watermarkTracker struct {
 	outOfOrderness time.Duration
 	interval       time.Duration
+	// idleTimeout stops a quiet partition from holding the watermark back:
+	// zero is the default (30s), negative disables idleness.
+	idleTimeout time.Duration
 }
 
 // enabled reports whether watermark injection is configured.
@@ -25,10 +28,17 @@ func (w watermarkTracker) enabled() bool {
 
 // wrap returns a WatermarkSource that layers bounded-out-of-orderness
 // watermarks over inner. Only call when enabled() is true.
+//
+// The watermark is tracked per (topic, partition) and is the minimum across
+// them. One generator over all partitions would follow the fastest partition
+// and make the window operator drop records from slower ones as late.
 func (w watermarkTracker) wrap(inner Source) *WatermarkSource {
+	outOfOrderness := w.outOfOrderness
 	return &WatermarkSource{
-		Source:    inner,
-		Generator: watermark.NewBoundedOutOfOrderness(w.outOfOrderness),
-		Interval:  w.interval,
+		Source:               inner,
+		Generator:            watermark.NewBoundedOutOfOrderness(outOfOrderness),
+		NewGenerator:         func() watermark.WatermarkGenerator { return watermark.NewBoundedOutOfOrderness(outOfOrderness) },
+		PartitionIdleTimeout: w.idleTimeout,
+		Interval:             w.interval,
 	}
 }

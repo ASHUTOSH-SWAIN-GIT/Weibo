@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/ASHUTOSH-SWAIN-GIT/weibo/observability/metrics"
 	"github.com/ASHUTOSH-SWAIN-GIT/weibo/state"
 	"github.com/ASHUTOSH-SWAIN-GIT/weibo/types"
 	"github.com/ASHUTOSH-SWAIN-GIT/weibo/window"
@@ -235,11 +236,15 @@ func (op *WindowOperator) isTooLate(ts time.Time) bool {
 
 func (op *WindowOperator) emitLate(r types.Record) {
 	if op.LateSink == nil {
+		// Nothing captures this record: it is lost. Count it so the loss is
+		// visible (weibo_window_late_records_total{disposition="dropped"}).
+		metrics.WindowLateRecordsTotal.WithLabelValues("dropped").Inc()
 		return
 	}
 	r = r.WithHeader("_late_reason", []byte("event time before current watermark minus allowed lateness"))
 	r = r.WithHeader("_watermark", []byte(op.currentWatermark.Format(time.RFC3339Nano)))
 	_ = op.LateSink.Write(context.Background(), r)
+	metrics.WindowLateRecordsTotal.WithLabelValues("side_output").Inc()
 }
 
 // timerFire returns a channel that fires when the idle timer expires,
