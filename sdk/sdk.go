@@ -233,15 +233,7 @@ func Serve(ctx context.Context, env *weibo.StreamExecutionEnv, opts ServeOptions
 	stopSrv()
 
 	// Stop-with-savepoint: promote the final checkpoint now.
-	if label, ok := agent.SavepointRequest(); ok {
-		if opts.CheckpointDir == "" {
-			fmt.Fprintln(stderr, "sdk: savepoint requested but checkpointing is disabled")
-		} else if id, err := checkpoint.CreateSavepoint(checkpoint.NewFileStorage(opts.CheckpointDir), blobs, label); err != nil {
-			fmt.Fprintf(stderr, "sdk: create savepoint %q: %v\n", label, err)
-		} else {
-			fmt.Fprintf(stdout, "sdk: savepoint %q created from checkpoint %s\n", label, id)
-		}
-	}
+	promoteSavepoint(agent, opts.CheckpointDir, blobs, stdout, stderr)
 
 	if err := <-serveErr; err != nil {
 		fmt.Fprintf(stderr, "sdk: control server: %v\n", err)
@@ -257,12 +249,43 @@ func Serve(ctx context.Context, env *weibo.StreamExecutionEnv, opts ServeOptions
 	// requested) to tell those apart correctly.
 	switch agent.State().Phase {
 	case jobagent.PhaseFailed:
-		fmt.Fprintf(stderr, "sdk: job=%s failed: %v\n", opts.Name, runErr)
+		if runErr != nil {
+			fmt.Fprintf(stderr, "sdk: job=%s failed: %v\n", opts.Name, runErr)
+		} else {
+			// Run itself finished cleanly; the failure was recorded
+			// afterward (MarkSavepointFailed) and only lives in state.
+			fmt.Fprintf(stderr, "sdk: job=%s failed: %s\n", opts.Name, agent.State().LastError)
+		}
 		return 1
 	default:
 		fmt.Fprintf(stdout, "sdk: job=%s %s\n", opts.Name, agent.State().Phase)
 		return 0
 	}
+}
+
+// promoteSavepoint promotes the final checkpoint to a named savepoint after
+// a stop-with-savepoint request, if one was made. A failure to promote must
+// not report as a clean finish: the controller's Savepoint() call already
+// returned 202 to the caller on the strength of the stop request alone, so
+// this is the only place left that can tell the operator the savepoint
+// they asked for doesn't actually exist.
+func promoteSavepoint(agent *jobagent.Agent, checkpointDir string, blobs checkpoint.Blobstore, stdout, stderr io.Writer) {
+	label, ok := agent.SavepointRequest()
+	if !ok {
+		return
+	}
+	if checkpointDir == "" {
+		fmt.Fprintf(stderr, "sdk: savepoint requested but checkpointing is disabled\n")
+		agent.MarkSavepointFailed(label, fmt.Errorf("checkpointing is disabled"))
+		return
+	}
+	id, err := checkpoint.CreateSavepoint(checkpoint.NewFileStorage(checkpointDir), blobs, label)
+	if err != nil {
+		fmt.Fprintf(stderr, "sdk: create savepoint %q: %v\n", label, err)
+		agent.MarkSavepointFailed(label, err)
+		return
+	}
+	fmt.Fprintf(stdout, "sdk: savepoint %q created from checkpoint %s\n", label, id)
 }
 
 func savepointBlobstore(opts ServeOptions) (checkpoint.Blobstore, error) {

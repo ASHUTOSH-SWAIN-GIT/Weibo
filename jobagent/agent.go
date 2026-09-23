@@ -3,6 +3,7 @@ package jobagent
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"sync"
 	"time"
@@ -171,6 +172,22 @@ func (a *Agent) SavepointRequest() (label string, requested bool) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return a.savepointLabel, a.savepointReq
+}
+
+// MarkSavepointFailed records that promoting the final checkpoint to a
+// named savepoint failed, after Run had already returned a clean finish.
+// Without this, a failed savepoint upload was indistinguishable from a
+// successful one: Run's own phase decision only reflects Execute's
+// outcome, so a stop-with-savepoint whose blob upload failed would still
+// report PhaseFinished / exit 0 — the operator sees "stopped" with no
+// signal that the savepoint they asked for doesn't actually exist. Call
+// only after Run has returned.
+func (a *Agent) MarkSavepointFailed(label string, err error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.st.Phase = PhaseFailed
+	a.st.LastError = fmt.Sprintf("savepoint %q: %v", label, err)
+	a.log().Error("savepoint promotion failed", "label", label, "error", err)
 }
 
 // State returns a snapshot, refreshing the live-computed fields (uptime

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -346,6 +347,33 @@ func TestAgent_Failed(t *testing.T) {
 	}
 	if st.LastError == "" {
 		t.Fatal("expected LastError to be set on failure")
+	}
+}
+
+// MarkSavepointFailed must flip an already-finished run to Failed: a
+// savepoint promotion that fails after Run returns cleanly is otherwise
+// indistinguishable from a real clean stop, which is exactly the bug found
+// live (see sdk.Serve's savepoint promotion step).
+func TestAgent_MarkSavepointFailed(t *testing.T) {
+	env := weibo.NewEnv().
+		FromSource(source.FromSlices([]string{"a"}, []string{"1"})).
+		ToSink(sink.NewBlackholeSink())
+	a := jobagent.New(env)
+	if err := a.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if a.State().Phase != jobagent.PhaseFinished {
+		t.Fatalf("phase after Run: got %q, want finished", a.State().Phase)
+	}
+
+	a.MarkSavepointFailed("before-upgrade", errors.New("blobstore unreachable"))
+
+	st := a.State()
+	if st.Phase != jobagent.PhaseFailed {
+		t.Fatalf("phase after MarkSavepointFailed: got %q, want failed", st.Phase)
+	}
+	if st.LastError == "" {
+		t.Fatal("expected LastError to be set")
 	}
 }
 
