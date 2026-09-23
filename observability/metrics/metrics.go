@@ -29,6 +29,17 @@ var (
 		Help: "Total number of records that failed during processing.",
 	})
 
+	// WindowLateRecordsTotal counts records a window operator refused because
+	// their event time was behind the watermark (minus allowed lateness).
+	// "dropped" records are gone for good — no error is raised — so a non-zero
+	// rate means data is being lost unless a LateSink captures it
+	// ("side_output"). Before this metric existed, a watermark that ran ahead
+	// of slower partitions lost records with no signal anywhere.
+	WindowLateRecordsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "weibo_window_late_records_total",
+		Help: "Records rejected by a window operator as late (event time behind the watermark), by disposition: dropped or side_output.",
+	}, []string{"disposition"})
+
 	PipelineRunning = prometheus.NewGauge(prometheus.GaugeOpts{
 		Name: "weibo_pipeline_running",
 		Help: "1 if the pipeline is running, 0 otherwise.",
@@ -142,6 +153,7 @@ func All() []prometheus.Collector {
 		PipelineRunning,
 		SourceErrorsTotal,
 		SinkErrorsTotal,
+		WindowLateRecordsTotal,
 		OperatorLatencySeconds,
 		SinkWriteLatencySeconds,
 		OperatorWorkerRecordsIn,
