@@ -434,6 +434,13 @@ func (d *Docker) Capacity(ctx context.Context, cfg CapacityConfig) (CapacitySnap
 		return snap, nil
 	}
 
+	// containerStats issues one Docker API round-trip per container. Fetched
+	// serially, a host running a dozen jobs made /readyz and /healthz (which
+	// call Capacity) take several seconds — long enough for a normal probe
+	// timeout to flag a healthy controller as down. Fetch them concurrently
+	// instead; a bounded pool caps how many requests hit the daemon at once.
+	statsByID := d.fetchContainerStats(ctx, list)
+
 	for _, c := range list {
 		managed := c.Labels["weibo.job"] != ""
 		switch c.State {
@@ -452,12 +459,12 @@ func (d *Docker) Capacity(ctx context.Context, cfg CapacityConfig) (CapacitySnap
 			continue
 		}
 		if c.State == "running" {
-			stats, statsErr := d.containerStats(ctx, c.ID)
-			if statsErr != nil {
+			result := statsByID[c.ID]
+			if result.err != nil {
 				snap.Health = "degraded"
-				snap.Reason = joinReason(snap.Reason, "stats "+shortID(c.ID)+": "+statsErr.Error())
+				snap.Reason = joinReason(snap.Reason, "stats "+shortID(c.ID)+": "+result.err.Error())
 			}
-			snap.Containers = append(snap.Containers, containerSnapshot(c, stats))
+			snap.Containers = append(snap.Containers, containerSnapshot(c, result.stats))
 		} else {
 			snap.Containers = append(snap.Containers, containerSnapshot(c, nil))
 		}
@@ -529,6 +536,44 @@ func (d *Docker) containerStats(ctx context.Context, id string) (*container.Stat
 		return nil, err
 	}
 	return &stats, nil
+}
+
+type containerStatsResult struct {
+	stats *container.StatsResponse
+	err   error
+}
+
+// maxConcurrentStatsFetches bounds how many ContainerStats requests run at
+// once, so Capacity on a host with many containers doesn't open dozens of
+// simultaneous connections to the Docker daemon.
+const maxConcurrentStatsFetches = 8
+
+// fetchContainerStats fetches stats for every running container concurrently
+// and returns them keyed by container ID. Non-running containers are skipped
+// since containerStats only applies to running ones.
+func (d *Docker) fetchContainerStats(ctx context.Context, list []types.Container) map[string]containerStatsResult {
+	results := make(map[string]containerStatsResult, len(list))
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, maxConcurrentStatsFetches)
+
+	for _, c := range list {
+		if c.State != "running" {
+			continue
+		}
+		wg.Add(1)
+		go func(id string) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			stats, err := d.containerStats(ctx, id)
+			mu.Lock()
+			results[id] = containerStatsResult{stats: stats, err: err}
+			mu.Unlock()
+		}(c.ID)
+	}
+	wg.Wait()
+	return results
 }
 
 func containerSnapshot(c types.Container, s *container.StatsResponse) ContainerStats {
