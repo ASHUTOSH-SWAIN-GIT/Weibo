@@ -32,7 +32,7 @@ or pass `curl -k` for scripts.
 ## Gate (from plans/production-validation.md Phase 1)
 
 ```sh
-make test-integration-live          # WEIBO_LIVE=1, needs the env above
+make test-integration-live          # runs TestLive_* against the services above
 KAFKA_BROKERS=localhost:39092 ./scripts/test-kafka.sh   # against the real broker
 curl -sS https://weibo.localhost/jobs -H "Authorization: Bearer $WEIBO_TOKEN"   # 200
 curl -sS https://weibo.localhost/jobs -H "Authorization: Bearer wrong"          # 401

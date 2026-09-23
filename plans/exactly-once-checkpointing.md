@@ -398,7 +398,7 @@ crashes, read_committed consumer verification.
 │    tests 1–6 (§6)     │  │   └─────────────┬─────────────┘  └────────────┬────────────┘
 └───────────┬───────────┘  │                 │                             │
             │              │                 └──────────────┬──────────────┘
-            │   GATE ✋: protocol proven                     │
+            │   GATE:   protocol proven                     │
             │   exactly-once on fakes                       ▼
             │   before touching Kafka       ┌─────────────────────────────────┐
             └──────────────────────────────►│ PHASE 7  Recovery decision      │
@@ -456,8 +456,8 @@ Reading the tracks:
 6. `KafkaSource`: `KafkaExactlyOnce()` option (disable eager commits),
    `CommitOffsets`, ReadCommitted default.
 7. Recovery decision table in Execute startup path.
-8. Docs: README guarantees section (state EO ✅, end-to-end EO with
-   TxnKafkaSink ✅ + read_committed requirement, everything else
+8. Docs: README guarantees section (state EO done, end-to-end EO with
+   TxnKafkaSink done + read_committed requirement, everything else
    at-least-once), example `examples/exactly-once/`.
 
 ---

@@ -254,7 +254,7 @@ P1 injection ──► P2 pebble backend ──► P3 drop-in (SnapshotAll) ─�
                                                                                                 └─► PW window-on-ListState (independent after P2)
 ```
 
-**P1 — Backend injection (no Pebble yet).** ✅ DONE
+**P1 — Backend injection (no Pebble yet).** DONE
 `WithStateBackend(factory)`, `operator.StateConfigurable`, planner
 assigns owner IDs, Reduce/Clone take injected backends, env closes
 Closers. Default factory = memory; all existing tests must pass
@@ -271,7 +271,7 @@ run against both MemoryBackend and PebbleBackend (same behavioral
 spec: get/set/clear, key scoping, list ordering, snapshot/restore
 roundtrip, concurrent owners).
 
-**Status:** ✅ DONE.
+**Status:** DONE.
 
 **P3 — Drop-in durability (compatible mode).**
 Nothing new to build beyond P2's `SnapshotAll`/`RestoreAll`; the work
@@ -279,7 +279,7 @@ is verification: run the entire recovery + exactly-once test matrix
 (crash sweep, keyed multi-partition, persist-failure) parameterized
 over both factories. Gate: full suite green with Pebble under `-race`.
 
-**Status:** ✅ DONE.  Conformance suite (14 tests × 2 backends), recovery
+**Status:** DONE.  Conformance suite (14 tests × 2 backends), recovery
 tests (2 tests × 2 backends), exactly-once tests (7 tests × 2 backends)
 all pass with `-race`.
 
@@ -289,7 +289,7 @@ dir layout + fsync order + GC + orphan sweep, restore-from-dir, wipe
 live dir on restore, prepared-checkpoint state-dir cleanup in the
 recovery fallback.
 
-**Status:** ✅ DONE.
+**Status:** DONE.
 
 - `state.Checkpointable` interface: `CheckpointTo(dir)`, `RestoreFrom(dir)`
 - `PebbleBackend` implements Checkpointable via `pebble.DB.Checkpoint()` (hard-links)
@@ -318,7 +318,7 @@ Crash windows tested (via existing parameterized EO suite):
 - Before checkpoint JSON commit, after completion.
 - During sink/source commit.
 
-**Status:** ✅ DONE.  Full EO test matrix (7 test classes × 2 backends ×
+**Status:** DONE.  Full EO test matrix (7 test classes × 2 backends ×
 multiple crash points) passes with `-race`.
 
 **P6 — Metrics + docs + example.**

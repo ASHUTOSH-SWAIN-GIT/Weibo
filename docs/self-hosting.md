@@ -58,8 +58,10 @@ docker version                      # confirm the daemon is reachable
 ### 2. Authenticate to your image registry
 
 The controller must be able to **pull** the images your jobs run. Log in on the
-VM once (see [Registry authentication](#registry-authentication) for ECR and
-private registries):
+VM once, **as the user that will run the controller** (see
+[Registry authentication](#registry-authentication) for ECR and private
+registries, and the [systemd section](#systemd-unit-optional) if it runs as a
+service account):
 
 ```sh
 docker login <registry>            # e.g. docker login ghcr.io
@@ -82,12 +84,32 @@ docker push <registry>/weibo-runner:1.0
 > runner image. A registry image is only required when the runner image is not
 > already on the host (or on a Kubernetes cluster).
 
-### 4. Start the controller
+> **SDK-only hosts can skip this step.** The runner image is only used for YAML
+> workflow jobs. If it is missing the controller still starts and prints a
+> warning; SDK jobs (which bring their own image) are unaffected, and a YAML job
+> submitted later fails at launch with the same message.
+
+### 4. Install and start the controller
+
+Download the controller binary from the
+[releases page](https://github.com/ASHUTOSH-SWAIN-GIT/Weibo/releases) (a `control/v*`
+release; pick `weibo-linux-amd64` or `weibo-linux-arm64` to match `uname -m`),
+verify its checksum, and put it on the `PATH`:
+
+```sh
+V=v1.0.3
+ASSET=weibo-linux-arm64        # or weibo-linux-amd64
+B=https://github.com/ASHUTOSH-SWAIN-GIT/Weibo/releases/download/control%2F$V
+curl -fLo weibo "$B/$ASSET" && curl -fLo checksums.txt "$B/checksums.txt"
+grep "$ASSET" checksums.txt | sed "s/$ASSET/weibo/" | sha256sum -c   # must print: weibo: OK
+sudo install -m 0755 weibo /usr/local/bin/weibo
+```
 
 Generate a strong bearer token and start the dashboard headless, bound to the
 runner image and protected by the token:
 
 ```sh
+sudo install -d -o "$USER" /var/lib/weibo    # the controller does not create the -db directory
 export WEIBO_AUTH_TOKEN="$(openssl rand -hex 32)"
 weibo dashboard \
   -addr 127.0.0.1:9000 \
@@ -173,6 +195,8 @@ host and honor `WEIBO_CONTROLLER` / `WEIBO_TOKEN`.
 | `weibo cancel <id>`          | Gracefully stop a job. |
 | `weibo restart <id> [-savepoint L]` | Resume a job (optionally from a savepoint). |
 | `weibo savepoint <id> -label L` | Stop a job with a named savepoint. |
+| `weibo delete <id> [-delete-data]` | Delete a job; `-delete-data` also wipes its durable state (irreversible). |
+| `weibo runs <id>`            | List every recorded attempt for a job, newest first. |
 
 ---
 
@@ -201,6 +225,7 @@ can too.
 
   ```sh
   docker pull <registry>/your-image:tag    # as the same user that runs the dashboard
+  sudo -u weibo -H docker pull <registry>/your-image:tag   # if it runs as the systemd service account
   ```
 
   If that works, job launches will too. Public images work with no credentials
@@ -339,8 +364,7 @@ WantedBy=multi-user.target
 ```
 
 ```sh
-sudo useradd -r -G docker weibo            # service account with Docker access
-sudo install -d -o weibo /var/lib/weibo
+sudo useradd -r -m -d /var/lib/weibo -G docker weibo   # service account: Docker access + a real home
 sudo systemctl daemon-reload
 sudo systemctl enable --now weibo
 journalctl -u weibo -f                     # watch it start
@@ -348,3 +372,14 @@ journalctl -u weibo -f                     # watch it start
 
 The `weibo` service account needs membership in the `docker` group to reach the
 daemon. Front the loopback address with your TLS proxy for external access.
+
+**Give the service account a real home directory** (`-m -d /var/lib/weibo` above).
+The controller reads registry credentials from `~/.docker/config.json`, and an
+account created with plain `useradd -r` has no home, so `docker login` as that
+user fails with `error saving credentials: mkdir /home/weibo: permission denied`
+and every private-image launch then fails at the pull. To use a private registry,
+log in **as the service account**; the controller re-reads the file on each pull:
+
+```sh
+sudo -u weibo -H docker login <registry>
+```
