@@ -253,9 +253,14 @@ func makeBackend(ctx context.Context, kind, image, namespace, kubeconfig string,
 			return nil, 1
 		}
 		if ok, err := d.HasImage(ctx, image); err == nil && !ok {
-			fmt.Fprintf(os.Stderr, "weibo: runner image %q not found. Build it first:\n"+
+			// image is only the default runner for plain YAML workflow jobs;
+			// SDK jobs bring their own image and never touch it. Missing it
+			// is not fatal — it would only refuse the controller to start on
+			// a host that will only ever run SDK jobs — so warn and continue;
+			// a YAML job submitted later fails with the same message at
+			// launch time instead.
+			fmt.Fprintf(os.Stderr, "weibo: runner image %q not found; plain YAML workflow jobs will fail to launch until it is built:\n"+
 				"  docker build -f Dockerfile.runner -t %s .\n", image, image)
-			return nil, 1
 		}
 		return d, 0
 	case "kubernetes", "k8s":
